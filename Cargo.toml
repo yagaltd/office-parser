@@ -1,0 +1,76 @@
+[package]
+name = "office-parser"
+version = "0.1.0"
+edition = "2024"
+description = "Parse Office and data/config files into a structured document AST for ingestion and export."
+license = "MIT"
+readme = "README.md"
+documentation = "https://docs.rs/office-parser"
+keywords = ["parser", "office", "docx", "pdf", "ingestion"]
+categories = ["parser-implementations", "text-processing", "command-line-utilities"]
+include = ["src/**", "tests/**", "README.md", "CHANGELOG.md", "LICENSE", "Cargo.toml"]
+
+[features]
+default = [
+    "docx",
+    "pptx",
+    "odt",
+    "odp",
+    "pdf",
+    "rtf",
+    "epub",
+    "json",
+    "yaml",
+    "toml",
+    "xml",
+    "xlsx",
+    "ods_sheet",
+    "csv",
+    "tsv",
+]
+# Config / data formats
+json = []
+yaml = ["dep:serde_yaml"]
+toml = ["dep:toml"]
+xml = ["dep:quick-xml"]
+epub = ["dep:zip", "dep:quick-xml"]
+
+# Spreadsheets
+xlsx = ["dep:calamine", "dep:zip", "dep:quick-xml"]
+ods_sheet = ["dep:calamine", "dep:zip", "dep:quick-xml"]
+csv = ["dep:csv"]
+tsv = ["dep:csv"]
+
+# Office Open XML formats
+pptx = ["dep:zip", "dep:quick-xml"]
+docx = ["dep:zip", "dep:quick-xml"]
+
+# ODF formats
+odp = ["dep:zip", "dep:quick-xml"]
+odt = ["dep:zip", "dep:quick-xml"]
+
+# PDF
+pdf = ["dep:lopdf"]
+
+# RTF
+rtf = []
+
+[dependencies]
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml = { version = "0.9", optional = true }
+toml = { version = "0.8", optional = true }
+sha2 = "0.10"
+base64 = "0.22"
+encoding_rs = "0.8"
+crc32fast = "1"
+png = "0.17"
+calamine = { version = "0.26", optional = true }
+csv = { version = "1", optional = true }
+
+zip = { version = "0.6", default-features = false, features = ["deflate"], optional = true }
+quick-xml = { version = "0.39", optional = true }
+
+lopdf = { version = "0.35", optional = true }

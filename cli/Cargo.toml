@@ -1,0 +1,21 @@
+[package]
+name = "office-parser-cli"
+version = "0.1.0"
+edition = "2024"
+description = "CLI for office-parser to export parsed content to Markdown or JSON."
+license = "MIT"
+readme = "README.md"
+documentation = "https://docs.rs/office-parser-cli"
+keywords = ["cli", "parser", "office", "markdown", "json"]
+categories = ["command-line-utilities", "parser-implementations", "text-processing"]
+include = ["src/**", "tests/**", "README.md", "CHANGELOG.md", "LICENSE", "Cargo.toml"]
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
+
+office-parser = { version = "0.1.0", path = ".." }
+
+[dev-dependencies]
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
