@@ -25,6 +25,9 @@ office-parser-cli document.docx --out ./output
 # Parse to JSON
 office-parser-cli slides.pptx --out ./output --format json
 
+# Parse to lightweight JSON (omit embedded base64 image bytes)
+office-parser-cli slides.pptx --out ./output --format json --json-no-image-bytes
+
 # Config/data files
 office-parser-cli config.yaml --out ./output
 office-parser-cli data.toml --out ./output --format json
@@ -47,6 +50,7 @@ office-parser-cli sheet.xlsx --out ./output --group-by A  # Excel column letter
 |------|---------|-------------|
 | `--out <dir>` | `.` | Output directory |
 | `--format <fmt>` | `markdown` | Output format: `markdown` or `json` |
+| `--json-no-image-bytes` | off | JSON output: omit embedded base64 image bytes |
 | `--chunk-size <n>` | - | Chunk size (chars) for generic text splitting |
 | `--max-rows <n>` | - | Max rows per sheet (spreadsheets) |
 | `--max-cols <n>` | - | Max columns per sheet (spreadsheets) |
@@ -72,4 +76,5 @@ Extracted images are written to `<out>/asset/` and referenced as `asset/<file>` 
 ## Notes
 
 - Format detection is based on input filename extension.
+- The CLI is for inspection/export, not store ingestion.
 - For format-specific behavior (charts, diagrams, spreadsheets, JSON/YAML/TOML, XML), see the [library README](../README.md).

@@ -9,6 +9,19 @@ pub struct Chunk {
     pub block_last: usize,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct JsonRenderOptions {
+    pub include_image_bytes: bool,
+}
+
+impl Default for JsonRenderOptions {
+    fn default() -> Self {
+        Self {
+            include_image_bytes: true,
+        }
+    }
+}
+
 pub fn to_markdown(doc: &Document) -> String {
     let mut blocks = doc.blocks.clone();
     crate::document_ast::render_blocks_to_extracted_text(&mut blocks)
@@ -231,11 +244,19 @@ pub fn to_chunks(doc: &Document, max_chars: usize) -> Vec<Chunk> {
 }
 
 pub fn to_json(doc: &Document) -> Result<String> {
-    let v = to_json_value(doc);
+    to_json_with_options(doc, JsonRenderOptions::default())
+}
+
+pub fn to_json_with_options(doc: &Document, opts: JsonRenderOptions) -> Result<String> {
+    let v = to_json_value_with_options(doc, opts);
     Ok(serde_json::to_string_pretty(&v).map_err(|e| crate::Error::Render(e.into()))?)
 }
 
 pub fn to_json_value(doc: &Document) -> serde_json::Value {
+    to_json_value_with_options(doc, JsonRenderOptions::default())
+}
+
+pub fn to_json_value_with_options(doc: &Document, opts: JsonRenderOptions) -> serde_json::Value {
     let blocks = doc
         .blocks
         .iter()
@@ -264,13 +285,20 @@ pub fn to_json_value(doc: &Document) -> serde_json::Value {
         .images
         .iter()
         .map(|img| {
-            serde_json::json!({
-                "id": img.id,
-                "mime": img.mime_type,
-                "filename": img.filename,
-                "source_ref": img.source_ref,
-                "bytes_b64": base64::engine::general_purpose::STANDARD.encode(&img.bytes),
-            })
+            let mut obj = serde_json::Map::new();
+            obj.insert("id".to_string(), serde_json::json!(img.id));
+            obj.insert("mime".to_string(), serde_json::json!(img.mime_type));
+            obj.insert("filename".to_string(), serde_json::json!(img.filename));
+            obj.insert("source_ref".to_string(), serde_json::json!(img.source_ref));
+            if opts.include_image_bytes {
+                obj.insert(
+                    "bytes_b64".to_string(),
+                    serde_json::json!(
+                        base64::engine::general_purpose::STANDARD.encode(&img.bytes)
+                    ),
+                );
+            }
+            serde_json::Value::Object(obj)
         })
         .collect::<Vec<_>>();
 
@@ -286,4 +314,65 @@ pub fn to_json_value(doc: &Document) -> serde_json::Value {
         "blocks": blocks,
         "images": images,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{JsonRenderOptions, to_json_value, to_json_value_with_options};
+    use crate::document::{DocumentMetadata, ExtractedImage, Format};
+    use crate::Document;
+
+    #[test]
+    fn json_render_includes_image_bytes_by_default() {
+        let doc = Document {
+            blocks: vec![],
+            images: vec![ExtractedImage {
+                bytes: vec![1, 2, 3],
+                mime_type: "image/png".to_string(),
+                filename: Some("asset/image.png".to_string()),
+                source_ref: Some("slide:1:snapshot".to_string()),
+                id: "sha256:abc".to_string(),
+            }],
+            metadata: DocumentMetadata {
+                format: Format::Pptx,
+                title: None,
+                page_count: None,
+                slide_count: Some(1),
+                extra: serde_json::json!({}),
+            },
+        };
+
+        let v = to_json_value(&doc);
+        assert!(v["images"][0].get("bytes_b64").is_some());
+    }
+
+    #[test]
+    fn json_render_can_omit_image_bytes() {
+        let doc = Document {
+            blocks: vec![],
+            images: vec![ExtractedImage {
+                bytes: vec![1, 2, 3],
+                mime_type: "image/png".to_string(),
+                filename: Some("asset/image.png".to_string()),
+                source_ref: Some("slide:1:snapshot".to_string()),
+                id: "sha256:abc".to_string(),
+            }],
+            metadata: DocumentMetadata {
+                format: Format::Pptx,
+                title: None,
+                page_count: None,
+                slide_count: Some(1),
+                extra: serde_json::json!({}),
+            },
+        };
+
+        let v = to_json_value_with_options(
+            &doc,
+            JsonRenderOptions {
+                include_image_bytes: false,
+            },
+        );
+        assert!(v["images"][0].get("bytes_b64").is_none());
+        assert_eq!(v["images"][0]["id"], "sha256:abc");
+    }
 }

@@ -24,6 +24,10 @@ struct Args {
     #[arg(long, value_enum, default_value_t = OutputFormat::Markdown)]
     format: OutputFormat,
 
+    /// JSON output: omit embedded base64 image bytes and keep image metadata only.
+    #[arg(long)]
+    json_no_image_bytes: bool,
+
     /// Chunk size (chars) for Markdown output.
     /// By default spreadsheets are rendered without extra generic chunking.
     #[arg(long)]
@@ -149,7 +153,12 @@ fn run(args: Args) -> Result<()> {
                 .with_context(|| format!("write {}", out_path.display()))?;
         }
         OutputFormat::Json => {
-            let v = office_parser::render::to_json_value(&doc);
+            let v = office_parser::render::to_json_value_with_options(
+                &doc,
+                office_parser::render::JsonRenderOptions {
+                    include_image_bytes: !args.json_no_image_bytes,
+                },
+            );
             let s = serde_json::to_string_pretty(&v).context("serialize json")?;
             std::fs::write(&out_path, s)
                 .with_context(|| format!("write {}", out_path.display()))?;

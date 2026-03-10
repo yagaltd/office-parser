@@ -386,6 +386,76 @@ fn cli_epub_emits_markdown_and_assets() -> Result<()> {
 }
 
 #[test]
+fn cli_json_can_omit_embedded_image_bytes() -> Result<()> {
+    let container_xml = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>
+"#;
+
+    let opf = r#"<?xml version="1.0" encoding="UTF-8"?>
+<package version="3.0" xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Test Book</dc:title>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="img1" href="img/cover.png" media-type="image/png"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>
+"#;
+
+    let ch1 = r#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head><title>Chapter One</title></head>
+  <body>
+    <p>Hello.</p>
+    <img src="img/cover.png" alt="cover"/>
+  </body>
+</html>
+"#;
+
+    let png = tiny_png_1x1();
+    let epub = zip_bytes(&[
+        ("META-INF/container.xml", container_xml.as_bytes()),
+        ("OEBPS/content.opf", opf.as_bytes()),
+        ("OEBPS/ch1.xhtml", ch1.as_bytes()),
+        ("OEBPS/img/cover.png", png.as_slice()),
+    ])?;
+
+    let out_dir = fresh_temp_dir();
+    std::fs::create_dir_all(&out_dir)?;
+    let input_path = out_dir.join("book.epub");
+    std::fs::write(&input_path, &epub)?;
+
+    let exe = std::env::var("CARGO_BIN_EXE_office-parser-cli")
+        .unwrap_or_else(|_| env!("CARGO_BIN_EXE_office-parser-cli").to_string());
+    let status = std::process::Command::new(exe)
+        .arg(&input_path)
+        .arg("--out")
+        .arg(&out_dir)
+        .arg("--format")
+        .arg("json")
+        .arg("--json-no-image-bytes")
+        .status()?;
+    assert!(status.success());
+
+    let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
+        out_dir.join("book.json"),
+    )?)?;
+    assert!(json["images"][0].get("bytes_b64").is_none());
+    assert_eq!(json["images"][0]["filename"], "asset/cover.png");
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+    Ok(())
+}
+
+#[test]
 fn cli_xlsx_emits_markdown_tables() -> Result<()> {
     let xlsx = xlsx_minimal_bytes()?;
 
