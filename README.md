@@ -74,7 +74,6 @@ See [cli/README.md](cli/README.md) for details.
 
 ## Docs
 
-- [V3 ingestion notes](docs/v3-ingestion.md)
 - [Library usage](docs/library-usage.md)
 - [CLI usage](cli/README.md)
 - [Formats and behavior](docs/formats.md)
