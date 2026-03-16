@@ -5,7 +5,7 @@
 Rust crate for parsing documents into a normalized `Document` AST that preserves useful hierarchy and semantic structure for downstream ingestion, chunking, retrieval, and inspection.
 
 `office-parser` is for office-like documents and structured data files:
-`DOCX`, `ODT`, `PPTX`, `ODP`, `XLSX`, `ODS`, `CSV`, `TSV`, `PDF`, `RTF`, `EPUB`, `JSON`, `YAML`, `TOML`, `XML`.
+`DOCX`, `ODT`, `PPTX`, `ODP`, `XLSX`, `ODS`, `CSV`, `TSV`, `PDF`, `RTF`, `EPUB`, `JSON`, `YAML`, `TOML`, `XML`, `XMIND`, `MMAP`.
 
 It is intended to keep context organized instead of flattening everything into one large text blob. Headings, tables, images, charts, diagrams, sheets, and metadata remain available for downstream systems such as CognitiveOS V3.
 
@@ -33,6 +33,7 @@ office-parser = { git = "https://github.com/<user>/<repo>", default-features = f
 - Document metadata: format, title, page/slide counts, format-specific extras
 - Embedded assets: extracted images with stable IDs and source references
 - Semantic structures when detectable: spreadsheet segments, charts, diagrams
+- Mind maps (`xmind`, `mmap`) as root heading + nested list hierarchy, with full tree preserved in `metadata.extra.mindmap`
 
 ## Why This Helps V3 Ingestion
 

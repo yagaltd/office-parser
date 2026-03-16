@@ -15,6 +15,7 @@
 - `pdf`: text extraction and page metadata.
 - `rtf`: paragraph/list/table/image extraction.
 - `epub`: spine XHTML and embedded images.
+- `xmind`, `mmap`: mindmap topic trees mapped to heading + nested list blocks, with full tree in `metadata.extra.mindmap`.
 
 ## Config/data formats
 

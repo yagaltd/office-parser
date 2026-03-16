@@ -1,0 +1,19 @@
+#[test]
+fn format_hint_detects_xmind_and_mmap() {
+    assert_eq!(
+        office_parser::Format::from_hint("roadmap.xmind"),
+        Some(office_parser::Format::Xmind)
+    );
+    assert_eq!(
+        office_parser::Format::from_hint("weekly.mmap"),
+        Some(office_parser::Format::Mmap)
+    );
+    assert_eq!(
+        office_parser::Format::from_hint("application/vnd.xmind.workbook"),
+        Some(office_parser::Format::Xmind)
+    );
+    assert_eq!(
+        office_parser::Format::from_hint("application/vnd.mindjet.mindmanager"),
+        Some(office_parser::Format::Mmap)
+    );
+}

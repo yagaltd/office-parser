@@ -45,7 +45,9 @@ fn mime_from_filename(name: &str) -> String {
     feature = "odp",
     feature = "epub",
     feature = "xlsx",
-    feature = "ods_sheet"
+    feature = "ods_sheet",
+    feature = "xmind",
+    feature = "mmap"
 ))]
 fn read_zip_file(bytes: &[u8], path: &str) -> Result<Vec<u8>> {
     use std::io::{Cursor, Read};
@@ -67,7 +69,9 @@ fn read_zip_file(bytes: &[u8], path: &str) -> Result<Vec<u8>> {
     feature = "odp",
     feature = "epub",
     feature = "xlsx",
-    feature = "ods_sheet"
+    feature = "ods_sheet",
+    feature = "xmind",
+    feature = "mmap"
 )))]
 fn read_zip_file(_bytes: &[u8], _path: &str) -> Result<Vec<u8>> {
     anyhow::bail!("zip-based formats are disabled")
@@ -80,7 +84,9 @@ fn read_zip_file(_bytes: &[u8], _path: &str) -> Result<Vec<u8>> {
     feature = "odp",
     feature = "epub",
     feature = "xlsx",
-    feature = "ods_sheet"
+    feature = "ods_sheet",
+    feature = "xmind",
+    feature = "mmap"
 ))]
 fn read_zip_file_utf8(bytes: &[u8], path: &str) -> Result<String> {
     let v = read_zip_file(bytes, path)?;
@@ -94,7 +100,9 @@ fn read_zip_file_utf8(bytes: &[u8], path: &str) -> Result<String> {
     feature = "odp",
     feature = "epub",
     feature = "xlsx",
-    feature = "ods_sheet"
+    feature = "ods_sheet",
+    feature = "xmind",
+    feature = "mmap"
 )))]
 fn read_zip_file_utf8(_bytes: &[u8], _path: &str) -> Result<String> {
     anyhow::bail!("zip-based formats are disabled")
@@ -469,6 +477,24 @@ pub mod tsv {
         _opts: crate::spreadsheet::ParseOptions,
     ) -> crate::Result<crate::Document> {
         Err(crate::Error::FeatureDisabled("tsv"))
+    }
+}
+
+#[cfg(feature = "xmind")]
+pub mod xmind;
+#[cfg(not(feature = "xmind"))]
+pub mod xmind {
+    pub fn parse(_bytes: &[u8]) -> crate::Result<crate::Document> {
+        Err(crate::Error::FeatureDisabled("xmind"))
+    }
+}
+
+#[cfg(feature = "mmap")]
+pub mod mmap;
+#[cfg(not(feature = "mmap"))]
+pub mod mmap {
+    pub fn parse(_bytes: &[u8]) -> crate::Result<crate::Document> {
+        Err(crate::Error::FeatureDisabled("mmap"))
     }
 }
 

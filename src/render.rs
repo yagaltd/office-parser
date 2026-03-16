@@ -293,9 +293,7 @@ pub fn to_json_value_with_options(doc: &Document, opts: JsonRenderOptions) -> se
             if opts.include_image_bytes {
                 obj.insert(
                     "bytes_b64".to_string(),
-                    serde_json::json!(
-                        base64::engine::general_purpose::STANDARD.encode(&img.bytes)
-                    ),
+                    serde_json::json!(base64::engine::general_purpose::STANDARD.encode(&img.bytes)),
                 );
             }
             serde_json::Value::Object(obj)
@@ -319,8 +317,8 @@ pub fn to_json_value_with_options(doc: &Document, opts: JsonRenderOptions) -> se
 #[cfg(test)]
 mod tests {
     use super::{JsonRenderOptions, to_json_value, to_json_value_with_options};
-    use crate::document::{DocumentMetadata, ExtractedImage, Format};
     use crate::Document;
+    use crate::document::{DocumentMetadata, ExtractedImage, Format};
 
     #[test]
     fn json_render_includes_image_bytes_by_default() {

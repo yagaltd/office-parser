@@ -42,6 +42,8 @@ pub enum Format {
     Toml,
     Xml,
     Epub,
+    Xmind,
+    Mmap,
 }
 
 impl Format {
@@ -62,6 +64,8 @@ impl Format {
             Self::Toml => "toml",
             Self::Xml => "xml",
             Self::Epub => "epub",
+            Self::Xmind => "xmind",
+            Self::Mmap => "mmap",
         }
     }
 
@@ -95,6 +99,10 @@ impl Format {
             }
             "application/xml" | "text/xml" | "application/rss+xml" => return Some(Self::Xml),
             "application/epub+zip" => return Some(Self::Epub),
+            "application/vnd.xmind.workbook" => return Some(Self::Xmind),
+            "application/x-mindmanager" | "application/vnd.mindjet.mindmanager" => {
+                return Some(Self::Mmap);
+            }
             _ => {}
         }
 
@@ -120,6 +128,8 @@ impl Format {
             "toml" => Some(Self::Toml),
             "xml" => Some(Self::Xml),
             "epub" => Some(Self::Epub),
+            "xmind" => Some(Self::Xmind),
+            "mmap" => Some(Self::Mmap),
             _ => None,
         }
     }

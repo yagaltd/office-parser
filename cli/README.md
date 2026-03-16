@@ -31,6 +31,10 @@ office-parser-cli slides.pptx --out ./output --format json --json-no-image-bytes
 # Config/data files
 office-parser-cli config.yaml --out ./output
 office-parser-cli data.toml --out ./output --format json
+
+# Mindmap files
+office-parser-cli roadmap.xmind --out ./output --format json
+office-parser-cli weekly.mmap --out ./output
 ```
 
 ### Spreadsheet options
@@ -77,4 +81,5 @@ Extracted images are written to `<out>/asset/` and referenced as `asset/<file>` 
 
 - Format detection is based on input filename extension.
 - The CLI is for inspection/export, not store ingestion.
+- `xmind`/`mmap` are parsed from the first root map/sheet and rendered via the normal markdown/json outputs.
 - For format-specific behavior (charts, diagrams, spreadsheets, JSON/YAML/TOML, XML), see the [library README](../README.md).

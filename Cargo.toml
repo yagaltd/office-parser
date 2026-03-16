@@ -27,6 +27,8 @@ default = [
     "ods_sheet",
     "csv",
     "tsv",
+    "xmind",
+    "mmap",
 ]
 # Config / data formats
 json = []
@@ -48,6 +50,10 @@ docx = ["dep:zip", "dep:quick-xml"]
 # ODF formats
 odp = ["dep:zip", "dep:quick-xml"]
 odt = ["dep:zip", "dep:quick-xml"]
+
+# Mindmap formats
+xmind = ["dep:zip", "dep:quick-xml"]
+mmap = ["dep:zip", "dep:quick-xml"]
 
 # PDF
 pdf = ["dep:lopdf"]

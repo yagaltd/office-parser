@@ -44,7 +44,9 @@ impl Error {
             | crate::Format::Odt
             | crate::Format::Pptx
             | crate::Format::Odp
-            | crate::Format::Epub => {
+            | crate::Format::Epub
+            | crate::Format::Xmind
+            | crate::Format::Mmap => {
                 let msg = err.to_string();
                 if msg.contains("zip") || msg.contains("Zip") {
                     Self::Zip(err)
@@ -89,6 +91,8 @@ pub fn parse_as(bytes: &[u8], format: Format) -> Result<Document> {
         Format::Toml => toml::parse(bytes),
         Format::Xml => xml::parse(bytes),
         Format::Epub => epub::parse(bytes),
+        Format::Xmind => xmind::parse(bytes),
+        Format::Mmap => mmap::parse(bytes),
     }
 }
 
@@ -266,5 +270,19 @@ pub mod epub {
     use super::{Document, Result};
     pub fn parse(bytes: &[u8]) -> Result<Document> {
         crate::formats::epub::parse(bytes)
+    }
+}
+
+pub mod xmind {
+    use super::{Document, Result};
+    pub fn parse(bytes: &[u8]) -> Result<Document> {
+        crate::formats::xmind::parse(bytes)
+    }
+}
+
+pub mod mmap {
+    use super::{Document, Result};
+    pub fn parse(bytes: &[u8]) -> Result<Document> {
+        crate::formats::mmap::parse(bytes)
     }
 }
