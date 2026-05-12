@@ -4,7 +4,7 @@ pub mod formats;
 pub mod render;
 pub mod spreadsheet;
 
-pub use document::{Document, DocumentMetadata, ExtractedImage, Format};
+pub use document::{Document, DocumentMetadata, ExtractedImage, Format, PdfTextQuality};
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {

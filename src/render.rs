@@ -330,12 +330,14 @@ mod tests {
                 filename: Some("asset/image.png".to_string()),
                 source_ref: Some("slide:1:snapshot".to_string()),
                 id: "sha256:abc".to_string(),
+                description: None,
             }],
             metadata: DocumentMetadata {
                 format: Format::Pptx,
                 title: None,
                 page_count: None,
                 slide_count: Some(1),
+                pdf_text_quality: None,
                 extra: serde_json::json!({}),
             },
         };
@@ -354,12 +356,14 @@ mod tests {
                 filename: Some("asset/image.png".to_string()),
                 source_ref: Some("slide:1:snapshot".to_string()),
                 id: "sha256:abc".to_string(),
+                description: None,
             }],
             metadata: DocumentMetadata {
                 format: Format::Pptx,
                 title: None,
                 page_count: None,
                 slide_count: Some(1),
+                pdf_text_quality: None,
                 extra: serde_json::json!({}),
             },
         };

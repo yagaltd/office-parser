@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use lopdf::Object;
 
 use crate::document_ast::{Block, Cell, LinkKind, ListItem, SourceSpan};
+use crate::PdfTextQuality;
 
 use super::{ParsedImage, sha256_hex};
 
@@ -2056,15 +2057,58 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
     })
 }
 
+/// Count alphanumeric characters across all blocks after cleanup.
+fn count_alphanumeric(blocks: &[Block]) -> usize {
+    blocks
+        .iter()
+        .map(|b| {
+            let text: String = match b {
+                Block::Heading { text, .. } => text.clone(),
+                Block::Paragraph { text, .. } => text.clone(),
+                Block::List { items, .. } => {
+                    items.iter().map(|i| i.text.as_str()).collect::<Vec<_>>().join(" ")
+                }
+                Block::Table { rows, .. } => rows
+                    .iter()
+                    .flat_map(|r| r.iter())
+                    .map(|c| c.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                Block::Image { alt, .. } => alt.as_deref().unwrap_or("").to_string(),
+                Block::Link { text, url, .. } => {
+                    let t = text.as_deref().unwrap_or("");
+                    format!("{t}{url}")
+                }
+            };
+            text.chars().filter(|c| c.is_alphanumeric()).count()
+        })
+        .sum()
+}
+
+/// Classify PDF text extraction quality based on alphanumeric character count.
+fn classify_pdf_text_quality(blocks: &[Block]) -> PdfTextQuality {
+    let n = count_alphanumeric(blocks);
+    if n > 500 {
+        PdfTextQuality::TextRich
+    } else if n >= 50 {
+        PdfTextQuality::TextSparse
+    } else {
+        PdfTextQuality::ImageOnly
+    }
+}
+
 pub fn parse(bytes: &[u8]) -> crate::Result<crate::Document> {
     let parsed =
         parse_pdf_full(bytes).map_err(|e| crate::Error::from_parse(crate::Format::Pdf, e))?;
+    let quality = classify_pdf_text_quality(&parsed.blocks);
     let office = super::ParsedOfficeDocument {
         blocks: parsed.blocks,
         images: parsed.images,
         metadata_json: parsed.metadata_json,
     };
-    Ok(super::finalize(crate::Format::Pdf, office))
+    let mut doc = super::finalize(crate::Format::Pdf, office);
+    doc.metadata.pdf_text_quality = Some(quality);
+    Ok(doc)
 }
 
 #[cfg(test)]

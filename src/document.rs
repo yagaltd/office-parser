@@ -1,4 +1,5 @@
 use crate::document_ast::Block;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug)]
 pub struct Document {
@@ -14,6 +15,11 @@ pub struct ExtractedImage {
     pub filename: Option<String>,
     pub source_ref: Option<String>,
     pub id: String,
+    /// Human-readable description of image content.
+    ///
+    /// Set externally by the consumer (agent / pipeline) after parsing,
+    /// typically via a vision model. The parser itself never fills this.
+    pub description: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -22,6 +28,11 @@ pub struct DocumentMetadata {
     pub title: Option<String>,
     pub page_count: Option<usize>,
     pub slide_count: Option<usize>,
+    /// Quality of extracted text for PDF documents.
+    ///
+    /// `None` for non-PDF formats. Set automatically during PDF parsing.
+    /// Consumers can use this to decide whether to OCR scanned pages.
+    pub pdf_text_quality: Option<PdfTextQuality>,
     pub extra: serde_json::Value,
 }
 
@@ -44,6 +55,20 @@ pub enum Format {
     Epub,
     Xmind,
     Mmap,
+}
+
+/// Classifies how much extractable text a PDF document has.
+///
+/// Set automatically on [`DocumentMetadata::pdf_text_quality`] during parsing.
+/// Consumers use this to decide if OCR or other remediation is needed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PdfTextQuality {
+    /// More than 500 alphanumeric characters — text was extracted well.
+    TextRich,
+    /// Between 50 and 500 alphanumeric characters — partial text.
+    TextSparse,
+    /// Fewer than 50 alphanumeric characters — likely scanned, needs OCR.
+    ImageOnly,
 }
 
 impl Format {

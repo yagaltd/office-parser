@@ -257,6 +257,7 @@ fn finalize(format: Format, parsed: ParsedOfficeDocument) -> Document {
                 filename: img.filename,
                 source_ref,
                 id: img.id,
+                description: None,
             }
         })
         .collect();
@@ -296,6 +297,7 @@ fn finalize(format: Format, parsed: ParsedOfficeDocument) -> Document {
             title,
             page_count,
             slide_count,
+            pdf_text_quality: None,
             extra: parsed.metadata_json,
         },
     }
