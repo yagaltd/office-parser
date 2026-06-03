@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0
+
+- **Fixed:** Panic on malformed RTF input when a HYPERLINK/INCLUDEPICTURE field with an empty or data-image URL occurs at a group nesting depth that empties the internal `group_stack`. The replenishment check now runs before field processing, preventing a subsequent `unwrap()` panic on an empty stack.
+
 ## Unreleased
 
 - Added input parsing support for mind map formats: `xmind` and `mmap`.

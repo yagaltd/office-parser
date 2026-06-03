@@ -1,6 +1,6 @@
 [package]
 name = "office-parser"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Parse Office and data/config files into a structured document AST for ingestion and export."
 license = "MIT"

@@ -571,6 +571,10 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                     }
                 }
 
+                if group_stack.is_empty() {
+                    group_stack.push(GroupCtx::default());
+                }
+
                 if ended.field_started_here {
                     if let Some(field) = field_stack.pop() {
                         let inst = field.inst;
@@ -623,10 +627,6 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                             push_para_link(&mut cur_para_links, url, txt);
                         }
                     }
-                }
-
-                if group_stack.is_empty() {
-                    group_stack.push(GroupCtx::default());
                 }
             }
             b'\n' | b'\r' => {}
