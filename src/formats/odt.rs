@@ -4,7 +4,7 @@ use anyhow::{Context, Result, anyhow};
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
-use crate::document_ast::{Block, Cell, LinkKind, ListItem, SourceSpan};
+use crate::document_ast::{Block, Cell, InlineMark, LinkKind, ListItem, MarkKind, SourceSpan};
 
 use super::{
     ParsedImage, ParsedOfficeDocument, mime_from_filename, read_zip_file, read_zip_file_utf8,
@@ -252,22 +252,114 @@ fn extract_office_text_children_xml(content_xml: &str) -> Result<Vec<(String, Ve
     Ok(out)
 }
 
-fn extract_text_and_links(xml: &[u8]) -> Result<(String, Vec<(String, Option<String>)>)> {
+/// (bold, italic, strikethrough) resolved from automatic text styles.
+pub(crate) type SpanStyle = (bool, bool, bool);
+
+/// Map `style:name` -> span flags for `style:family="text"` automatic
+/// styles; parent chains resolved iteratively.
+pub(crate) fn parse_odt_text_styles(content_xml: &str) -> HashMap<String, SpanStyle> {
+    let mut reader = Reader::from_str(content_xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut raw: Vec<(String, Option<String>, SpanStyle)> = Vec::new();
+    let mut cur: Option<(String, Option<String>, SpanStyle)> = None;
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                let ln = e.local_name();
+                if ln.as_ref() == b"style" {
+                    let family = attr_val(&e, b"style:family").unwrap_or_default();
+                    if family == "text" {
+                        let name = attr_val(&e, b"style:name").unwrap_or_default();
+                        let parent = attr_val(&e, b"style:parent-style-name");
+                        cur = Some((name, parent, (false, false, false)));
+                    }
+                } else if ln.as_ref() == b"text-properties" {
+                    if let Some((_, _, flags)) = cur.as_mut() {
+                        if let Some(w) = attr_val(&e, b"fo:font-weight") {
+                            flags.0 = w.eq_ignore_ascii_case("bold");
+                        }
+                        if let Some(st) = attr_val(&e, b"fo:font-style") {
+                            flags.1 = st.eq_ignore_ascii_case("italic");
+                        }
+                        if let Some(lt) = attr_val(&e, b"style:text-line-through-style") {
+                            flags.2 = !lt.eq_ignore_ascii_case("none");
+                        }
+                    }
+                }
+            }
+            Ok(Event::End(e)) => {
+                if e.local_name().as_ref() == b"style" {
+                    if let Some(c) = cur.take() {
+                        raw.push(c);
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    // resolve parent chains (2 passes covers chains in practice)
+    let mut map: HashMap<String, SpanStyle> =
+        raw.iter().map(|(n, _, f)| (n.clone(), *f)).collect();
+    let parents: Vec<(String, Option<String>)> =
+        raw.iter().map(|(n, p, _)| (n.clone(), p.clone())).collect();
+    for _ in 0..2 {
+        for (name, parent) in &parents {
+            if let Some(pname) = parent
+                && let Some(pf) = map.get(pname).copied()
+            {
+                let f = map.get_mut(name).unwrap();
+                f.0 |= pf.0;
+                f.1 |= pf.1;
+                f.2 |= pf.2;
+            }
+        }
+    }
+    map
+}
+
+/// (text, links, inline marks) extracted from an ODF text element.
+type ExtractedText = (String, Vec<(String, Option<String>)>, Vec<InlineMark>);
+
+fn extract_text_and_links(xml: &[u8], styles: &HashMap<String, SpanStyle>) -> Result<ExtractedText> {
     let mut reader = Reader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
 
     let mut out = String::new();
     let mut links: Vec<(String, Option<String>)> = Vec::new();
+    let mut segments: Vec<(usize, usize, SpanStyle)> = Vec::new();
+    let mut link_ranges: Vec<(usize, usize, String)> = Vec::new();
+    let mut span_stack: Vec<SpanStyle> = Vec::new();
+    let mut span_starts: Vec<usize> = Vec::new();
     let mut in_a = false;
+    let mut a_start = 0usize;
     let mut cur_href: Option<String> = None;
     let mut cur_text = String::new();
+
+    let effective = |stack: &[SpanStyle]| {
+        stack
+            .iter()
+            .fold((false, false, false), |a, f| (a.0 | f.0, a.1 | f.1, a.2 | f.2))
+    };
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => match e.name().as_ref() {
+                b"text:span" => {
+                    let name = attr_val(&e, b"text:style-name");
+                    let flags = name
+                        .and_then(|n| styles.get(&n).copied())
+                        .unwrap_or((false, false, false));
+                    span_stack.push(flags);
+                    span_starts.push(out.chars().count());
+                }
                 b"text:a" => {
                     in_a = true;
+                    a_start = out.chars().count();
                     cur_href = attr_val(&e, b"xlink:href");
                     cur_text.clear();
                 }
@@ -301,14 +393,30 @@ fn extract_text_and_links(xml: &[u8]) -> Result<(String, Vec<(String, Option<Str
             },
             Ok(Event::Text(e)) => {
                 let t = e.decode().map_err(|ee| anyhow!("odt text decode: {ee}"))?;
+                let start = out.chars().count();
                 out.push_str(&t);
+                let end = out.chars().count();
+                let flags = effective(&span_stack);
+                if flags != (false, false, false) && end > start {
+                    segments.push((start, end, flags));
+                }
                 if in_a {
                     cur_text.push_str(&t);
                 }
             }
             Ok(Event::End(e)) => {
+                if e.name().as_ref() == b"text:span" {
+                    span_stack.pop();
+                    span_starts.pop();
+                }
                 if e.name().as_ref() == b"text:a" {
                     in_a = false;
+                    let end_char = out.chars().count();
+                    if let Some(href) = cur_href.as_ref() {
+                        if end_char > a_start {
+                            link_ranges.push((a_start, end_char, href.clone()));
+                        }
+                    }
                     if let Some(href) = cur_href.take() {
                         let display = cur_text.trim().to_string();
                         links.push((
@@ -329,10 +437,39 @@ fn extract_text_and_links(xml: &[u8]) -> Result<(String, Vec<(String, Option<Str
         buf.clear();
     }
 
-    Ok((out.trim().to_string(), links))
+    let trimmed = out.trim();
+    let shift = out.chars().count() - out.trim_start().chars().count();
+    let len = trimmed.chars().count();
+    let mut marks: Vec<InlineMark> = Vec::new();
+    for (s0, e0, f) in segments {
+        if f.0 {
+            marks.push(InlineMark { kind: MarkKind::Bold, start: s0, end: e0 });
+        }
+        if f.1 {
+            marks.push(InlineMark { kind: MarkKind::Italic, start: s0, end: e0 });
+        }
+        if f.2 {
+            marks.push(InlineMark { kind: MarkKind::Strikethrough, start: s0, end: e0 });
+        }
+    }
+    for (s0, e0, href) in link_ranges {
+        marks.push(InlineMark {
+            kind: MarkKind::Link { url: href },
+            start: s0,
+            end: e0,
+        });
+    }
+    Ok((
+        trimmed.to_string(),
+        links,
+        crate::document_ast::shift_marks(marks, shift, len),
+    ))
 }
 
-fn parse_heading(xml: &[u8]) -> Result<(u8, String, Vec<(String, Option<String>)>)> {
+fn parse_heading(
+    xml: &[u8],
+    styles: &HashMap<String, SpanStyle>,
+) -> Result<(u8, String, Vec<(String, Option<String>)>, Vec<InlineMark>)> {
     let mut level: u8 = 1;
     let mut reader = Reader::from_reader(xml);
     reader.config_mut().trim_text(false);
@@ -367,15 +504,22 @@ fn parse_heading(xml: &[u8]) -> Result<(u8, String, Vec<(String, Option<String>)
         buf.clear();
     }
 
-    let (text, links) = extract_text_and_links(&inner)?;
-    Ok((level, text, links))
+    let (text, links, marks) = extract_text_and_links(&inner, styles)?;
+    Ok((level, text, links, marks))
 }
 
-fn parse_paragraph(xml: &[u8]) -> Result<(String, Vec<(String, Option<String>)>)> {
-    extract_text_and_links(xml)
+fn parse_paragraph(
+    xml: &[u8],
+    styles: &HashMap<String, SpanStyle>,
+) -> Result<(String, Vec<(String, Option<String>)>, Vec<InlineMark>)> {
+    extract_text_and_links(xml, styles)
 }
 
-fn parse_list(xml: &[u8], ordered: bool) -> Result<(Vec<ListItem>, Vec<(String, Option<String>)>)> {
+fn parse_list(
+    xml: &[u8],
+    ordered: bool,
+    styles: &HashMap<String, SpanStyle>,
+) -> Result<(Vec<ListItem>, Vec<(String, Option<String>)>)> {
     let mut reader = Reader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
@@ -427,14 +571,15 @@ fn parse_list(xml: &[u8], ordered: bool) -> Result<(Vec<ListItem>, Vec<(String, 
                     write_end_tag(&mut v, e.name().as_ref());
                     let d = d.saturating_sub(1);
                     if d == 0 && e.name().as_ref() == b"text:p" {
-                        let (t, l) = extract_text_and_links(&v)?;
+                        let (t, l, m) = extract_text_and_links(&v, styles)?;
                         links.extend(l);
                         if !t.trim().is_empty() {
                             items.push(ListItem {
                                 level: lvl,
                                 text: t,
+                                marks: m,
                                 source: SourceSpan::default(),
-                            });
+    });
                         }
                     } else {
                         capturing_p = Some((v, d, lvl));
@@ -456,7 +601,10 @@ fn parse_list(xml: &[u8], ordered: bool) -> Result<(Vec<ListItem>, Vec<(String, 
     Ok((items, links))
 }
 
-fn parse_table(xml: &[u8]) -> Result<(Vec<Vec<Cell>>, Vec<(String, Option<String>)>)> {
+fn parse_table(
+    xml: &[u8],
+    styles: &HashMap<String, SpanStyle>,
+) -> Result<(Vec<Vec<Cell>>, Vec<(String, Option<String>)>)> {
     let mut reader = Reader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
@@ -508,7 +656,7 @@ fn parse_table(xml: &[u8]) -> Result<(Vec<Vec<Cell>>, Vec<(String, Option<String
                     write_end_tag(&mut v, e.name().as_ref());
                     let d = d.saturating_sub(1);
                     if d == 0 && e.name().as_ref() == b"table:table-cell" {
-                        let (t, l) = extract_text_and_links(&v)?;
+                        let (t, l, _m) = extract_text_and_links(&v, styles)?;
                         links.extend(l);
                         cur_row.push(Cell {
                             text: t,
@@ -1058,6 +1206,7 @@ pub fn parse_odt_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
     let styles_xml = read_zip_file_utf8(bytes, "styles.xml").unwrap_or_else(|_| "".to_string());
     let list_styles = parse_list_style_ordered(&styles_xml);
 
+    let text_styles = parse_odt_text_styles(&content_xml);
     let children = extract_office_text_children_xml(&content_xml)?;
 
     // Extract and dedupe images referenced anywhere.
@@ -1095,7 +1244,7 @@ pub fn parse_odt_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
             if let Ok(obj_xml) = read_zip_file_utf8(bytes, &entry) {
                 let (chart_type, title) = extract_chart_type_and_title(&obj_xml);
                 if let Ok(Some(table_xml)) = extract_first_table_xml(&obj_xml) {
-                    let (rows, links) = parse_table(&table_xml)?;
+                    let (rows, links) = parse_table(&table_xml, &text_styles)?;
                     if !rows.is_empty() {
                         let chart_type = chart_type.unwrap_or_else(|| "chart".to_string());
                         let chart_shape = format!("{chart_type} chart");
@@ -1116,18 +1265,21 @@ pub fn parse_odt_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                             level: 3,
                             text: title.clone().unwrap_or_else(|| "Chart".to_string()),
                             source: SourceSpan::default(),
-                        });
+                            marks: Vec::new(),
+    });
                         next_block_index += 1;
                         blocks.push(Block::Paragraph {
                             block_index: next_block_index,
                             text: note,
                             source: SourceSpan::default(),
-                        });
+                            marks: Vec::new(),
+    });
                         next_block_index += 1;
                         blocks.push(Block::Table {
                             block_index: next_block_index,
                             rows,
                             source: SourceSpan::default(),
+                            widths: Vec::new(),
                         });
                         next_block_index += 1;
                         for (href, t) in links {
@@ -1147,14 +1299,15 @@ pub fn parse_odt_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
 
         match tag.as_str() {
             "text:h" => {
-                let (level, text, links) = parse_heading(&xml)?;
+                let (level, text, links, hmarks) = parse_heading(&xml, &text_styles)?;
                 if !text.trim().is_empty() {
                     blocks.push(Block::Heading {
                         block_index: next_block_index,
                         level,
                         text,
+                        marks: hmarks,
                         source: SourceSpan::default(),
-                    });
+    });
                     next_block_index += 1;
                 }
                 for (href, t) in links {
@@ -1169,13 +1322,14 @@ pub fn parse_odt_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                 }
             }
             "text:p" => {
-                let (text, links) = parse_paragraph(&xml)?;
+                let (text, links, pmarks) = parse_paragraph(&xml, &text_styles)?;
                 if !text.trim().is_empty() {
                     blocks.push(Block::Paragraph {
                         block_index: next_block_index,
                         text,
+                        marks: pmarks,
                         source: SourceSpan::default(),
-                    });
+    });
                     next_block_index += 1;
                 }
                 for (href, t) in links {
@@ -1208,7 +1362,7 @@ pub fn parse_odt_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                     .and_then(|n| list_styles.get(n).copied())
                     .unwrap_or(false);
 
-                let (items, links) = parse_list(&xml, ordered)?;
+                let (items, links) = parse_list(&xml, ordered, &text_styles)?;
                 if !items.is_empty() {
                     blocks.push(Block::List {
                         block_index: next_block_index,
@@ -1230,11 +1384,12 @@ pub fn parse_odt_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                 }
             }
             "table:table" => {
-                let (rows, links) = parse_table(&xml)?;
+                let (rows, links) = parse_table(&xml, &text_styles)?;
                 blocks.push(Block::Table {
                     block_index: next_block_index,
                     rows,
                     source: SourceSpan::default(),
+                    widths: Vec::new(),
                 });
                 next_block_index += 1;
                 for (href, t) in links {
@@ -1257,13 +1412,15 @@ pub fn parse_odt_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                 level: 3,
                 text: "Diagram".to_string(),
                 source: SourceSpan::default(),
-            });
+                marks: Vec::new(),
+    });
             next_block_index += 1;
             blocks.push(Block::Paragraph {
                 block_index: next_block_index,
                 text: mermaid,
                 source: SourceSpan::default(),
-            });
+                marks: Vec::new(),
+    });
             next_block_index += 1;
             diagram_graphs_meta.push(graph_json);
         }
@@ -1298,6 +1455,7 @@ pub fn parse_odt_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
             | Block::Table { block_index, .. }
             | Block::Image { block_index, .. }
             | Block::Link { block_index, .. } => *block_index = idx,
+            | Block::Note { block_index, .. } => *block_index = idx,
         }
     }
 

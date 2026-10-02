@@ -211,7 +211,8 @@ fn cli_pptx_emits_mermaid_for_connectors_and_no_snapshots() -> Result<()> {
     let md = std::fs::read_to_string(out_dir.join("in.md"))?;
     assert!(md.contains("```mermaid"));
     assert!(md.contains("flowchart"));
-    assert!(md.contains("asset/image1.png"));
+    assert!(md.contains("](asset/image1.png)"), "media line form: {md}");
+    assert!(!md.contains("[image:sha256:"), "debug form leaked: {md}");
     assert!(!md.contains("img:"));
 
     assert!(!out_dir.join("asset").join("slide_0001.png").exists());
@@ -541,6 +542,147 @@ fn cli_xml_wp_like_emits_markdown_and_parses_cdata_html() -> Result<()> {
     assert!(md.contains("title: example"));
     // HTML->Markdown best-effort: paragraph text should show up unescaped.
     assert!(md.contains("Hi there."));
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+    Ok(())
+}
+
+#[test]
+fn cli_markdown_emits_okf_frontmatter() -> Result<()> {
+    let out_dir = fresh_temp_dir();
+    std::fs::create_dir_all(&out_dir)?;
+    let input_path = out_dir.join("in.rtf");
+    std::fs::write(&input_path, r"{\rtf1\ansi Report Title\par Body text here.}")?;
+
+    let exe = std::env::var("CARGO_BIN_EXE_office-parser-cli")
+        .unwrap_or_else(|_| env!("CARGO_BIN_EXE_office-parser-cli").to_string());
+    let status = std::process::Command::new(exe)
+        .arg(&input_path)
+        .arg("--out")
+        .arg(&out_dir)
+        .arg("--format")
+        .arg("markdown")
+        .status()?;
+    assert!(status.success());
+
+    let md = std::fs::read_to_string(out_dir.join("in.md"))?;
+    assert!(md.starts_with("---\ntype: document\n"), "missing OKF frontmatter: {md}");
+    assert!(md.contains("description: \"Report Title\""), "missing description: {md}");
+    assert!(md.contains("tags: [rtf]\n"), "missing format tag: {md}");
+    assert!(md.contains("Body text here."));
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+    Ok(())
+}
+
+#[test]
+fn cli_pptx_markdown_emits_morph_deck() -> Result<()> {
+    // Two slides, 16:9 deck: L1 heading per slide, `---` hr divider between
+    // them, sigil-escaped paragraph line, `slides:` in the OKF frontmatter.
+    let presentation_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <p:sldIdLst>
+    <p:sldId id="256" r:id="rId1"/>
+    <p:sldId id="257" r:id="rId2"/>
+  </p:sldIdLst>
+  <p:sldSz cx="12192000" cy="6858000"/>
+</p:presentation>
+"#;
+
+    let presentation_rels = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide2.xml"/>
+</Relationships>
+"#;
+
+    fn slide_xml(title: &str, body_line: &str) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <p:cSld>
+    <p:spTree>
+      <p:sp>
+        <p:nvSpPr><p:cNvPr id="1" name="T"/></p:nvSpPr>
+        <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2000000" cy="1000000"/></a:xfrm></p:spPr>
+        <p:txBody><a:p><a:r><a:t>{title}</a:t></a:r></a:p></p:txBody>
+      </p:sp>
+      <p:sp>
+        <p:nvSpPr><p:cNvPr id="2" name="B"/></p:nvSpPr>
+        <p:spPr><a:xfrm><a:off x="0" y="1200000"/><a:ext cx="2000000" cy="1000000"/></a:xfrm></p:spPr>
+        <p:txBody><a:p><a:r><a:t>{body_line}</a:t></a:r></a:p></p:txBody>
+      </p:sp>
+    </p:spTree>
+  </p:cSld>
+</p:sld>
+"#
+        )
+    }
+
+    let pptx = zip_bytes(&[
+        ("ppt/presentation.xml", presentation_xml.as_bytes()),
+        (
+            "ppt/_rels/presentation.xml.rels",
+            presentation_rels.as_bytes(),
+        ),
+        ("ppt/slides/slide1.xml", slide_xml("First Slide", "- looks like a bullet").as_bytes()),
+        ("ppt/slides/slide2.xml", slide_xml("Second Slide", "plain text").as_bytes()),
+        (
+            "ppt/slides/_rels/slide1.xml.rels",
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdNotes1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide1.xml"/>
+</Relationships>
+"#.as_bytes(),
+        ),
+        ("ppt/slides/_rels/slide2.xml.rels", &b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"/>"[..]),
+        (
+            "ppt/notesSlides/notesSlide1.xml",
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<p:notes xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <p:cSld>
+    <p:spTree>
+      <p:sp>
+        <p:nvSpPr><p:cNvPr id="1" name="Notes"/></p:nvSpPr>
+        <p:spPr/>
+        <p:txBody><a:p><a:r><a:t>Mention Q4 numbers</a:t></a:r></a:p></p:txBody>
+      </p:sp>
+    </p:spTree>
+  </p:cSld>
+</p:notes>
+"#.as_bytes(),
+        ),
+    ])?;
+
+    let out_dir = fresh_temp_dir();
+    std::fs::create_dir_all(&out_dir)?;
+    let input_path = out_dir.join("deck.pptx");
+    std::fs::write(&input_path, &pptx)?;
+
+    let exe = std::env::var("CARGO_BIN_EXE_office-parser-cli")
+        .unwrap_or_else(|_| env!("CARGO_BIN_EXE_office-parser-cli").to_string());
+    let status = std::process::Command::new(exe)
+        .arg(&input_path)
+        .arg("--out")
+        .arg(&out_dir)
+        .arg("--format")
+        .arg("markdown")
+        .status()?;
+    assert!(status.success());
+
+    let md = std::fs::read_to_string(out_dir.join("deck.md"))?;
+    // OKF frontmatter with deck mode
+    assert!(md.contains("type: document\n"), "frontmatter: {md}");
+    assert!(md.contains("slides: 16:9\n"), "deck ratio: {md}");
+    // L1 per slide + hr divider between deck sections
+    assert!(md.contains("# First Slide"));
+    assert!(md.contains("---\n\n# Second Slide"), "hr-delimited sections: {md}");
+    // paragraph line that would re-detect as a bullet is escaped
+    assert!(md.contains("\\- looks like a bullet"), "escaped: {md}");
+    // speaker note rides the slide section as a `::: note` fence
+    assert!(md.contains("::: note\nMention Q4 numbers\n:::"), "note fence: {md}");
+
+    assert!(md.find("::: note").unwrap() < md.find("---\n\n# Second Slide").unwrap(), "note inside slide 1 section");
 
     let _ = std::fs::remove_dir_all(&out_dir);
     Ok(())

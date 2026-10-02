@@ -1,3 +1,43 @@
+## Unreleased
+
+### MorphEditor dialect (`--format markdown`)
+
+- OKF frontmatter on every export: `type: document`, optional
+  `title`/`description`/`tags`; presentations additionally emit
+  `slides: <ratio>` (from slide size) and support `--slide-transition`.
+- Deck mode for PPTX/ODP: one `#` section per slide, `---` hr-delimited
+  (MorphEditor hr-delimited deck sections); speaker notes from
+  `notesSlide` (PPTX) / `presentation:notes` (ODP) emitted as
+  `::: note` fences inside their slide section.
+- Inline marks across DOCX/ODT/PPTX/ODP: bold/italic/strikethrough from
+  run properties, hyperlinks as link marks; ODT automatic-style parent
+  chains resolved. Serialized as `**`/`*`/`` ` ``/`~~`/`[]()`.
+- DOCX tables emit `::: table {widths=[..]}` wrappers from `gridCol`.
+- Multi-column DOCX sections (`w:cols num>=2`) emit `::: columns` +
+  `::: column` fences with an even-volume column split; ranges also
+  captured in metadata (`multi_column_sections`).
+- Images emit MorphEditor media lines (`![alt](asset/…)`) instead of the
+  debug form.
+- MorphEditor sigil escaping for paragraph lines; mermaid fences pass
+  through as code-fence blocks.
+
+### Mermaid diagram hardening
+
+- Connector arrow directions honored: bidirectional `<-->`, reversed
+  connectors swap endpoints; standalone line arrows normalized.
+- Grouped shapes (`grpSp`) flattened recursively so every member becomes
+  a diagram node.
+- OOXML preset-geometry map expanded (~30 presets: terminator, document,
+  delay, manual op, storage, magnetic media, preparation, connectors…).
+
+### Docs & validation
+
+- New round-trip tooling: `tools/verify_morph_roundtrip.mjs` and
+  `tools/golden_roundtrip.mjs` (validates emitted markdown through
+  MorphEditor's own BlockModel).
+- New fixtures + integration tests: run marks (DOCX/ODT/PPTX/ODP),
+  speaker notes, column sections, table widths.
+
 # Changelog
 
 ## 0.2.0

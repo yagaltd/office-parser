@@ -527,6 +527,7 @@ pub(crate) fn build_table_block_from_parts(
         block_index,
         rows: out_rows,
         source: SourceSpan::default(),
+        widths: Vec::new(),
     }
 }
 
@@ -536,6 +537,7 @@ pub(crate) fn sheet_heading(block_index: usize, name: &str) -> Block {
         level: 2,
         text: format!("Sheet: {}", name.trim()),
         source: SourceSpan::default(),
+        marks: Vec::new(),
     }
 }
 
@@ -545,6 +547,7 @@ pub(crate) fn table_heading(block_index: usize, table_idx_1: usize) -> Block {
         level: 3,
         text: format!("Table {table_idx_1}"),
         source: SourceSpan::default(),
+        marks: Vec::new(),
     }
 }
 
@@ -554,6 +557,7 @@ pub(crate) fn named_table_heading(block_index: usize, name: &str) -> Block {
         level: 3,
         text: format!("Table: {}", name.trim()),
         source: SourceSpan::default(),
+        marks: Vec::new(),
     }
 }
 
@@ -562,6 +566,7 @@ pub(crate) fn warning_paragraph(block_index: usize, msg: &str) -> Block {
         block_index,
         text: msg.trim().to_string(),
         source: SourceSpan::default(),
+        marks: Vec::new(),
     }
 }
 
@@ -571,6 +576,7 @@ pub(crate) fn rows_heading(block_index: usize, start_row_1: usize, end_row_1: us
         level: 4,
         text: format!("Rows {start_row_1}–{end_row_1}"),
         source: SourceSpan::default(),
+        marks: Vec::new(),
     }
 }
 
@@ -594,5 +600,6 @@ pub(crate) fn group_rows_heading(
             key
         ),
         source: SourceSpan::default(),
+        marks: Vec::new(),
     }
 }

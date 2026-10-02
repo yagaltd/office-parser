@@ -208,6 +208,7 @@ fn blocks_from_root(root: &MindNode) -> Vec<Block> {
         level: 1,
         text: root.title.clone(),
         source: SourceSpan::default(),
+        marks: Vec::new(),
     });
     block_index += 1;
 
@@ -233,6 +234,7 @@ fn flatten_list(node: &MindNode, level: usize, out: &mut Vec<ListItem>) {
         level: level.min(u8::MAX as usize) as u8,
         text: node.title.clone(),
         source: SourceSpan::default(),
+        marks: Vec::new(),
     });
     for child in &node.children {
         flatten_list(child, level + 1, out);

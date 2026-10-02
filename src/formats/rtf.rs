@@ -398,6 +398,7 @@ fn flush_table_if_any(
             block_index: *next_block_index,
             rows: std::mem::take(table_rows),
             source: SourceSpan::default(),
+            widths: Vec::new(),
         });
         *next_block_index += 1;
     }
@@ -428,7 +429,8 @@ fn flush_paragraph(
             level: 0,
             text,
             source: SourceSpan::default(),
-        };
+            marks: Vec::new(),
+    };
         if let Some((ord, items)) = pending_list.as_mut() {
             if *ord == ordered {
                 items.push(item);
@@ -451,7 +453,8 @@ fn flush_paragraph(
             block_index: *next_block_index,
             text,
             source: SourceSpan::default(),
-        });
+            marks: Vec::new(),
+    });
         *next_block_index += 1;
 
         for (url, txt) in cur_para_links.drain(..) {
@@ -1040,7 +1043,8 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
             block_index: next_block_index,
             text: rem,
             source: SourceSpan::default(),
-        });
+            marks: Vec::new(),
+    });
         next_block_index += 1;
     }
     cur_text.clear();

@@ -6,6 +6,7 @@ fn push_heading(blocks: &mut Vec<Block>, next_idx: &mut usize, level: u8, text: 
         level,
         text,
         source: SourceSpan::default(),
+        marks: Vec::new(),
     });
     *next_idx += 1;
 }
@@ -18,6 +19,7 @@ fn push_paragraph(blocks: &mut Vec<Block>, next_idx: &mut usize, text: String) {
         block_index: *next_idx,
         text,
         source: SourceSpan::default(),
+        marks: Vec::new(),
     });
     *next_idx += 1;
 }
@@ -35,7 +37,8 @@ fn push_list(blocks: &mut Vec<Block>, next_idx: &mut usize, items: Vec<String>) 
                 level: 0,
                 text: t,
                 source: SourceSpan::default(),
-            })
+                marks: Vec::new(),
+    })
             .collect(),
         source: SourceSpan::default(),
     });
@@ -50,6 +53,7 @@ fn push_table(blocks: &mut Vec<Block>, next_idx: &mut usize, rows: Vec<Vec<Cell>
         block_index: *next_idx,
         rows,
         source: SourceSpan::default(),
+        widths: Vec::new(),
     });
     *next_idx += 1;
 }

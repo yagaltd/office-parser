@@ -81,3 +81,58 @@ See [cli/README.md](cli/README.md) for details.
 - [Spreadsheets](docs/spreadsheets.md)
 - [Charts and diagrams](docs/charts-diagrams.md)
 - [Release guide](docs/release.md)
+
+## MorphEditor Dialect (Markdown Output)
+
+`--format markdown` emits MorphEditor-compatible markdown (the dialect
+`BlockModel.js` parses) wrapped in OKF frontmatter (`type: document`,
+optional `title`/`description`/`tags`, and for presentations `slides:
+<ratio>` + optional `transition:`, validated against MorphEditor's
+`SLIDE_RATIOS`/`SLIDE_TRANSITIONS`). Presentations (PPTX/ODP) become
+decks: one `#` section per slide, `---` hr-delimited, speaker notes as
+`::: note` fences inside their slide section. DOCX table column widths
+become `::: table {widths=[..]}` wrappers and multi-column DOCX sections
+become `::: columns` fences (even-volume column split — see Limitations).
+Images emit MorphEditor media lines (`![alt](asset/…)`); inline
+bold/italic/strikethrough/links serialize as `**`/`*`/`~~`/`[]()` marks
+parsed from DOCX runs, ODT text spans, PPTX `rPr` attributes and ODP
+styles — round-trip byte-exact through MorphEditor.
+
+Mermaid diagram blocks are hardened: connector arrow directions are
+honored (`<-->` for bidirectional, reversed connectors swap endpoints),
+grouped shapes (`grpSp`) are flattened so every member becomes a node,
+and ~30 OOXML preset geometries map to mermaid shapes (stadium, hex,
+cyl, das, document, trap-b/t, lean-r, lin-rect, …).
+
+Validation: `node tools/verify_morph_roundtrip.mjs <file.md>` (needs the
+MorphEditor checkout) plus the Rust golden tests in `cli/tests/cli.rs`
+and `tests/docx_marks.rs`.
+
+### Limitations
+
+- **PDF page images**: PDFs are parsed for text (lopdf) and embedded
+  image objects — pages are **not rasterized**. Scanned/image-only PDFs
+  are flagged via `pdf_text_quality: ImageOnly` so downstream pipelines
+  can OCR them from the extracted embedded scans, but no composed page
+  PNG is produced.
+- **Presentations**: slide **transitions** are not auto-detected (an
+  explicit `--slide-transition` flag sets the MorphEditor `transition:`
+  frontmatter). **WordArt, 3-D, shadows, gradients, animations/timing**
+  and freeform (`custGeom`) shape geometry are not rendered — diagram
+  slides export as mermaid topology (what connects to what), not visual
+  layout; decorative unconnected shapes are dropped.
+- **Image width/position**: MorphEditor image lines carry no width attr
+  (`![a](u){width=..}` fails image detection and parses as a paragraph) —
+  sizes are dropped rather than emitted as corrupting markup.
+- **DOCX flowed multi-column sections** (`w:cols num>=2`): emitted as
+  `::: columns` + `::: column` fences. DOCX columns are flowed — the
+  source carries no explicit split points — so column boundaries are an
+  even-volume approximation of the print layout (round-trips cleanly;
+  also captured in JSON metadata as `multi_column_sections`).
+- **colspan/rowspan**: MorphEditor's table grammar (pipe tables +
+  `widths`/`rowHeights`/`align` wrapper props only) cannot represent
+  spans; cells are flattened.
+- **DOCX headers/footers/TOC fields**: page chrome and duplicated TOC
+  content are skipped.
+- **`--chunk-size` output**: the CognitiveOS chunked view — NOT
+  MorphEditor markdown.

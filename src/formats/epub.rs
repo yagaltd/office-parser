@@ -54,6 +54,7 @@ fn push_heading(blocks: &mut Vec<Block>, next_idx: &mut usize, level: u8, text: 
         level,
         text,
         source: SourceSpan::default(),
+        marks: Vec::new(),
     });
     *next_idx += 1;
 }
@@ -67,6 +68,7 @@ fn push_paragraph(blocks: &mut Vec<Block>, next_idx: &mut usize, text: String) {
         block_index: *next_idx,
         text,
         source: SourceSpan::default(),
+        marks: Vec::new(),
     });
     *next_idx += 1;
 }
@@ -80,7 +82,8 @@ fn push_list(blocks: &mut Vec<Block>, next_idx: &mut usize, ordered: bool, items
             level: 0,
             text: t,
             source: SourceSpan::default(),
-        })
+            marks: Vec::new(),
+    })
         .collect();
     if items.is_empty() {
         return;
@@ -313,6 +316,7 @@ fn parse_xhtml_to_blocks(
         level: 1,
         text: "chapter".to_string(),
         source: SourceSpan::default(),
+        marks: Vec::new(),
     });
     *next_idx += 1;
 

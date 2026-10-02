@@ -28,7 +28,8 @@ struct Args {
     #[arg(long)]
     json_no_image_bytes: bool,
 
-    /// Chunk size (chars) for Markdown output.
+    /// Chunk size (chars) for Markdown output. Emits the CognitiveOS
+    /// chunked view — this output is NOT MorphEditor-dialect markdown.
     /// By default spreadsheets are rendered without extra generic chunking.
     #[arg(long)]
     chunk_size: Option<usize>,
@@ -52,6 +53,32 @@ struct Args {
     /// Spreadsheet: split when this key column changes (e.g. `order_id` or `A`).
     #[arg(long)]
     group_by: Option<String>,
+
+    /// Slide-change direction for MorphEditor deck mode (PPTX/ODP markdown).
+    /// Validated against MorphEditor SLIDE_TRANSITIONS; ignored elsewhere.
+    #[arg(long)]
+    slide_transition: Option<SlideTransition>,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum SlideTransition {
+    Up,
+    Down,
+    Left,
+    Right,
+    Fade,
+}
+
+impl SlideTransition {
+    fn as_str(self) -> &'static str {
+        match self {
+            SlideTransition::Up => "up",
+            SlideTransition::Down => "down",
+            SlideTransition::Left => "left",
+            SlideTransition::Right => "right",
+            SlideTransition::Fade => "fade",
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -132,7 +159,7 @@ fn run(args: Args) -> Result<()> {
             // For spreadsheets we already do semantic splitting into multiple Table blocks.
             // Avoid extra chunking by default so row-range headings remain stable.
             let md = if default_sheet_chunk && args.chunk_size.is_none() {
-                office_parser::render::to_markdown(&doc)
+                office_parser::render::to_morph_markdown(&doc)
             } else if let Some(sz) = args.chunk_size {
                 let chunks = office_parser::render::to_chunks(&doc, sz);
                 chunks
@@ -141,7 +168,7 @@ fn run(args: Args) -> Result<()> {
                     .collect::<Vec<_>>()
                     .join("\n\n<!-- chunk -->\n\n")
             } else {
-                office_parser::render::to_markdown(&doc)
+                office_parser::render::to_morph_markdown(&doc)
             };
 
             let mut md = md;
@@ -149,6 +176,7 @@ fn run(args: Args) -> Result<()> {
             for (id, rel) in &id_to_relpath {
                 md = md.replace(&format!("office-image:{id}"), rel);
             }
+            let md = format!("{}{}", okf_frontmatter(&doc, args.slide_transition), md);
             std::fs::write(&out_path, md)
                 .with_context(|| format!("write {}", out_path.display()))?;
         }
@@ -263,4 +291,71 @@ fn write_assets_and_rewrite_filenames(
 
     let _ = out_dir;
     Ok((doc, id_to_rel))
+}
+
+/// OKF (Open Knowledge Format) frontmatter for Markdown output:
+/// required `type`, optional `title`/`description`, format as `tag`.
+/// Spec: https://okf.md/spec — view layer only, JSON output is unchanged.
+fn okf_frontmatter(
+    doc: &office_parser::Document,
+    slide_transition: Option<SlideTransition>,
+) -> String {
+    fn quote(s: &str) -> String {
+        let one_line = s.split_whitespace().collect::<Vec<_>>().join(" ");
+        format!("\"{}\"", one_line.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+    let mut fm = String::from("---\ntype: document\n");
+    if let Some(t) = doc
+        .metadata
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
+        fm.push_str(&format!("title: {}\n", quote(t)));
+    }
+    // Prefer the first paragraph that differs from the title; fall back to
+    // any first heading/paragraph (OKF description should not echo title).
+    let title_trim = doc.metadata.title.as_deref().map(str::trim);
+    let description = doc
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            office_parser::document_ast::Block::Paragraph { text, .. } => Some(text.trim()),
+            _ => None,
+        })
+        .find(|t| !t.is_empty() && Some(*t) != title_trim)
+        .or_else(|| {
+            doc.blocks.iter().find_map(|b| match b {
+                office_parser::document_ast::Block::Heading { text, .. }
+                | office_parser::document_ast::Block::Paragraph { text, .. } => {
+                    let t = text.trim();
+                    (!t.is_empty()).then_some(t)
+                }
+                _ => None,
+            })
+        });
+    if let Some(d) = description {
+        fm.push_str(&format!("description: {}\n", quote(d)));
+    }
+    fm.push_str(&format!("tags: [{}]\n", doc.metadata.format.as_str()));
+    if matches!(
+        doc.metadata.format,
+        office_parser::Format::Pptx | office_parser::Format::Odp
+    ) {
+        // MorphEditor deck mode: `slides:` in the leading frontmatter fence
+        // selects SLIDE_RATIOS deck rendering (absent key -> 16:9 default).
+        let ratio = doc
+            .metadata
+            .extra
+            .get("slide_ratio")
+            .and_then(|v| v.as_str())
+            .unwrap_or("16:9");
+        fm.push_str(&format!("slides: {ratio}\n"));
+        if let Some(t) = slide_transition {
+            fm.push_str(&format!("transition: {}\n", t.as_str()));
+        }
+    }
+    fm.push_str("---\n\n");
+    fm
 }

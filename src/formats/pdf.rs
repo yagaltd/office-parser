@@ -151,6 +151,9 @@ fn cleanup_pdf_blocks(blocks: &mut [Block]) {
             Block::Heading { text, .. } | Block::Paragraph { text, .. } => {
                 *text = cleanup_pdf_text(text);
             }
+            Block::Note { text, .. } => {
+                *text = cleanup_pdf_text(text);
+            }
             Block::List { items, .. } => {
                 for it in items {
                     it.text = cleanup_pdf_text(&it.text);
@@ -1779,7 +1782,8 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
                     level: 1,
                     text: title_parts.join(" "),
                     source: SourceSpan::default(),
-                });
+                    marks: Vec::new(),
+    });
                 next_block_index += 1;
             }
         }
@@ -1798,6 +1802,7 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
                     block_index: next_block_index,
                     rows,
                     source: SourceSpan::default(),
+                    widths: Vec::new(),
                 });
                 next_block_index += 1;
                 para_idx += 1;
@@ -1822,7 +1827,8 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
                         level: 0,
                         text: t,
                         source: SourceSpan::default(),
-                    })
+                        marks: Vec::new(),
+    })
                     .collect::<Vec<_>>();
                 blocks.push(Block::List {
                     block_index: next_block_index,
@@ -1944,7 +1950,8 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
                     level,
                     text,
                     source: SourceSpan::default(),
-                });
+                    marks: Vec::new(),
+    });
                 next_block_index += 1;
                 para_idx = j;
             } else {
@@ -1952,7 +1959,8 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
                     block_index: next_block_index,
                     text: joined,
                     source: SourceSpan::default(),
-                });
+                    marks: Vec::new(),
+    });
                 next_block_index += 1;
                 para_idx += 1;
             }
@@ -2000,7 +2008,8 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
             | Block::List { block_index, .. }
             | Block::Table { block_index, .. }
             | Block::Image { block_index, .. }
-            | Block::Link { block_index, .. } => *block_index = idx,
+            | Block::Link { block_index, .. }
+            | Block::Note { block_index, .. } => *block_index = idx,
         }
     }
 
@@ -2079,6 +2088,7 @@ fn count_alphanumeric(blocks: &[Block]) -> usize {
                     let t = text.as_deref().unwrap_or("");
                     format!("{t}{url}")
                 }
+                Block::Note { text, .. } => text.clone(),
             };
             text.chars().filter(|c| c.is_alphanumeric()).count()
         })

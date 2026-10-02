@@ -2,7 +2,8 @@ use anyhow::{Context, Result, anyhow};
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
-use crate::document_ast::{Block, Cell, ListItem, SourceSpan};
+use crate::document_ast::{Block, Cell, InlineMark, ListItem, MarkKind, SourceSpan};
+use crate::formats::odt::{parse_odt_text_styles, SpanStyle};
 
 use super::{
     ParsedImage, ParsedOfficeDocument, mime_from_filename, read_zip_file, read_zip_file_utf8,
@@ -107,6 +108,7 @@ fn push_paragraph_or_list_item(
     ordered: bool,
     level: u8,
     text: String,
+    marks: Vec<InlineMark>,
 ) {
     if is_list {
         match cur_list {
@@ -114,8 +116,9 @@ fn push_paragraph_or_list_item(
                 items.push(ListItem {
                     level,
                     text,
+                    marks,
                     source: SourceSpan::default(),
-                });
+    });
             }
             _ => {
                 flush_list_block(blocks, block_index, cur_list);
@@ -124,8 +127,9 @@ fn push_paragraph_or_list_item(
                     vec![ListItem {
                         level,
                         text,
+                        marks,
                         source: SourceSpan::default(),
-                    }],
+    }],
                 ));
             }
         }
@@ -136,6 +140,7 @@ fn push_paragraph_or_list_item(
     blocks.push(Block::Paragraph {
         block_index: *block_index,
         text,
+        marks,
         source: SourceSpan::default(),
     });
     *block_index += 1;
@@ -158,6 +163,8 @@ fn parse_odp_full_inner(
     let mut buf = Vec::new();
 
     let mut in_slide = false;
+    let mut in_notes = false;
+    let mut notes_lines: Vec<String> = Vec::new();
     let mut slide_depth = 0usize;
     let mut slide_idx_1: usize = 0;
     let mut slide_name: Option<String> = None;
@@ -250,6 +257,11 @@ fn parse_odp_full_inner(
     let mut cur_para_text = String::new();
     let mut in_text_p = false;
     let mut in_text_span = false;
+    // Inline mark capture: span style stack + segments for the current
+    // paragraph (body paragraphs only; title/table/connector excluded).
+    let text_styles = parse_odt_text_styles(&content_xml);
+    let mut span_flags: Vec<SpanStyle> = Vec::new();
+    let mut mark_segments: Vec<(usize, usize, SpanStyle)> = Vec::new();
 
     let mut list_depth: u8 = 0;
     let mut in_list_item = false;
@@ -310,6 +322,8 @@ fn parse_odp_full_inner(
                 match e.name().as_ref() {
                     b"draw:page" => {
                         in_slide = true;
+                        in_notes = false;
+                        notes_lines.clear();
                         slide_depth = 1;
                         slide_idx_1 += 1;
                         slide_name = attr_val_exact(&e, b"draw:name");
@@ -498,8 +512,17 @@ fn parse_odp_full_inner(
                             in_text_p = true;
                             cur_para_text.clear();
                         }
+                            mark_segments.clear();
+                        if e.name().as_ref() == b"presentation:notes" {
+                            in_notes = true;
+                            notes_lines.clear();
+                        }
                         if e.name().as_ref() == b"text:span" {
                             in_text_span = true;
+                            let flags = attr_val_exact(&e, b"text:style-name")
+                                .and_then(|n| text_styles.get(n.as_str()).copied())
+                                .unwrap_or((false, false, false));
+                            span_flags.push(flags);
                         }
                         if e.name().as_ref() == b"draw:image" {
                             if let Some(href) = attr_val_exact(&e, b"xlink:href") {
@@ -709,10 +732,28 @@ fn parse_odp_full_inner(
                         let trimmed = t.trim();
                         if in_text_p || in_text_span {
                             if !trimmed.is_empty() {
+                                // segment start (single-space joins align with
+                                // the mark offsets only when contiguous; the
+                                // join space shifts are corrected by trim+shift)
+                                let seg_start = cur_para_text.chars().count()
+                                    + usize::from(!cur_para_text.is_empty());
                                 if !cur_para_text.is_empty() {
                                     cur_para_text.push(' ');
                                 }
                                 cur_para_text.push_str(trimmed);
+                                let seg_end = cur_para_text.chars().count();
+                                let flags = span_flags.iter().fold(
+                                    (false, false, false),
+                                    |a, f| (a.0 | f.0, a.1 | f.1, a.2 | f.2),
+                                );
+                                if flags != (false, false, false)
+                                    && !in_table
+                                    && !in_connector
+                                    && !title_frame
+                                    && seg_end > seg_start
+                                {
+                                    mark_segments.push((seg_start, seg_end, flags));
+                                }
 
                                 if in_connector {
                                     if !connector_text.is_empty() {
@@ -754,11 +795,20 @@ fn parse_odp_full_inner(
                 if in_slide {
                     if e.name().as_ref() == b"text:span" {
                         in_text_span = false;
+                        span_flags.pop();
+                    }
+                    if e.name().as_ref() == b"presentation:notes" {
+                        in_notes = false;
                     }
                     if e.name().as_ref() == b"text:p" {
                         in_text_p = false;
                         let txt = cur_para_text.trim().to_string();
-                        if !txt.is_empty() {
+                        if in_notes {
+                            if !txt.is_empty() {
+                                notes_lines.push(txt);
+                            }
+                            cur_para_text.clear();
+                        } else if !txt.is_empty() {
                             if in_table {
                                 // Table cell content is handled via cur_cell_text aggregation.
                             } else if in_connector {
@@ -768,6 +818,38 @@ fn parse_odp_full_inner(
                             } else {
                                 text_chars = text_chars.saturating_add(txt.chars().count());
                                 let is_list = list_depth > 0 && in_list_item;
+                                let shift = cur_para_text.chars().count()
+                                    - cur_para_text.trim_start().chars().count();
+                                let len = txt.chars().count();
+                                let mut marks: Vec<InlineMark> = Vec::new();
+                                for (s0, e0, f) in std::mem::take(&mut mark_segments) {
+                                    if f.0 {
+                                        marks.push(InlineMark {
+                                            kind: MarkKind::Bold,
+                                            start: s0,
+                                            end: e0,
+                                        });
+                                    }
+                                    if f.1 {
+                                        marks.push(InlineMark {
+                                            kind: MarkKind::Italic,
+                                            start: s0,
+                                            end: e0,
+                                        });
+                                    }
+                                    if f.2 {
+                                        marks.push(InlineMark {
+                                            kind: MarkKind::Strikethrough,
+                                            start: s0,
+                                            end: e0,
+                                        });
+                                    }
+                                }
+                                let marks = crate::document_ast::shift_marks(
+                                    crate::document_ast::merge_marks(marks),
+                                    shift,
+                                    len,
+                                );
                                 push_paragraph_or_list_item(
                                     &mut blocks,
                                     &mut block_index,
@@ -776,10 +858,12 @@ fn parse_odp_full_inner(
                                     false,
                                     list_depth.saturating_sub(1),
                                     txt,
+                                    marks,
                                 );
                             }
                         }
                         cur_para_text.clear();
+                        mark_segments.clear();
                     }
 
                     if e.name().as_ref() == b"text:h" {
@@ -793,7 +877,8 @@ fn parse_odp_full_inner(
                                 level: heading_level.unwrap_or(2),
                                 text: txt,
                                 source: SourceSpan::default(),
-                            });
+                                marks: Vec::new(),
+    });
                             block_index += 1;
                         }
                         heading_level = None;
@@ -921,13 +1006,15 @@ fn parse_odp_full_inner(
                                     block_index,
                                     text: note,
                                     source: SourceSpan::default(),
-                                });
+                                    marks: Vec::new(),
+    });
                                 block_index += 1;
                             }
                             blocks.push(Block::Table {
                                 block_index,
                                 rows: std::mem::take(&mut table_rows),
                                 source: SourceSpan::default(),
+                                widths: Vec::new(),
                             });
                             block_index += 1;
                         }
@@ -954,6 +1041,23 @@ fn parse_odp_full_inner(
                                 pending_connectors.push(c);
                             }
                             connector_text.clear();
+                        }
+
+                        // Speaker notes -> one Note block at the end of the slide
+                        // section (Morph renderer emits a `::: note` fence).
+                        if !notes_lines.is_empty() {
+                            let mut note_text = String::new();
+                            for line in notes_lines.drain(..) {
+                                note_text.push_str(&line);
+                                note_text.push('\n');
+                            }
+                            blocks.push(Block::Note {
+                                block_index,
+                                text: note_text,
+                                source: SourceSpan::default(),
+                                marks: Vec::new(),
+    });
+                            block_index += 1;
                         }
 
                         // Convert connectors/lines into a diagram graph and Mermaid block.
@@ -1093,13 +1197,15 @@ fn parse_odp_full_inner(
                                     level: 3,
                                     text: "Diagram".to_string(),
                                     source: SourceSpan::default(),
-                                });
+                                    marks: Vec::new(),
+    });
                                 block_index += 1;
                                 blocks.push(Block::Paragraph {
                                     block_index,
                                     text: mermaid,
                                     source: SourceSpan::default(),
-                                });
+                                    marks: Vec::new(),
+    });
                                 block_index += 1;
                             }
                         }
@@ -1208,7 +1314,8 @@ fn parse_odp_full_inner(
                                 level: 1,
                                 text: heading_text,
                                 source: SourceSpan::default(),
-                            },
+                                marks: Vec::new(),
+    },
                         );
 
                         // Renumber block_index fields deterministically after insertion.
@@ -1221,6 +1328,7 @@ fn parse_odp_full_inner(
                                 | Block::Table { block_index, .. }
                                 | Block::Image { block_index, .. }
                                 | Block::Link { block_index, .. } => *block_index = idx,
+            | Block::Note { block_index, .. } => *block_index = idx,
                             }
                         }
                         block_index = blocks.len();

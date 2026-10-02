@@ -4,7 +4,7 @@ use anyhow::{Context, Result, anyhow};
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
-use crate::document_ast::{Block, Cell, ListItem, SourceSpan};
+use crate::document_ast::{Block, Cell, InlineMark, ListItem, MarkKind, SourceSpan};
 
 use super::{
     ParsedImage, ParsedOfficeDocument, mime_from_filename, read_zip_file, read_zip_file_utf8,
@@ -166,6 +166,85 @@ fn write_end_tag(out: &mut Vec<u8>, name: &[u8]) {
     out.push(b'>');
 }
 
+/// Depth-1 `sp`/`pic`/`graphicFrame`/`cxnSp`/`grpSp` children of a
+/// `p:grpSp` element; nested groups recurse so every member is flattened.
+fn capture_group_shape_children(grp_xml: &[u8]) -> Result<Vec<(String, Vec<u8>)>> {
+    let mut out: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut reader = Reader::from_reader(grp_xml);
+    reader.config_mut().trim_text(false);
+    let mut buf = Vec::new();
+    const KINDS: [&[u8]; 5] = [b"sp", b"pic", b"graphicFrame", b"cxnSp", b"grpSp"];
+    let mut depth = 0usize; // 0 = at/outside the grpSp root
+    let mut seen_root = false;
+    let mut capturing: Option<(String, Vec<u8>, usize, Vec<u8>)> = None;
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                if !seen_root {
+                    seen_root = true;
+                    buf.clear();
+                    continue;
+                }
+                if capturing.is_none() {
+                    depth += 1;
+                    let local = e.local_name().as_ref().to_vec();
+                    if depth == 1 && KINDS.contains(&local.as_slice()) {
+                        let mut v = Vec::with_capacity(2048);
+                        write_start_tag(&mut v, &e);
+                        capturing = Some((
+                            String::from_utf8_lossy(e.name().as_ref()).to_string(),
+                            v,
+                            1,
+                            e.name().as_ref().to_vec(),
+                        ));
+                        buf.clear();
+                        continue;
+                    }
+                }
+                if let Some((_t, v, d, _n)) = capturing.as_mut() {
+                    *d += 1;
+                    write_start_tag(v, &e);
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                if let Some((_t, v, _d, _n)) = capturing.as_mut() {
+                    write_empty_tag(v, &e);
+                }
+            }
+            Ok(Event::Text(e)) => {
+                if let Some((_t, v, _d, _n)) = capturing.as_mut() {
+                    v.extend_from_slice(e.as_ref());
+                }
+            }
+            Ok(Event::End(e)) => {
+                if let Some((t, mut v, d, n)) = capturing.take() {
+                    write_end_tag(&mut v, e.name().as_ref());
+                    let d = d.saturating_sub(1);
+                    if d == 0 && e.name().as_ref() == n.as_slice() {
+                        // nested groups: recurse so members are flattened too
+                        if (t.ends_with(":grpSp") || t == "grpSp")
+                            && let Ok(inner) = capture_group_shape_children(&v)
+                        {
+                            out.extend(inner);
+                        }
+                        out.push((t, v));
+                        depth = depth.saturating_sub(1);
+                    } else {
+                        capturing = Some((t, v, d, n));
+                    }
+                } else if depth > 0 {
+                    depth = depth.saturating_sub(1);
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(anyhow!("group shape parse error: {e}")),
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(out)
+}
+
 fn capture_sp_tree_children(slide_xml: &str) -> Result<Vec<(String, Vec<u8>)>> {
     // Return (tag_name, xml_bytes) for direct children of p:spTree that we care about.
     let mut out: Vec<(String, Vec<u8>)> = Vec::new();
@@ -235,8 +314,17 @@ fn capture_sp_tree_children(slide_xml: &str) -> Result<Vec<(String, Vec<u8>)>> {
                 if let Some((t, mut v, d, n)) = capturing.take() {
                     write_end_tag(&mut v, e.name().as_ref());
                     let d = d.saturating_sub(1);
+                    let is_group = t.ends_with(":grpSp") || t == "grpSp";
                     if d == 0 && e.name().as_ref() == n.as_slice() {
-                        out.push((t, v));
+                        out.push((t.clone(), v.clone()));
+                        // Flatten grouped shapes so their members become
+                        // diagram nodes/edges (group transforms are ignored —
+                        // mermaid lays out topologically, not spatially).
+                        if is_group {
+                            if let Ok(inner) = capture_group_shape_children(&v) {
+                                out.extend(inner);
+                            }
+                        }
                         if in_tree {
                             depth = depth.saturating_sub(1);
                         }
@@ -501,6 +589,7 @@ fn push_paragraph_or_list_item(
     ordered: bool,
     level: u8,
     text: String,
+    marks: Vec<InlineMark>,
 ) {
     if is_list {
         match cur_list {
@@ -508,8 +597,9 @@ fn push_paragraph_or_list_item(
                 items.push(ListItem {
                     level,
                     text,
+                    marks,
                     source: SourceSpan::default(),
-                });
+    });
             }
             _ => {
                 flush_list_block(blocks, block_index, cur_list);
@@ -518,8 +608,9 @@ fn push_paragraph_or_list_item(
                     vec![ListItem {
                         level,
                         text,
+                        marks,
                         source: SourceSpan::default(),
-                    }],
+    }],
                 ));
             }
         }
@@ -530,13 +621,22 @@ fn push_paragraph_or_list_item(
     blocks.push(Block::Paragraph {
         block_index: *block_index,
         text,
+        marks,
         source: SourceSpan::default(),
     });
     *block_index += 1;
 }
 
-fn extract_text_with_list_markers(xml: &[u8]) -> Result<Vec<(bool, bool, u8, String)>> {
-    // Returns (is_list, ordered, level, text)
+/// One DrawingML paragraph: text + list context + inline run marks.
+pub(crate) struct PptxPara {
+    pub is_list: bool,
+    pub ordered: bool,
+    pub level: u8,
+    pub text: String,
+    pub marks: Vec<InlineMark>,
+}
+
+fn extract_text_with_list_markers(xml: &[u8]) -> Result<Vec<PptxPara>> {
     fn scan_attr(tag: &[u8], key: &[u8]) -> Option<String> {
         let mut i = 0usize;
         while i + key.len() + 3 < tag.len() {
@@ -577,7 +677,7 @@ fn extract_text_with_list_markers(xml: &[u8]) -> Result<Vec<(bool, bool, u8, Str
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
 
-    let mut out: Vec<(bool, bool, u8, String)> = Vec::new();
+    let mut out: Vec<PptxPara> = Vec::new();
     let mut in_p = false;
     let mut cur_text = String::new();
     let mut cur_ordered = false;
@@ -585,6 +685,12 @@ fn extract_text_with_list_markers(xml: &[u8]) -> Result<Vec<(bool, bool, u8, Str
     let mut cur_lvl: u8 = 0;
     let mut in_t = false;
     let mut p_depth = 0usize;
+    let mut cur_marks: Vec<InlineMark> = Vec::new();
+    // Run styling: a:rPr carries b/i/strike as attributes.
+    let mut run_start_char = 0usize;
+    let mut run_bold = false;
+    let mut run_italic = false;
+    let mut run_strike = false;
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -598,6 +704,23 @@ fn extract_text_with_list_markers(xml: &[u8]) -> Result<Vec<(bool, bool, u8, Str
                     cur_lvl = 0;
                 } else if in_p {
                     p_depth += 1;
+                    if e.local_name().as_ref() == b"r" {
+                        run_start_char = cur_text.chars().count();
+                        run_bold = false;
+                        run_italic = false;
+                        run_strike = false;
+                    }
+                    if e.local_name().as_ref() == b"rPr" {
+                        run_bold = attr_val_local(&e, b"b")
+                            .map(|v| v == "1" || v == "true")
+                            .unwrap_or(run_bold);
+                        run_italic = attr_val_local(&e, b"i")
+                            .map(|v| v == "1" || v == "true")
+                            .unwrap_or(run_italic);
+                        run_strike = attr_val_local(&e, b"strike")
+                            .map(|v| v == "sngStrike" || v == "dblStrike")
+                            .unwrap_or(run_strike);
+                    }
                     if e.local_name().as_ref() == b"pPr" {
                         if let Some(v) = scan_attr(&e.to_vec(), b"lvl") {
                             cur_lvl = v.parse::<u8>().unwrap_or(0);
@@ -616,6 +739,23 @@ fn extract_text_with_list_markers(xml: &[u8]) -> Result<Vec<(bool, bool, u8, Str
             }
             Ok(Event::Empty(e)) => {
                 if in_p {
+                    if e.local_name().as_ref() == b"r" {
+                        run_start_char = cur_text.chars().count();
+                        run_bold = false;
+                        run_italic = false;
+                        run_strike = false;
+                    }
+                    if e.local_name().as_ref() == b"rPr" {
+                        run_bold = attr_val_local(&e, b"b")
+                            .map(|v| v == "1" || v == "true")
+                            .unwrap_or(run_bold);
+                        run_italic = attr_val_local(&e, b"i")
+                            .map(|v| v == "1" || v == "true")
+                            .unwrap_or(run_italic);
+                        run_strike = attr_val_local(&e, b"strike")
+                            .map(|v| v == "sngStrike" || v == "dblStrike")
+                            .unwrap_or(run_strike);
+                    }
                     if e.local_name().as_ref() == b"pPr" {
                         if let Some(v) =
                             scan_attr(&e.to_vec(), b"lvl").or_else(|| attr_val_local(&e, b"lvl"))
@@ -650,12 +790,56 @@ fn extract_text_with_list_markers(xml: &[u8]) -> Result<Vec<(bool, bool, u8, Str
                 if in_p {
                     if e.local_name().as_ref() == b"t" {
                         in_t = false;
+                        let end_char = cur_text.chars().count();
+                        if end_char > run_start_char
+                            && (run_bold || run_italic || run_strike)
+                        {
+                            if run_bold {
+                                cur_marks.push(InlineMark {
+                                    kind: MarkKind::Bold,
+                                    start: run_start_char,
+                                    end: end_char,
+                                });
+                            }
+                            if run_italic {
+                                cur_marks.push(InlineMark {
+                                    kind: MarkKind::Italic,
+                                    start: run_start_char,
+                                    end: end_char,
+                                });
+                            }
+                            if run_strike {
+                                cur_marks.push(InlineMark {
+                                    kind: MarkKind::Strikethrough,
+                                    start: run_start_char,
+                                    end: end_char,
+                                });
+                            }
+                        }
+                        run_start_char = end_char;
                     }
                     if e.local_name().as_ref() == b"p" {
                         let trimmed = cur_text.trim();
                         if !trimmed.is_empty() {
+                            let shift =
+                                cur_text.chars().count() - cur_text.trim_start().chars().count();
+                            let len = trimmed.chars().count();
                             let is_list = cur_ordered || cur_bulleted;
-                            out.push((is_list, cur_ordered, cur_lvl, trimmed.to_string()));
+                            out.push(PptxPara {
+                                is_list,
+                                ordered: cur_ordered,
+                                level: cur_lvl,
+                                text: trimmed.to_string(),
+                                marks: crate::document_ast::shift_marks(
+                                    crate::document_ast::merge_marks(std::mem::take(
+                                        &mut cur_marks,
+                                    )),
+                                    shift,
+                                    len,
+                                ),
+                            });
+                        } else {
+                            cur_marks.clear();
                         }
                         in_p = false;
                         p_depth = 0;
@@ -813,7 +997,7 @@ fn extract_text_compact(xml: &[u8]) -> anyhow::Result<Option<String>> {
     let paras = extract_text_with_list_markers(xml)?;
     let t = paras
         .iter()
-        .map(|(_, _, _, t)| t.trim())
+        .map(|p| p.text.trim())
         .filter(|t| !t.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
@@ -852,7 +1036,8 @@ fn mermaid_shape_from_prst(prst: Option<&str>) -> &'static str {
         "" => "rect",
         // Common shapes
         "rect" | "flowChartProcess" => "rect",
-        "roundRect" | "flowChartTerminator" => "rounded",
+        "roundRect" => "rounded",
+        "flowChartTerminator" => "stadium",
         "ellipse" => "circle",
         "diamond" | "flowChartDecision" => "diamond",
         "hexagon" => "hex",
@@ -865,6 +1050,24 @@ fn mermaid_shape_from_prst(prst: Option<&str>) -> &'static str {
         "triangle" | "rtTriangle" | "ltTriangle" | "upTriangle" | "downTriangle" => "tri",
         // Subprocess/subroutine-ish
         "flowChartPredefinedProcess" => "subproc",
+        // Flowchart long tail
+        "flowChartAlternateProcess" => "rounded",
+        "flowChartDelay" => "stadium",
+        "flowChartDocument" | "flowChartMultidocument" => "document",
+        "flowChartManualOperation" => "trap-b",
+        "flowChartManualInput" | "flowChartMerge" => "trap-t",
+        "flowChartOr" | "flowChartSummingJunction" | "flowChartConnector" => "circle",
+        "flowChartOnlineStorage" | "flowChartStoredData" | "flowChartMagneticTape"
+        | "flowChartPunchedTape" => "das",
+        "flowChartMagneticDisk" | "flowChartMagneticDrum" => "cyl",
+        "flowChartInternalStorage" => "lin-rect",
+        "flowChartPreparation" => "hex",
+        // Direct geometry names
+        "stadium" => "stadium",
+        "pentagon" | "homePlate" => "lean-r",
+        "chevron" => "lean-r",
+        "donut" | "blockArc" => "circle",
+        "flowChartInputOutput" => "parallelogram",
         _ => "rect",
     }
 }
@@ -920,7 +1123,7 @@ enum ArrowDir {
     Both,
 }
 
-fn parse_notes_text(notes_xml: &str) -> Result<Vec<(bool, bool, u8, String)>> {
+fn parse_notes_text(notes_xml: &str) -> Result<Vec<PptxPara>> {
     extract_text_with_list_markers(notes_xml.as_bytes())
 }
 
@@ -1297,8 +1500,14 @@ fn parse_pptx_full_inner(
         return Err(anyhow!("no slides found in ppt/presentation.xml"));
     }
 
-    let (_slide_cx_emu, _slide_cy_emu) =
+    let (slide_cx_emu, slide_cy_emu) =
         extract_slide_size_emu(&presentation_xml).unwrap_or((9_144_000_i64, 6_858_000_i64));
+    // Slide aspect as a MorphEditor SLIDE_RATIOS key (deck mode).
+    let slide_ratio = if slide_cx_emu as f64 / slide_cy_emu as f64 >= 1.55 {
+        "16:9"
+    } else {
+        "4:3"
+    };
 
     let mut blocks: Vec<Block> = Vec::new();
     let mut images: Vec<ParsedImage> = Vec::new();
@@ -1351,7 +1560,7 @@ fn parse_pptx_full_inner(
             let paras = extract_text_with_list_markers(xml)?;
             let text = paras
                 .iter()
-                .map(|(_, _, _, t)| t.as_str())
+                .map(|p| p.text.as_str())
                 .collect::<Vec<_>>()
                 .join("\n")
                 .trim()
@@ -1398,7 +1607,8 @@ fn parse_pptx_full_inner(
             level: 1,
             text: heading_text,
             source: SourceSpan::default(),
-        });
+            marks: Vec::new(),
+    });
         block_index += 1;
 
         let mut cur_list: Option<(bool, Vec<ListItem>)> = None;
@@ -1436,6 +1646,7 @@ fn parse_pptx_full_inner(
             from: Option<u32>,
             to: Option<u32>,
             label: Option<String>,
+            dir: ArrowDir,
         }
 
         #[derive(Clone, Debug)]
@@ -1468,7 +1679,8 @@ fn parse_pptx_full_inner(
                 slide_has_diagram = true;
                 let (from, to) = extract_connector_endpoints(xml);
                 let label = extract_text_compact(xml)?;
-                edges.push(Edge { from, to, label });
+                let dir = line_arrow_dir(xml);
+                edges.push(Edge { from, to, label, dir });
                 continue;
             }
 
@@ -1552,6 +1764,7 @@ fn parse_pptx_full_inner(
                         block_index,
                         rows,
                         source: SourceSpan::default(),
+                        widths: Vec::new(),
                     });
                     block_index += 1;
                 } else if let Some(rid) = extract_chart_rid_from_graphic_frame(xml) {
@@ -1585,7 +1798,8 @@ fn parse_pptx_full_inner(
                                         .clone()
                                         .unwrap_or_else(|| "Chart".to_string()),
                                     source: SourceSpan::default(),
-                                });
+                                    marks: Vec::new(),
+    });
                                 block_index += 1;
 
                                 let chart_shape = if chart_type == "unknown" {
@@ -1630,7 +1844,8 @@ fn parse_pptx_full_inner(
                                     block_index,
                                     text: note,
                                     source: SourceSpan::default(),
-                                });
+                                    marks: Vec::new(),
+    });
                                 block_index += 1;
 
                                 if !chart.categories.is_empty() && !chart.series.is_empty() {
@@ -1675,6 +1890,7 @@ fn parse_pptx_full_inner(
                                         block_index,
                                         rows,
                                         source: SourceSpan::default(),
+                                        widths: Vec::new(),
                                     });
                                     block_index += 1;
                                 }
@@ -1690,7 +1906,8 @@ fn parse_pptx_full_inner(
                         block_index,
                         text: "Note: SmartArt detected on this slide; semantic extraction not implemented; excluded.".to_string(),
                         source: SourceSpan::default(),
-                    });
+                        marks: Vec::new(),
+    });
                     block_index += 1;
                 } else if graphic_frame_has_diagram_or_chart(xml) {
                     slide_has_diagram = true;
@@ -1704,8 +1921,9 @@ fn parse_pptx_full_inner(
                 let prst = extract_prst_geom(xml);
 
                 // Line/arrow shapes (common for arrows between boxes).
-                if prst.as_deref() == Some("line") {
-                    if let Some((x, y, w, h)) = extract_bbox_emu(xml) {
+                if prst.as_deref() == Some("line")
+                    && let Some((x, y, w, h)) = extract_bbox_emu(xml)
+                {
                         const EMUS_PER_INCH: f64 = 914_400.0;
                         const PX_PER_INCH: f64 = 96.0;
                         let f = PX_PER_INCH / EMUS_PER_INCH;
@@ -1714,15 +1932,14 @@ fn parse_pptx_full_inner(
                             connectors += 1;
                             slide_has_diagram = true;
                         }
-                        lines.push(Line {
-                            x1: x as f64 * f,
-                            y1: y as f64 * f,
-                            x2: (x + w) as f64 * f,
-                            y2: (y + h) as f64 * f,
-                            dir,
-                            label: extract_text_compact(xml)?,
-                        });
-                    }
+                    lines.push(Line {
+                        x1: x as f64 * f,
+                        y1: y as f64 * f,
+                        x2: (x + w) as f64 * f,
+                        y2: (y + h) as f64 * f,
+                        dir,
+                        label: extract_text_compact(xml)?,
+                    });
                 }
 
                 if let (Some(id), Some((x, y, w, h))) =
@@ -1731,7 +1948,7 @@ fn parse_pptx_full_inner(
                     let paras_for_node = extract_text_with_list_markers(xml)?;
                     let full_text = paras_for_node
                         .iter()
-                        .map(|(_, _, _, t)| t.trim())
+                        .map(|p| p.text.trim())
                         .filter(|t| !t.is_empty())
                         .collect::<Vec<_>>()
                         .join("\n")
@@ -1759,16 +1976,17 @@ fn parse_pptx_full_inner(
                 }
 
                 let paras = extract_text_with_list_markers(xml)?;
-                for (is_list, ordered, lvl, text) in paras {
-                    text_chars = text_chars.saturating_add(text.chars().count());
+                for p in paras {
+                    text_chars = text_chars.saturating_add(p.text.chars().count());
                     push_paragraph_or_list_item(
                         &mut blocks,
                         &mut block_index,
                         &mut cur_list,
-                        is_list,
-                        ordered,
-                        lvl,
-                        text,
+                        p.is_list,
+                        p.ordered,
+                        p.level,
+                        p.text,
+                        p.marks,
                     );
                 }
             }
@@ -1814,21 +2032,21 @@ fn parse_pptx_full_inner(
 
                 let from = nearest(sx, sy);
                 let to = nearest(ex, ey);
-                if let (Some(from), Some(to)) = (from, to) {
-                    if from != to {
-                        edges.push(Edge {
-                            from: Some(from),
-                            to: Some(to),
-                            label: l.label.clone(),
-                        });
-                        if l.dir == ArrowDir::Both {
-                            edges.push(Edge {
-                                from: Some(to),
-                                to: Some(from),
-                                label: l.label.clone(),
-                            });
-                        }
-                    }
+                if let (Some(from), Some(to)) = (from, to)
+                    && from != to
+                {
+                        // Geometry was normalized so `from` is the tail end;
+                        // Both collapses into one `<-->` edge at emission.
+                    edges.push(Edge {
+                        from: Some(from),
+                        to: Some(to),
+                        label: l.label.clone(),
+                        dir: if l.dir == ArrowDir::Both {
+                            ArrowDir::Both
+                        } else {
+                            ArrowDir::Forward
+                        },
+                    });
                 }
             }
         }
@@ -1838,13 +2056,13 @@ fn parse_pptx_full_inner(
             let node_by_id: std::collections::HashMap<u32, &Node> =
                 nodes.iter().map(|n| (n.id, n)).collect();
 
-            let mut edge_items: Vec<(u32, u32, String)> = edges
+            let mut edge_items: Vec<(u32, u32, String, ArrowDir)> = edges
                 .iter()
                 .filter_map(|e| {
                     let from = e.from?;
                     let to = e.to?;
                     let label = e.label.clone().unwrap_or_default();
-                    Some((from, to, label.trim().to_string()))
+                    Some((from, to, label.trim().to_string(), e.dir))
                 })
                 .collect();
             edge_items.sort_by(|a, b| (a.0, a.1, &a.2).cmp(&(b.0, b.1, &b.2)));
@@ -1866,7 +2084,7 @@ fn parse_pptx_full_inner(
                 };
 
                 let mut node_ids: std::collections::BTreeSet<u32> = Default::default();
-                for (from, to, _) in &edge_items {
+                for (from, to, ..) in &edge_items {
                     node_ids.insert(*from);
                     node_ids.insert(*to);
                 }
@@ -1874,8 +2092,8 @@ fn parse_pptx_full_inner(
                 let mut mermaid = String::new();
                 mermaid.push_str("```mermaid\n");
                 mermaid.push_str("flowchart LR\n");
-                for id in node_ids.iter().copied() {
-                    if let Some(n) = node_by_id.get(&id).copied() {
+                for id in &node_ids {
+                    if let Some(n) = node_by_id.get(id).copied() {
                         let label = esc(&n.label);
                         match &n.kind {
                             NodeKind::Text => {
@@ -1897,12 +2115,19 @@ fn parse_pptx_full_inner(
                         mermaid.push_str(&format!("  n{id}@{{ shape: rect, label: \"n{id}\" }}\n"));
                     }
                 }
-                for (from, to, label) in edge_items.into_iter() {
+                for (from, to, label, dir) in edge_items.into_iter() {
+                    // Reverse connectors point at the original `from` shape:
+                    // swap endpoints so mermaid's arrowhead lands there.
+                    let (a, b, arrow) = match dir {
+                        ArrowDir::Reverse => (to, from, "-->"),
+                        ArrowDir::Both => (from, to, "<-->"),
+                        ArrowDir::Forward | ArrowDir::None => (from, to, "-->"),
+                    };
                     if label.trim().is_empty() {
-                        mermaid.push_str(&format!("  n{from} --> n{to}\n"));
+                        mermaid.push_str(&format!("  n{a} {arrow} n{b}\n"));
                     } else {
                         let l = esc(&label);
-                        mermaid.push_str(&format!("  n{from} -->|{l}| n{to}\n"));
+                        mermaid.push_str(&format!("  n{a} {arrow}|{l}| n{b}\n"));
                     }
                 }
                 mermaid.push_str("```\n");
@@ -1912,13 +2137,15 @@ fn parse_pptx_full_inner(
                     level: 3,
                     text: "Diagram".to_string(),
                     source: SourceSpan::default(),
-                });
+                    marks: Vec::new(),
+    });
                 block_index += 1;
                 blocks.push(Block::Paragraph {
                     block_index,
                     text: mermaid,
                     source: SourceSpan::default(),
-                });
+                    marks: Vec::new(),
+    });
                 block_index += 1;
             }
         }
@@ -1957,28 +2184,27 @@ fn parse_pptx_full_inner(
             let notes_part = resolve_target(&slide_part, &target);
             if let Ok(notes_xml) = read_zip_file_utf8(bytes, &notes_part) {
                 let notes_paras = parse_notes_text(&notes_xml)?;
-                if !notes_paras.is_empty() {
-                    blocks.push(Block::Heading {
-                        block_index,
-                        level: 3,
-                        text: "Speaker notes".to_string(),
-                        source: SourceSpan::default(),
-                    });
-                    block_index += 1;
-
-                    let mut cur_notes_list: Option<(bool, Vec<ListItem>)> = None;
-                    for (is_list, ordered, lvl, text) in notes_paras {
-                        push_paragraph_or_list_item(
-                            &mut blocks,
-                            &mut block_index,
-                            &mut cur_notes_list,
-                            is_list,
-                            ordered,
-                            lvl,
-                            text,
-                        );
+                // One semantic Note block per slide; list items keep their
+                // markdown markers so the Morph renderer emits them verbatim
+                // inside the `::: note` fence.
+                let mut note_text = String::new();
+                for p in &notes_paras {
+                    if p.is_list {
+                        let indent = "  ".repeat(p.level.saturating_sub(1) as usize);
+                        note_text.push_str(&indent);
+                        note_text.push_str(if p.ordered { "1. " } else { "- " });
                     }
-                    flush_list_block(&mut blocks, &mut block_index, &mut cur_notes_list);
+                    note_text.push_str(p.text.trim());
+                    note_text.push('\n');
+                }
+                if !note_text.is_empty() {
+                    blocks.push(Block::Note {
+                        block_index,
+                        text: note_text,
+                        source: SourceSpan::default(),
+                        marks: Vec::new(),
+    });
+                    block_index += 1;
                 }
             }
         }
@@ -2097,6 +2323,7 @@ fn parse_pptx_full_inner(
 
     let metadata_json = serde_json::json!({
         "kind": "pptx",
+        "slide_ratio": slide_ratio,
         "slides": slides_meta.iter().map(|s| {
             let mut v = s.analysis.clone();
             if let Some(o) = v.as_object_mut() {
@@ -2134,4 +2361,60 @@ pub fn parse_with_options(
     let parsed = parse_pptx_full_inner(bytes, opts.include_slide_snapshots)
         .map_err(|e| crate::Error::from_parse(crate::Format::Pptx, e))?;
     Ok(super::finalize(crate::Format::Pptx, parsed))
+}
+
+#[cfg(test)]
+mod group_capture_tests {
+    use super::*;
+
+    #[test]
+    fn capture_group_children_extracts_member_text() {
+        let grp = r#"<p:grpSp xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+      <p:nvGrpSpPr><p:cNvPr id="7" name="Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+      <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="10" cy="10"/><a:chOff x="0" y="0"/><a:chExt cx="10" cy="10"/></a:xfrm></p:grpSpPr>
+      <p:sp>
+        <p:nvSpPr><p:cNvPr id="8" name="GA"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+        <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>
+        <p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Grouped A</a:t></a:r></a:p></p:txBody>
+      </p:sp>
+      <p:sp>
+        <p:nvSpPr><p:cNvPr id="9" name="GB"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+        <p:spPr><a:xfrm><a:off x="2" y="0"/><a:ext cx="1" cy="1"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>
+        <p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Grouped B</a:t></a:r></a:p></p:txBody>
+      </p:sp>
+    </p:grpSp>"#;
+        let kids = capture_group_shape_children(grp.as_bytes()).unwrap();
+        assert_eq!(kids.len(), 2, "got {} children", kids.len());
+        for (t, xml) in &kids {
+            assert!(t.ends_with("sp"), "tag: {t}"); // qualified ("p:sp") is fine — the walk matches ends_with
+            let text = extract_text_compact(xml).unwrap();
+            println!("child text: {text:?}");
+        }
+        let texts: Vec<String> = kids
+            .iter()
+            .filter_map(|(_, x)| extract_text_compact(x).unwrap())
+            .collect();
+        assert_eq!(texts, vec!["Grouped A".to_string(), "Grouped B".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod preset_tests {
+    use super::mermaid_shape_from_prst;
+
+    #[test]
+    fn preset_map_covers_common_flowchart_shapes() {
+        assert_eq!(mermaid_shape_from_prst(Some("flowChartTerminator")), "stadium");
+        assert_eq!(mermaid_shape_from_prst(Some("flowChartDecision")), "diamond");
+        assert_eq!(mermaid_shape_from_prst(Some("flowChartDocument")), "document");
+        assert_eq!(mermaid_shape_from_prst(Some("flowChartDelay")), "stadium");
+        assert_eq!(mermaid_shape_from_prst(Some("flowChartManualOperation")), "trap-b");
+        assert_eq!(mermaid_shape_from_prst(Some("flowChartMagneticDisk")), "cyl");
+        assert_eq!(mermaid_shape_from_prst(Some("flowChartStoredData")), "das");
+        assert_eq!(mermaid_shape_from_prst(Some("flowChartPreparation")), "hex");
+        assert_eq!(mermaid_shape_from_prst(Some("flowChartOr")), "circle");
+        assert_eq!(mermaid_shape_from_prst(Some("roundRect")), "rounded");
+        assert_eq!(mermaid_shape_from_prst(Some("star5")), "rect"); // unknown → rect
+        assert_eq!(mermaid_shape_from_prst(None), "rect");
+    }
 }

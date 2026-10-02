@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow};
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
-use crate::document_ast::{Block, Cell, LinkKind, ListItem, SourceSpan};
+use crate::document_ast::{Block, Cell, InlineMark, LinkKind, ListItem, MarkKind, SourceSpan};
 
 use super::{
     ParsedImage, ParsedOfficeDocument, mime_from_filename, read_zip_file, read_zip_file_utf8,
@@ -288,6 +288,36 @@ fn write_end_tag(out: &mut Vec<u8>, name: &[u8]) {
     out.push(b'>');
 }
 
+/// Body-level trailing `w:sectPr` XML, when present (governs the final
+/// section's column layout).
+fn extract_body_sectpr(document_xml: &[u8]) -> Option<Vec<u8>> {
+    let doc = String::from_utf8_lossy(document_xml);
+    let start = doc.rfind("<w:sectPr")?;
+    let end = doc[start..].find("</w:sectPr>")? + start + "</w:sectPr>".len();
+    Some(doc[start..end].as_bytes().to_vec())
+}
+
+/// Column count from a sectPr XML fragment (w:cols w:num="N"); 1 when absent.
+fn sectpr_cols(xml: &[u8]) -> u32 {
+    let s = String::from_utf8_lossy(xml);
+    let cols_pos = match s.find("<w:cols") {
+        Some(p) => p,
+        None => return 1,
+    };
+    let tag_end = s[cols_pos..].find('>').map(|e| cols_pos + e).unwrap_or(s.len());
+    let tag = &s[cols_pos..tag_end];
+    if let Some(num_pos) = tag.find("w:num=\"") {
+        let v: String = tag[num_pos + 7..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if let Ok(n) = v.parse::<u32>() {
+            return n.max(1);
+        }
+    }
+    1
+}
+
 fn extract_body_children_xml(document_xml: &[u8]) -> Result<Vec<(String, Vec<u8>)>> {
     // Returns (kind, xml_bytes) where kind is "p" or "tbl".
     let mut out = Vec::new();
@@ -383,12 +413,34 @@ fn extract_body_children_xml(document_xml: &[u8]) -> Result<Vec<(String, Vec<u8>
 #[derive(Clone, Debug, Default)]
 struct ParagraphParsed {
     text: String,
+    marks: Vec<InlineMark>,
+    link_ranges: Vec<(usize, usize, String)>,
     heading_level: Option<u8>,
     list_ctx: Option<ListCtx>,
     links: Vec<(String, Option<String>)>,
     image_rel_ids: Vec<(String, Option<String>)>,
     chart_rel_ids: Vec<String>,
     drawings: Vec<Vec<u8>>,
+}
+
+/// Resolved inline marks for a parsed paragraph: run styling + hyperlinks.
+fn para_marks(
+    p: &ParagraphParsed,
+    rels: &HashMap<String, (String, String)>,
+) -> Vec<InlineMark> {
+    let mut marks = p.marks.clone();
+    for (s, e, rid) in &p.link_ranges {
+        if let Some((_ty, target)) = rels.get(rid) {
+            marks.push(InlineMark {
+                kind: MarkKind::Link {
+                    url: target.clone(),
+                },
+                start: *s,
+                end: *e,
+            });
+        }
+    }
+    crate::document_ast::merge_marks(marks)
 }
 
 fn parse_paragraph_xml(
@@ -408,6 +460,13 @@ fn parse_paragraph_xml(
     let mut cur_ilvl: Option<u8> = None;
 
     let mut in_hyperlink = false;
+    // Inline-run styling tracking (bold/italic/strike) + link ranges.
+    let mut in_rpr = false;
+    let mut run_bold = false;
+    let mut run_italic = false;
+    let mut run_strike = false;
+    let mut run_start_char = 0usize;
+    let mut link_start_char = 0usize;
     let mut cur_hyperlink_rid: Option<String> = None;
     let mut cur_hyperlink_text = String::new();
 
@@ -435,6 +494,25 @@ fn parse_paragraph_xml(
                 if ln.as_ref() == b"t" {
                     in_t = true;
                 }
+                if ln.as_ref() == b"r" {
+                    run_start_char = out.text.chars().count();
+                    run_bold = false;
+                    run_italic = false;
+                    run_strike = false;
+                }
+                if ln.as_ref() == b"rPr" {
+                    in_rpr = true;
+                }
+                if in_rpr && matches!(ln.as_ref(), b"b" | b"i" | b"strike") {
+                    let on = attr_val(&e, b"val")
+                        .map(|v| !matches!(v.as_str(), "false" | "0" | "none"))
+                        .unwrap_or(true);
+                    match ln.as_ref() {
+                        b"b" => run_bold = on,
+                        b"i" => run_italic = on,
+                        _ => run_strike = on,
+                    }
+                }
                 if ln.as_ref() == b"pStyle" {
                     cur_p_style = attr_val(&e, b"val");
                 }
@@ -447,6 +525,7 @@ fn parse_paragraph_xml(
                 }
                 if ln.as_ref() == b"hyperlink" {
                     in_hyperlink = true;
+                    link_start_char = out.text.chars().count();
                     cur_hyperlink_rid = attr_val(&e, b"id");
                     cur_hyperlink_text.clear();
                 }
@@ -456,6 +535,16 @@ fn parse_paragraph_xml(
 
                 if let Some((v, _d, _n)) = capturing_drawing.as_mut() {
                     write_empty_tag(v, &e);
+                }
+                if in_rpr && matches!(ln.as_ref(), b"b" | b"i" | b"strike") {
+                    let on = attr_val(&e, b"val")
+                        .map(|v| !matches!(v.as_str(), "false" | "0" | "none"))
+                        .unwrap_or(true);
+                    match ln.as_ref() {
+                        b"b" => run_bold = on,
+                        b"i" => run_italic = on,
+                        _ => run_strike = on,
+                    }
                 }
                 if ln.as_ref() == b"pStyle" {
                     cur_p_style = attr_val(&e, b"val");
@@ -532,10 +621,39 @@ fn parse_paragraph_xml(
 
                 if ln.as_ref() == b"t" {
                     in_t = false;
+                    let end_char = out.text.chars().count();
+                    if end_char > run_start_char
+                        && (run_bold || run_italic || run_strike)
+                    {
+                        let mut push_mark = |kind| {
+                            out.marks.push(InlineMark {
+                                kind,
+                                start: run_start_char,
+                                end: end_char,
+                            });
+                        };
+                        if run_bold {
+                            push_mark(MarkKind::Bold);
+                        }
+                        if run_italic {
+                            push_mark(MarkKind::Italic);
+                        }
+                        if run_strike {
+                            push_mark(MarkKind::Strikethrough);
+                        }
+                    }
+                    run_start_char = end_char;
+                }
+                if ln.as_ref() == b"rPr" {
+                    in_rpr = false;
                 }
                 if ln.as_ref() == b"hyperlink" {
                     in_hyperlink = false;
+                    let end_char = out.text.chars().count();
                     if let Some(rid) = cur_hyperlink_rid.take() {
+                        if end_char > link_start_char && !rid.is_empty() {
+                            out.link_ranges.push((link_start_char, end_char, rid.clone()));
+                        }
                         let display = cur_hyperlink_text.trim().to_string();
                         out.links.push((
                             rid,
@@ -577,6 +695,8 @@ fn parse_paragraph_xml(
 #[derive(Clone, Debug, Default)]
 struct TableParsed {
     rows: Vec<Vec<Cell>>,
+    /// Relative column widths from w:gridCol (twips); empty when absent.
+    widths: Vec<u32>,
 }
 
 fn parse_table_xml(tbl_xml: &[u8]) -> Result<TableParsed> {
@@ -619,6 +739,11 @@ fn parse_table_xml(tbl_xml: &[u8]) -> Result<TableParsed> {
             }
             Ok(Event::Empty(e)) => {
                 let ln = e.local_name();
+                if ln.as_ref() == b"gridCol" {
+                    if let Some(w) = attr_val(&e, b"w").and_then(|v| v.parse::<u32>().ok()) {
+                        out.widths.push(w);
+                    }
+                }
                 if in_tc {
                     if ln.as_ref() == b"gridSpan" {
                         if let Some(v) = attr_val(&e, b"val") {
@@ -1710,6 +1835,47 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
 
     let body_elems = extract_body_children_xml(&doc_xml)?;
 
+    // Section map: a paragraph carrying w:pPr/w:sectPr ends a section (the
+    // sectPr describes the section that ENDS there); the body-level
+    // w:sectPr governs the trailing section. cols >= 2 sections drive
+    // `::: columns` emission in the Morph renderer.
+    let body_sectpr_cols = extract_body_sectpr(&doc_xml)
+        .map(|x| sectpr_cols(&x))
+        .unwrap_or(1);
+    let mut break_cols: HashMap<usize, u32> = HashMap::new();
+    for (i, (kind, xml)) in body_elems.iter().enumerate() {
+        if kind == "p" {
+            let hay = String::from_utf8_lossy(xml);
+            if hay.contains("<w:sectPr") {
+                let cols = {
+                    let pos = match hay.find("<w:sectPr") {
+                        Some(p) => p,
+                        None => 0,
+                    };
+                    let frag = &hay[pos..];
+                    match frag.find("<w:cols") {
+                        Some(cp) => {
+                            let tag_end = frag[cp..].find('>').map(|e| cp + e).unwrap_or(frag.len());
+                            let tag = &frag[cp..tag_end];
+                            match tag.find("w:num=\"") {
+                                Some(np) => {
+                                    let digits: String = tag[np + 7..]
+                                        .chars()
+                                        .take_while(|c| c.is_ascii_digit())
+                                        .collect();
+                                    digits.parse::<u32>().unwrap_or(1).max(1)
+                                }
+                                None => 1,
+                            }
+                        }
+                        None => 1,
+                    }
+                };
+                break_cols.insert(i, cols);
+            }
+        }
+    }
+
     #[derive(Clone, Debug)]
     enum Elem {
         Para(ParagraphParsed),
@@ -1732,12 +1898,30 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
 
     let mut blocks: Vec<Block> = Vec::new();
     let mut next_block_index: usize = 0;
-
+    // Multi-column section tracking (see section map above).
+    let last_elem = elems.len().saturating_sub(1);
+    let mut column_sections: Vec<serde_json::Value> = Vec::new();
+    let mut section_start_block = 0usize;
+    let mut i = 0usize;
     let mut charts_meta: Vec<serde_json::Value> = Vec::new();
     let mut diagram_graphs_meta: Vec<serde_json::Value> = Vec::new();
 
-    let mut i = 0usize;
     while i < elems.len() {
+        if i == 0 || break_cols.contains_key(&(i - 1)) {
+            section_start_block = next_block_index;
+        }
+        let is_last = i == last_elem;
+        let mut section_end_cols: Option<u32> = None;
+        if let Some(cols) = break_cols.get(&i) {
+            section_end_cols = Some(*cols);
+        } else if is_last {
+            let last_break = break_cols.keys().copied().max();
+            if last_break.is_none_or(|b| b < i) && body_sectpr_cols >= 2 {
+                section_end_cols = Some(body_sectpr_cols);
+            }
+        }
+        let section_closing = section_end_cols;
+        let sec_start = section_start_block;
         match &elems[i] {
             Elem::Para(p) => {
                 // List grouping.
@@ -1754,11 +1938,19 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                             break;
                         }
                         if !pp.text.trim().is_empty() {
+                            let trimmed = pp.text.trim_start();
+                            let shift = pp.text.chars().count() - trimmed.chars().count();
+                            let len = trimmed.trim_end().chars().count();
                             items.push(ListItem {
                                 level: c.ilvl,
                                 text: pp.text.trim().to_string(),
+                                marks: crate::document_ast::shift_marks(
+                                    para_marks(pp, &rels),
+                                    shift,
+                                    len,
+                                ),
                                 source: SourceSpan::default(),
-                            });
+    });
                         }
                         j += 1;
                     }
@@ -1855,7 +2047,8 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                                 level: 3,
                                 text: chart.title.clone().unwrap_or_else(|| "Chart".to_string()),
                                 source: SourceSpan::default(),
-                            });
+                                marks: Vec::new(),
+    });
                             next_block_index += 1;
 
                             let chart_shape = if chart_type == "unknown" {
@@ -1900,7 +2093,8 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                                 block_index: next_block_index,
                                 text: note,
                                 source: SourceSpan::default(),
-                            });
+                                marks: Vec::new(),
+    });
                             next_block_index += 1;
 
                             if !chart.categories.is_empty() && !chart.series.is_empty() {
@@ -1945,6 +2139,7 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                                     block_index: next_block_index,
                                     rows,
                                     source: SourceSpan::default(),
+                                    widths: Vec::new(),
                                 });
                                 next_block_index += 1;
                             }
@@ -1963,13 +2158,15 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                                     level: 3,
                                     text: "Diagram".to_string(),
                                     source: SourceSpan::default(),
-                                });
+                                    marks: Vec::new(),
+    });
                                 next_block_index += 1;
                                 blocks.push(Block::Paragraph {
                                     block_index: next_block_index,
                                     text: mermaid,
                                     source: SourceSpan::default(),
-                                });
+                                    marks: Vec::new(),
+    });
                                 next_block_index += 1;
                                 diagram_graphs_meta.push(graph_json);
                             }
@@ -1987,16 +2184,18 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                             block_index: next_block_index,
                             level,
                             text: p.text.clone(),
+                            marks: para_marks(p, &rels),
                             source: SourceSpan::default(),
-                        });
+    });
                         next_block_index += 1;
                     }
                 } else if !p.text.trim().is_empty() {
                     blocks.push(Block::Paragraph {
                         block_index: next_block_index,
                         text: p.text.clone(),
+                        marks: para_marks(p, &rels),
                         source: SourceSpan::default(),
-                    });
+    });
                     next_block_index += 1;
                 }
 
@@ -2080,7 +2279,8 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                         level: 3,
                         text: chart.title.clone().unwrap_or_else(|| "Chart".to_string()),
                         source: SourceSpan::default(),
-                    });
+                        marks: Vec::new(),
+    });
                     next_block_index += 1;
 
                     let chart_shape = if chart_type == "unknown" {
@@ -2122,7 +2322,8 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                         block_index: next_block_index,
                         text: note,
                         source: SourceSpan::default(),
-                    });
+                        marks: Vec::new(),
+    });
                     next_block_index += 1;
 
                     if !chart.categories.is_empty() && !chart.series.is_empty() {
@@ -2164,6 +2365,7 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                             block_index: next_block_index,
                             rows,
                             source: SourceSpan::default(),
+                            widths: Vec::new(),
                         });
                         next_block_index += 1;
                     }
@@ -2182,13 +2384,15 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                             level: 3,
                             text: "Diagram".to_string(),
                             source: SourceSpan::default(),
-                        });
+                            marks: Vec::new(),
+    });
                         next_block_index += 1;
                         blocks.push(Block::Paragraph {
                             block_index: next_block_index,
                             text: mermaid,
                             source: SourceSpan::default(),
-                        });
+                            marks: Vec::new(),
+    });
                         next_block_index += 1;
                         diagram_graphs_meta.push(graph_json);
                     }
@@ -2200,11 +2404,24 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                 blocks.push(Block::Table {
                     block_index: next_block_index,
                     rows: t.rows.clone(),
+                    widths: t.widths.clone(),
                     source: SourceSpan::default(),
                 });
                 next_block_index += 1;
                 i += 1;
             }
+        }
+
+        // Close a multi-column section after its final elem.
+        if let Some(cols) = section_closing {
+            if cols >= 2 && next_block_index > sec_start {
+                column_sections.push(serde_json::json!({
+                    "cols": cols,
+                    "block_first": sec_start,
+                    "block_last": next_block_index.saturating_sub(1),
+                }));
+            }
+            section_start_block = next_block_index;
         }
     }
 
@@ -2217,8 +2434,11 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
             | Block::Table { block_index, .. }
             | Block::Image { block_index, .. }
             | Block::Link { block_index, .. } => *block_index = idx,
+            | Block::Note { block_index, .. } => *block_index = idx,
         }
     }
+
+    let column_sections_out = column_sections;
 
     Ok(ParsedOfficeDocument {
         blocks,
@@ -2228,6 +2448,7 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
             "title": extract_docx_title(bytes),
             "charts": charts_meta,
             "diagram_graphs": diagram_graphs_meta,
+            "multi_column_sections": column_sections_out,
         }),
     })
 }

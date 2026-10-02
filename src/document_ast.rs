@@ -23,6 +23,8 @@ pub struct SourceSpan {
 pub struct ListItem {
     pub level: u8,
     pub text: String,
+    #[serde(default)]
+    pub marks: Vec<InlineMark>,
     pub source: SourceSpan,
 }
 
@@ -41,17 +43,41 @@ pub enum LinkKind {
     Unknown,
 }
 
+/// Inline styling kinds carried as data (MorphEditor BlockModel parity):
+/// positions are char offsets into the CLEAN text (no markers).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MarkKind {
+    Bold,
+    Italic,
+    Code,
+    Strikethrough,
+    Link { url: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InlineMark {
+    pub kind: MarkKind,
+    /// Inclusive char offset into the block's clean text.
+    pub start: usize,
+    /// Exclusive char offset into the block's clean text.
+    pub end: usize,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Block {
     Heading {
         block_index: usize,
         level: u8,
         text: String,
+        #[serde(default)]
+        marks: Vec<InlineMark>,
         source: SourceSpan,
     },
     Paragraph {
         block_index: usize,
         text: String,
+        #[serde(default)]
+        marks: Vec<InlineMark>,
         source: SourceSpan,
     },
     List {
@@ -63,6 +89,10 @@ pub enum Block {
     Table {
         block_index: usize,
         rows: Vec<Vec<Cell>>,
+        /// Relative column widths (source units) when the format carries
+        /// them (e.g. DOCX gridCol); drives the Morph `::: table` wrapper.
+        #[serde(default)]
+        widths: Vec<u32>,
         source: SourceSpan,
     },
     Image {
@@ -80,6 +110,13 @@ pub enum Block {
         kind: LinkKind,
         source: SourceSpan,
     },
+    Note {
+        block_index: usize,
+        text: String,
+        #[serde(default)]
+        marks: Vec<InlineMark>,
+        source: SourceSpan,
+    },
 }
 
 impl Block {
@@ -91,6 +128,7 @@ impl Block {
             | Block::Table { block_index, .. }
             | Block::Image { block_index, .. }
             | Block::Link { block_index, .. } => *block_index,
+            | Block::Note { block_index, .. } => *block_index,
         }
     }
 
@@ -102,6 +140,7 @@ impl Block {
             | Block::Table { source, .. }
             | Block::Image { source, .. }
             | Block::Link { source, .. } => *source,
+            | Block::Note { source, .. } => *source,
         }
     }
 
@@ -112,7 +151,8 @@ impl Block {
             | Block::List { source, .. }
             | Block::Table { source, .. }
             | Block::Image { source, .. }
-            | Block::Link { source, .. } => {
+            | Block::Link { source, .. }
+            | Block::Note { source, .. } => {
                 *source = span;
             }
         }
@@ -138,8 +178,44 @@ impl Block {
             Block::Link { url, text, .. } => {
                 url.chars().count() + text.as_deref().unwrap_or("").chars().count()
             }
+            Block::Note { text, .. } => text.chars().count(),
         }
     }
+}
+
+/// Merge adjacent/overlapping same-kind marks and drop empties.
+/// Keeps MorphEditor mark semantics: one mark per contiguous styled range.
+pub fn merge_marks(mut marks: Vec<InlineMark>) -> Vec<InlineMark> {
+    marks.sort_by_key(|m| (m.start, m.end));
+    let mut out: Vec<InlineMark> = Vec::new();
+    for m in marks {
+        if m.start >= m.end {
+            continue;
+        }
+        if let Some(last) = out.last_mut() {
+            if last.kind == m.kind && m.start <= last.end {
+                last.end = last.end.max(m.end);
+                continue;
+            }
+        }
+        out.push(m);
+    }
+    out
+}
+
+/// Shift marks after a `trim_start` of `shift` chars; clamp to `len` chars.
+pub fn shift_marks(marks: Vec<InlineMark>, shift: usize, len: usize) -> Vec<InlineMark> {
+    marks
+        .into_iter()
+        .filter_map(|mut m| {
+            if m.end <= shift {
+                return None;
+            }
+            m.start = m.start.saturating_sub(shift).min(len);
+            m.end = m.end.saturating_sub(shift).min(len);
+            (m.start < m.end).then_some(m)
+        })
+        .collect()
 }
 
 fn classify_link_kind(url: &str) -> LinkKind {
@@ -175,8 +251,7 @@ pub fn render_blocks_to_extracted_text(blocks: &mut [Block]) -> String {
                 level,
                 text,
                 source,
-                ..
-            } => {
+                .. } => {
                 let lvl = (*level).max(1).min(6) as usize;
                 out.push_str(&"#".repeat(lvl));
                 out.push(' ');
@@ -303,6 +378,18 @@ pub fn render_blocks_to_extracted_text(blocks: &mut [Block]) -> String {
                 } else {
                     out.push_str(&format!("[{}]({})", t.trim(), url.trim()));
                 }
+                out.push_str("\n\n");
+                *source = SourceSpan {
+                    kind: SpanKind::ExtractedTextByte,
+                    start,
+                    end: out.len(),
+                };
+            }
+            Block::Note { text, source, .. } => {
+                // Extracted-text view keeps the readable heading form;
+                // the Morph renderer emits the `::: note` fence instead.
+                out.push_str("### Speaker notes\n\n");
+                out.push_str(text.trim());
                 out.push_str("\n\n");
                 *source = SourceSpan {
                     kind: SpanKind::ExtractedTextByte,
