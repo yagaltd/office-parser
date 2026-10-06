@@ -2107,6 +2107,101 @@ fn classify_pdf_text_quality(blocks: &[Block]) -> PdfTextQuality {
     }
 }
 
+/// Rasterize a PDF's pages to PNG bytes via poppler's `pdftoppm` (system dep).
+///
+/// OCR needs the rendered *page*, not the PDF's embedded images:
+/// [`extract_xobject_image`] pulls logos/photos out of the file, while
+/// text + layout as pixels only exist once the page is rasterized. ~100 dpi
+/// keeps OCR content ≤ ~0.5 Mpx per page — the PaddleOCR-VL reading window
+/// (see typellama `docs/BACKENDS.md`).
+///
+/// OCR megapixel budget: PaddleOCR-VL's reading window (empirical: ≤ ~0.4 MP
+/// content; denser pages yield empty grids — typellama docs/BACKENDS.md).
+const OCR_MEGAPIXEL_BUDGET: f64 = 0.4;
+
+/// sqrt back-off: pixels scale with dpi², so dpi scales with √(budget/mp).
+fn clamp_dpi_to_budget(page_pts_w: f64, page_pts_h: f64, dpi: u32) -> u32 {
+    let scale = dpi as f64 / 72.0;
+    let mp = (page_pts_w * scale) * (page_pts_h * scale) / 1_000_000.0;
+    if mp <= OCR_MEGAPIXEL_BUDGET {
+        return dpi;
+    }
+    let factor = (OCR_MEGAPIXEL_BUDGET / mp).sqrt();
+    ((dpi as f64 * factor).floor() as u32).max(72)
+}
+
+/// Page size in PDF points via `pdfinfo` (same poppler-utils install as
+/// pdftoppm). None if the probe is unavailable or unparseable.
+fn page_size_pts(bytes: &[u8]) -> Option<(f64, f64)> {
+    use std::process::Command;
+    let dir = std::env::temp_dir().join(format!("office-parser-probe-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).ok()?;
+    let src = dir.join("doc.pdf");
+    std::fs::write(&src, bytes).ok()?;
+    let out = Command::new("pdfinfo")
+        .arg("-f").arg("1").arg("-l").arg("1")
+        .arg(&src)
+        .output()
+        .ok()?;
+    let _ = std::fs::remove_dir_all(&dir);
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        if let Some(size) = line.strip_prefix("Page") {
+            if let Some(rest) = size.trim().strip_prefix("size:") {
+                let mut nums = rest.split_whitespace().filter_map(|t| t.parse::<f64>().ok());
+                if let (Some(w), Some(h)) = (nums.next(), nums.next()) {
+                    return Some((w, h));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Errors if `pdftoppm` (poppler-utils) is not on PATH.
+pub fn render_pages_png(bytes: &[u8], dpi: u32) -> Result<Vec<Vec<u8>>> {
+    use std::process::Command;
+    if dpi == 0 || dpi > 600 {
+        anyhow::bail!("dpi must be 1..=600, got {dpi}");
+    }
+    // megapixel clamp (dev.to/serhii_kalyna_730b636889c pattern, budget ours):
+    // probe the page size in points, back the dpi off by sqrt(budget/mp) —
+    // pixels scale with dpi² — so dense pages land inside the OCR window
+    // instead of yielding empty grids (PaddleOCR-VL, 2026-10-06).
+    let dpi = match page_size_pts(bytes) {
+        Some((w, h)) => clamp_dpi_to_budget(w, h, dpi),
+        None => dpi, // probe failed: caller's dpi stands, downstream errors if fatal
+    };
+    let dir = std::env::temp_dir().join(format!("office-parser-render-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let result = (|| -> Result<Vec<Vec<u8>>> {
+        let src = dir.join("doc.pdf");
+        std::fs::write(&src, bytes)?;
+        let stem = dir.join("page");
+        let status = Command::new("pdftoppm")
+            .args(["-png", "-r", &dpi.to_string()])
+            .arg(&src)
+            .arg(&stem)
+            .status()
+            .map_err(|e| anyhow::anyhow!("pdftoppm not found (install poppler-utils): {e}"))?;
+        if !status.success() {
+            anyhow::bail!("pdftoppm failed: {status}");
+        }
+        let mut pages: Vec<(String, Vec<u8>)> = std::fs::read_dir(&dir)?
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| {
+                let name = entry.file_name().into_string().ok()?;
+                (entry.path().extension()?.to_str()? == "png" && name.starts_with("page-"))
+                    .then(|| std::fs::read(entry.path()).ok().map(|b| (name, b)))?
+            })
+            .collect();
+        pages.sort_by(|a, b| a.0.cmp(&b.0)); // pdftoppm zero-pads to the page-count width
+        Ok(pages.into_iter().map(|(_, bytes)| bytes).collect())
+    })();
+    let _ = std::fs::remove_dir_all(&dir);
+    result
+}
+
 pub fn parse(bytes: &[u8]) -> crate::Result<crate::Document> {
     let parsed =
         parse_pdf_full(bytes).map_err(|e| crate::Error::from_parse(crate::Format::Pdf, e))?;
@@ -2126,6 +2221,29 @@ mod tests {
     use super::cleanup_pdf_text;
 
     #[test]
+    #[test]
+    fn clamp_dpi_backs_off_by_sqrt() {
+        // A4 (612x792 pts): @300 dpi = 8.4 MP → factor 0.218 → 65 → floor 72
+        assert_eq!(super::clamp_dpi_to_budget(612.0, 792.0, 300), 72);
+        // @200 dpi = 3.74 MP → factor 0.327 → 65 → floor 72
+        assert_eq!(super::clamp_dpi_to_budget(612.0, 792.0, 200), 72);
+        // 200x200 pts @300 dpi = 0.69 MP → over 0.4 budget → factor 0.759 → 227
+        assert_eq!(super::clamp_dpi_to_budget(200.0, 200.0, 300), 227);
+        // tiny page under budget: unchanged
+        assert_eq!(super::clamp_dpi_to_budget(100.0, 100.0, 300), 300);
+    }
+
+    #[test]
+    fn render_pages_png_rasterizes_via_pdftoppm() {
+        // minimal one-page PDF; poppler repairs the placeholder xref
+        let pdf = b"%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj\ntrailer << /Root 1 0 R /Size 4 >>\n%%EOF".to_vec();
+        let pages = super::render_pages_png(&pdf, 100).expect("renders");
+        assert!(!pages.is_empty());
+        for page in &pages {
+            assert!(page.starts_with(b"\x89PNG"), "expected PNG magic");
+        }
+    }
+
     fn pdf_cleanup_dehyphenates_and_splits_glued_year_citations() {
         let s = "hydro-\n gen 203070 202312 20250131";
         let out = cleanup_pdf_text(s);
