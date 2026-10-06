@@ -2115,6 +2115,119 @@ fn classify_pdf_text_quality(blocks: &[Block]) -> PdfTextQuality {
 /// keeps OCR content ≤ ~0.5 Mpx per page — the PaddleOCR-VL reading window
 /// (see typellama `docs/BACKENDS.md`).
 ///
+fn pdftoppm_available() -> bool {
+    std::process::Command::new("pdftoppm")
+        .arg("-v")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Where a bundled Pdfium dynamic library would live (env PDFIUM_PATH, else
+/// ~/.cache/office-parser/pdfium/ — see [`install_pdfium`]).
+pub fn pdfium_lib_path() -> Option<std::path::PathBuf> {
+    if let Ok(p) = std::env::var("PDFIUM_PATH") {
+        let p = std::path::PathBuf::from(p);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    let cache = std::env::var("HOME")
+        .ok()
+        .map(|h| std::path::PathBuf::from(h).join(".cache/office-parser/pdfium/libpdfium.so"))?;
+    cache.exists().then_some(cache)
+}
+
+/// Download the Pdfium dynamic library for this platform into
+/// `~/.cache/office-parser/pdfium/` (bblanchon/pdfium-binaries latest release;
+/// Linux/macOS via curl+tar — same system-tool policy as pdftoppm; on Windows
+/// download manually from that releases page). Requires the `render-pdfium`
+/// feature to take effect at render time.
+pub fn install_pdfium() -> Result<std::path::PathBuf> {
+    use std::process::Command;
+    let (asset, lib) = if cfg!(target_os = "macos") {
+        ("pdfium-mac-arm64.tgz", "lib/libpdfium.dylib")
+    } else if cfg!(target_os = "linux") {
+        ("pdfium-linux-x64.tgz", "lib/libpdfium.so")
+    } else {
+        anyhow::bail!("automatic Pdfium install supports Linux/macOS; download manually from https://github.com/bblanchon/pdfium-binaries/releases");
+    };
+    let dir = std::env::temp_dir().join(format!("office-parser-pdfium-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let result = (|| -> Result<std::path::PathBuf> {
+        let tgz = dir.join(asset);
+        let url = format!(
+            "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/{asset}"
+        );
+        let status = Command::new("curl")
+            .args(["-sL", "--fail", "-o"])
+            .arg(&tgz)
+            .arg(&url)
+            .status()
+            .map_err(|e| anyhow::anyhow!("curl: {e}"))?;
+        anyhow::ensure!(status.success(), "pdfium download failed: {status}");
+        let status = Command::new("tar")
+            .args(["-xzf"])
+            .arg(&tgz)
+            .arg("-C")
+            .arg(&dir)
+            .status()
+            .map_err(|e| anyhow::anyhow!("tar: {e}"))?;
+        anyhow::ensure!(status.success(), "pdfium extract failed");
+        let home = std::env::var("HOME").map_err(|_| anyhow::anyhow!("HOME not set"))?;
+        let dest_dir = std::path::PathBuf::from(home).join(".cache/office-parser/pdfium");
+        std::fs::create_dir_all(&dest_dir)?;
+        let lib_src = dir.join(lib);
+        anyhow::ensure!(lib_src.exists(), "pdfium archive missing {lib}");
+        let dest = dest_dir.join(lib.rsplit('/').next().unwrap());
+        std::fs::copy(&lib, &dest)?;
+        Ok(dest)
+    })();
+    let _ = std::fs::remove_dir_all(&dir);
+    result
+}
+
+#[cfg(feature = "render-pdfium")]
+fn render_pages_png_pdfium(bytes: &[u8]) -> Result<Vec<Vec<u8>>> {
+    use pdfium_render::prelude::*;
+    let dir = std::env::temp_dir().join(format!("office-parser-pdfium-doc-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let result = (|| -> Result<Vec<Vec<u8>>> {
+        let src = dir.join("doc.pdf");
+        std::fs::write(&src, bytes)?;
+        // bind: bundled cache lib → env PDFIUM_PATH → system library
+        let pdfium = match pdfium_lib_path() {
+            Some(lib) => Pdfium::new(
+                Pdfium::bind_to_library(lib)
+                    .or_else(|_| Pdfium::bind_to_system_library())
+                    .map_err(|e| anyhow::anyhow!("pdfium bind: {e:?}"))?,
+            ),
+            None => Pdfium::default(),
+        };
+        let document = pdfium
+            .load_pdf_from_file(&src, None)
+            .map_err(|e| anyhow::anyhow!("pdfium load: {e:?}"))?;
+        // the megapixel clamp lives in the render config: longest side ≤ ~750
+        // keeps any page aspect inside the ~0.4 MP OCR window
+        let config = PdfRenderConfig::new().set_target_width(530).set_maximum_height(750);
+        let mut pages = Vec::new();
+        for (index, page) in document.pages().iter().enumerate() {
+            let image = page
+                .render_with_config(&config)?
+                .as_image()?
+                .into_rgb8();
+            let mut png = std::io::Cursor::new(Vec::new());
+            image
+                .write_to(&mut png, ::image::ImageFormat::Png)
+                .map_err(|e| anyhow::anyhow!("png encode page {index}: {e}"))?;
+            pages.push(png.into_inner());
+        }
+        Ok(pages)
+    })();
+    let _ = std::fs::remove_dir_all(&dir);
+    result
+}
+
 /// OCR megapixel budget: PaddleOCR-VL's reading window (empirical: ≤ ~0.4 MP
 /// content; denser pages yield empty grids — typellama docs/BACKENDS.md).
 const OCR_MEGAPIXEL_BUDGET: f64 = 0.4;
@@ -2163,6 +2276,20 @@ pub fn render_pages_png(bytes: &[u8], dpi: u32) -> Result<Vec<Vec<u8>>> {
     use std::process::Command;
     if dpi == 0 || dpi > 600 {
         anyhow::bail!("dpi must be 1..=600, got {dpi}");
+    }
+    // backend selection: poppler (pdftoppm) first, then the pdfium library
+    // (feature `render-pdfium`), then an actionable error naming every fix.
+    #[cfg(feature = "render-pdfium")]
+    if pdfium_lib_path().is_some() && !pdftoppm_available() {
+        return render_pages_png_pdfium(bytes);
+    }
+    if !pdftoppm_available() {
+        anyhow::bail!(
+            "no PDF renderer available. Install one of:\n  \
+             • poppler-utils   (apt install poppler-utils / brew install poppler)\n  \
+             • pdfium library  (office_parser::formats::pdf::install_pdfium()? — auto-download, \
+               then build with --features render-pdfium)"
+        );
     }
     // megapixel clamp (dev.to/serhii_kalyna_730b636889c pattern, budget ours):
     // probe the page size in points, back the dpi off by sqrt(budget/mp) —

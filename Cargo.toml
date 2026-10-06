@@ -57,6 +57,7 @@ mmap = ["dep:zip", "dep:quick-xml"]
 
 # PDF
 pdf = ["dep:lopdf"]
+render-pdfium = ["dep:pdfium-render", "dep:image"]
 
 # RTF
 rtf = []
@@ -80,3 +81,5 @@ zip = { version = "0.6", default-features = false, features = ["deflate"], optio
 quick-xml = { version = "0.39", optional = true }
 
 lopdf = { version = "0.35", optional = true }
+pdfium-render = { version = "0.9", optional = true }
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
