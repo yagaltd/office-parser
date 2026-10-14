@@ -228,7 +228,7 @@ fn run(args: Args) -> Result<()> {
             for (id, rel) in &id_to_relpath {
                 md = md.replace(&format!("office-image:{id}"), rel);
             }
-            let mut md = format!(
+            let md = format!(
                 "{}{}",
                 okf_frontmatter(&doc, args.slide_transition, args.source.as_deref(), None),
                 md
