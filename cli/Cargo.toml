@@ -20,6 +20,8 @@ office-parser = { version = "0.2.0", path = "..", features = ["ocr-indra"] }
 [features]
 # In-process Indra engine (Mode B); without it --ocr uses the subprocess engine.
 ocr-indra-native = ["office-parser/ocr-indra-native"]
+# pdfium rendering for the OCR path (preferred over pdftoppm when installed)
+render-pdfium = ["office-parser/render-pdfium"]
 
 [dev-dependencies]
 zip = { version = "0.6", default-features = false, features = ["deflate"] }

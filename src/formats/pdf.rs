@@ -2188,28 +2188,52 @@ pub fn install_pdfium() -> Result<std::path::PathBuf> {
 }
 
 #[cfg(feature = "render-pdfium")]
-fn render_pages_png_pdfium(bytes: &[u8]) -> Result<Vec<Vec<u8>>> {
+/// pdfium allows ONE library init per process (its bindings live in a global
+/// OnceLock inside pdfium-render), so the handle is cached and shared.
+#[cfg(feature = "render-pdfium")]
+fn pdfium_handle() -> Option<&'static std::sync::Mutex<pdfium_render::prelude::Pdfium>> {
     use pdfium_render::prelude::*;
-    let dir = std::env::temp_dir().join(format!("office-parser-pdfium-doc-{}", std::process::id()));
+    static PDFIUM: std::sync::OnceLock<Option<std::sync::Mutex<Pdfium>>> =
+        std::sync::OnceLock::new();
+    PDFIUM
+        .get_or_init(|| {
+            let bindings = match pdfium_lib_path() {
+                Some(lib) => Pdfium::bind_to_library(lib)
+                    .or_else(|_| Pdfium::bind_to_system_library())
+                    .ok()?,
+                None => Pdfium::bind_to_system_library().ok()?,
+            };
+            Some(std::sync::Mutex::new(Pdfium::new(bindings)))
+        })
+        .as_ref()
+}
+
+fn render_pages_png_pdfium(bytes: &[u8], dpi: u32, clamp_budget: bool) -> Result<Vec<Vec<u8>>> {
+    use pdfium_render::prelude::*;
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "office-parser-pdfium-doc-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     std::fs::create_dir_all(&dir)?;
     let result = (|| -> Result<Vec<Vec<u8>>> {
         let src = dir.join("doc.pdf");
         std::fs::write(&src, bytes)?;
-        // bind: bundled cache lib → env PDFIUM_PATH → system library
-        let pdfium = match pdfium_lib_path() {
-            Some(lib) => Pdfium::new(
-                Pdfium::bind_to_library(lib)
-                    .or_else(|_| Pdfium::bind_to_system_library())
-                    .map_err(|e| anyhow::anyhow!("pdfium bind: {e:?}"))?,
-            ),
-            None => Pdfium::default(),
+        let Some(pdfium) = pdfium_handle() else {
+            anyhow::bail!("pdfium bindings unavailable");
         };
+        let pdfium = pdfium.lock().map_err(|_| anyhow::anyhow!("pdfium mutex poisoned"))?;
         let document = pdfium
             .load_pdf_from_file(&src, None)
             .map_err(|e| anyhow::anyhow!("pdfium load: {e:?}"))?;
-        // the megapixel clamp lives in the render config: longest side ≤ ~750
-        // keeps any page aspect inside the ~0.4 MP OCR window
-        let config = PdfRenderConfig::new().set_target_width(530).set_maximum_height(750);
+        // clamped: the legacy ~0.4 MP OCR window (longest side ≤ ~750).
+        // unclamped: true dpi rendering (Indra resizes to 1024 itself).
+        let config = if clamp_budget {
+            PdfRenderConfig::new().set_target_width(530).set_maximum_height(750)
+        } else {
+            PdfRenderConfig::new().scale_page_by_factor(dpi as f32 / 72.0)
+        };
         let mut pages = Vec::new();
         for (index, page) in document.pages().iter().enumerate() {
             let image = page
@@ -2285,11 +2309,15 @@ pub fn render_pages_png_opts(bytes: &[u8], dpi: u32, clamp_budget: bool) -> Resu
     if dpi == 0 || dpi > 600 {
         anyhow::bail!("dpi must be 1..=600, got {dpi}");
     }
-    // backend selection: poppler (pdftoppm) first, then the pdfium library
-    // (feature `render-pdfium`), then an actionable error naming every fix.
+    // backend selection: the pdfium library first when installed (engine-
+    // faithful pixels — Indra's own pipeline renders via pdfium), then
+    // poppler (pdftoppm), then an actionable error naming every fix.
     #[cfg(feature = "render-pdfium")]
-    if pdfium_lib_path().is_some() && !pdftoppm_available() {
-        return render_pages_png_pdfium(bytes);
+    if pdfium_lib_path().is_some() {
+        if let Ok(pages) = render_pages_png_pdfium(bytes, dpi, clamp_budget) {
+            return Ok(pages);
+        }
+        // pdfium unavailable/failed: fall through to poppler
     }
     if !pdftoppm_available() {
         anyhow::bail!(

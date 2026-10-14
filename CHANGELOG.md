@@ -1,5 +1,22 @@
 ## Unreleased
 
+### PDF OCR — pdfium rendering backend
+
+- The pdfium library (auto-installable via
+  `office_parser::formats::pdf::install_pdfium()`, cached at
+  `~/.cache/office-parser/pdfium/`) is now the preferred page renderer
+  for the OCR path when installed, with poppler (pdftoppm) as
+  fallback — pdfium's rasterization matches Indra's own pipeline
+  (pypdfium2 at dpi/72).
+- The pdfium path renders at true dpi (`scale_page_by_factor`), no
+  legacy window clamp; a process-global `Mutex<Pdfium>` handle respects
+  pdfium-render's single-init-per-process rule, and the scratch dir
+  carries a sequence number (same race fix as the other renderers).
+- CLI: `render-pdfium` passthrough feature; a failed pdfium render
+  falls back to pdftoppm silently.
+- Note: `install_pdfium` currently surfaces a bare io error when the
+  download fails mid-way; investigate on next touch.
+
 ### PDF OCR — table reconstruction + routing controls
 
 - Table-class OCR blocks are now rebuilt as real `Table` blocks: the
