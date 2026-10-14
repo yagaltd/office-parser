@@ -112,16 +112,16 @@ and `tests/docx_marks.rs`.
 
 - **PDF page images**: by default PDFs are parsed for text (lopdf) and
   embedded image objects; scanned/image-only **pages** are flagged via
-  `pdf_text_quality` (and with `--ocr` recovered per page — mixed
-  documents keep text-layer pages and OCR the rest). With the `ocr-indra` feature + `--ocr`,
-  flagged documents are instead recovered through the
-  [Indra OCR](https://huggingface.co/datalab-to/indra-ocr) engine
-  running in-process over ONNX Runtime (`ocr-indra-native` feature,
-  models from `INDRA_OCR_MODEL_DIR` or the HF cache — Rust + pdfium
-  only, no Python). Pages are rasterized,
-  OCR'd, and layout-mapped (headings/paragraphs/lists; page furniture
-  dropped); low-confidence pages are reported in
-  `metadata.extra["ocr"]["low_confidence_pages"]` for vision-LLM
+  `pdf_text_quality` (and with `--ocr` recovered per page: pages that
+  fail the text-layer trust checks — invisible OCR layers over scans,
+  broken font maps — or fall under the char threshold are routed to
+  [Indra OCR](https://huggingface.co/datalab-to/indra-ocr), running
+  **in-process** over ONNX Runtime (feature `ocr-indra-native`, models
+  from `INDRA_OCR_MODEL_DIR` or the HF cache — Rust + pdfium only, no
+  Python). Pages are rendered, orientation-corrected, deskewed,
+  OCR'd and layout-mapped (headings/paragraphs/lists/tables; page
+  furniture dropped); trust verdicts, provenance and low-confidence
+  pages are reported in `metadata.extra["ocr"]` for vision-LLM
   fallback. Handwriting and complex tables exceed Indra's envelope —
   route them to a stronger model using that signal. Indra's weights are
   OpenRAIL-M licensed (free < $20M revenue/funding; not usable

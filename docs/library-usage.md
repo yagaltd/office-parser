@@ -73,3 +73,20 @@ The main value of `office-parser` is preserving enough structure for downstream 
 - tables stay tables instead of being flattened into noisy prose
 - sheets/slides/pages remain recoverable through metadata and structure
 - charts and diagrams surface semantic content when possible
+
+## PDF OCR + per-page split (feature `ocr-indra-native`)
+
+```rust
+use office_parser::pdf_ocr::PdfOcrOptions;
+
+// parse with OCR routing for image-like pages
+let doc = office_parser::pdf_ocr::parse_auto(&bytes, &PdfOcrOptions::default())?;
+
+// 1 page = 1 document
+let (combined, pages) =
+    office_parser::pdf_ocr::parse_auto_split(&bytes, &opts, /*ocr*/ true, /*split*/ true)?;
+```
+
+`pages` is `Vec<(u32, Document)>` with the page number in
+`metadata.extra["page"]`. Provenance (engine, trust verdicts,
+`low_confidence_pages`) lands in `metadata.extra["ocr"]`.
