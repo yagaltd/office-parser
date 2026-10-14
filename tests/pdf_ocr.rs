@@ -179,3 +179,28 @@ fn native_table_reconstruction() {
         "Qty digits missing: {rows:?}"
     );
 }
+
+/// Session B: orient.onnx turns a sideways scan upright before OCR.
+#[test]
+fn native_orientation_recovers_rotated_scan() {
+    let Ok(mut engine) = office_parser::IndraNative::load() else {
+        eprintln!("skipping: Indra models unavailable");
+        return;
+    };
+    let bytes = std::fs::read("tests/fixtures/pdf_rot90_scan.pdf").expect("fixture");
+    let doc = engine.parse_document(&bytes, 0.60).expect("rot90 ocr");
+    use office_parser::document_ast::Block;
+    let joined = doc
+        .blocks
+        .iter()
+        .map(|b| match b {
+            Block::Heading { text, .. } | Block::Paragraph { text, .. } => text.clone(),
+            _ => String::new(),
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        joined.contains("Quarterly Field Report"),
+        "rotated scan not recovered: {joined:?}"
+    );
+}

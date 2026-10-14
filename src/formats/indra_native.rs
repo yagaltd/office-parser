@@ -36,6 +36,13 @@ const MIN_CONF: f32 = 0.5;
 const ADAPTIVE_MIN_H: f32 = 9.0;
 const ADAPTIVE_TARGET_H: f32 = 12.0;
 const ADAPTIVE_MAX_SIDE: f32 = 2048.0;
+/// orient.onnx input: page thumbnail, long side, padded square (pipeline.py).
+const ORIENT_SIDE: usize = 768;
+/// A turn is applied only above this probability (0.95: 2 of 1000 upright
+/// pages turned — wrong turns lose the page).
+const ORIENT_MIN: f32 = 0.95;
+/// Smaller tilts are left alone (degrees).
+const DESKEW_MIN: f32 = 0.3;
 /// Cut a table line into cells at a wider gap (label rule in tables).
 /// (The text-line `SPLIT_GAP = 3.0` split of pipeline.py assemble is not
 /// ported yet — merged-column text lines stay whole.)
@@ -944,6 +951,95 @@ fn build_table_grid(cells: &[(f32, f32, f32, f32, String)]) -> Option<Vec<Vec<St
     (!out.is_empty()).then_some(out)
 }
 
+// --- orientation + deskew (pipeline.py upright / estimate_skew) ----------
+
+/// orient_input: [side, side] ink map (1 = ink), long side scaled, padded.
+fn orient_input(gray: &GrayPage, side: usize) -> Vec<f32> {
+    let scale = side as f32 / gray.w.max(gray.h) as f32;
+    let nw = ((gray.w as f32 * scale).round() as usize).max(1);
+    let nh = ((gray.h as f32 * scale).round() as usize).max(1);
+    let small = gray.resize(nw.min(side), nh.min(side));
+    let mut out = vec![0.0f32; side * side];
+    for r in 0..small.h {
+        for c in 0..small.w {
+            out[r * side + c] = 1.0 - small.data[r * small.w + c] as f32 / 255.0;
+        }
+    }
+    out
+}
+
+/// Nearest-neighbour rotation by `degrees_ccw` about the centre, white fill.
+fn rotate_gray(gray: &GrayPage, degrees_ccw: f32) -> GrayPage {
+    let a = degrees_ccw.to_radians();
+    let (sin, cos) = (a.sin(), a.cos());
+    let (w, h) = (gray.w as f32, gray.h as f32);
+    let nw = (w * cos.abs() + h * sin.abs()).ceil() as usize;
+    let nh = (w * sin.abs() + h * cos.abs()).ceil() as usize;
+    let (cx, cy) = (w / 2.0, h / 2.0);
+    let (ncx, ncy) = (nw as f32 / 2.0, nh as f32 / 2.0);
+    let mut data = vec![255u8; nw * nh];
+    for r in 0..nh {
+        for c in 0..nw {
+            let dx = c as f32 + 0.5 - ncx;
+            let dy = r as f32 + 0.5 - ncy;
+            // inverse of the CCW rotation: rotate the dest offset by -a
+            let sx = cx + dx * cos + dy * sin;
+            let sy = cy - dx * sin + dy * cos;
+            if sx >= 0.0 && sy >= 0.0 && (sx as usize) < gray.w && (sy as usize) < gray.h {
+                data[r * nw + c] = gray.data[sy as usize * gray.w + sx as usize];
+            }
+        }
+    }
+    GrayPage { w: nw, h: nh, data }
+}
+
+/// estimate_skew: degrees CCW that straighten the text rows — the angle whose
+/// horizontal ink profile changes most sharply row to row (0.5° then 0.1°).
+fn estimate_skew(gray: &GrayPage) -> f32 {
+    let side = 800.0f32;
+    let scale = side / gray.w.max(gray.h) as f32;
+    let small = gray.resize(
+        ((gray.w as f32 * scale).round() as usize).max(1),
+        ((gray.h as f32 * scale).round() as usize).max(1),
+    );
+    let mut ink = vec![0.0f32; small.w * small.h];
+    let mut mean = 0.0f32;
+    for (i, v) in small.data.iter().enumerate() {
+        ink[i] = (255.0 - *v as f32) / 255.0;
+        mean += ink[i];
+    }
+    if mean / (ink.len() as f32) < 0.003 {
+        return 0.0; // a blank page has no rows to straighten
+    }
+    let sharpness = |a: f32| -> f32 {
+        let r = rotate_gray(&small, a);
+        let mut rows = vec![0.0f32; r.h];
+        for y in 0..r.h {
+            rows[y] = r.data[y * r.w..(y + 1) * r.w].iter().map(|&v| v as f32).sum();
+        }
+        rows.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum()
+    };
+    let (mut best, mut best_v) = (0.0f32, sharpness(0.0));
+    let mut probe = |a: f32, best: &mut f32, best_v: &mut f32, sharp: &dyn Fn(f32) -> f32| {
+        let v = sharp(a);
+        if v > *best_v {
+            *best = a;
+            *best_v = v;
+        }
+    };
+    let mut a = -5.0f32;
+    while a <= 5.0 {
+        probe(a, &mut best, &mut best_v, &sharpness);
+        a += 0.5;
+    }
+    let mut a = best - 0.5;
+    while a <= best + 0.5 {
+        probe(a, &mut best, &mut best_v, &sharpness);
+        a += 0.1;
+    }
+    best
+}
+
 // --- engine --------------------------------------------------------------
 
 pub struct IndraNative {
@@ -953,6 +1049,7 @@ pub struct IndraNative {
     vocab: Vec<String>,
     det_long_side: i64,
     rec_height: usize,
+    orient: Option<ort::session::Session>,
     min_page_confidence: f64,
     last_page_confidence: Option<f64>,
 }
@@ -1018,6 +1115,7 @@ impl IndraNative {
             rec: session(&dir.join("rec.onnx"))?,
             order: session(&dir.join("order.onnx")).ok(),
             vocab,
+            orient: session(&dir.join("orient.onnx")).ok(),
             det_long_side: meta.det_long_side,
             rec_height: meta.rec_height as usize,
             min_page_confidence: super::pdf_ocr::DEFAULT_MIN_PAGE_CONFIDENCE,
@@ -1205,9 +1303,53 @@ impl IndraNative {
     }
 
     /// OCR one grayscale page → lines (reading order) + layout blocks.
-    pub fn ocr_page(&mut self, gray: &GrayPage) -> Result<NativePage, String> {
-        let boxes = self.detect(gray)?;
-        let recs = self.recognize(gray, &boxes)?;
+    fn orientation(&mut self, gray: &GrayPage) -> u32 {
+        let Some(orient) = &mut self.orient else {
+            return 0;
+        };
+        let x = match ort::value::Tensor::from_array((
+            [1i64, 1, ORIENT_SIDE as i64, ORIENT_SIDE as i64],
+            orient_input(gray, ORIENT_SIDE),
+        )) {
+            Ok(x) => x,
+            Err(_) => return 0,
+        };
+        let Ok(outputs) = orient.run(ort::inputs!["x" => x]) else {
+            return 0;
+        };
+        let Ok((_, p)) = outputs["p"].try_extract_tensor::<f32>() else {
+            return 0;
+        };
+        let k = (0..4usize)
+            .max_by(|&a, &b| {
+                p[a].partial_cmp(&p[b]).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap_or(0);
+        if p[k] > ORIENT_MIN {
+            k as u32
+        } else {
+            0
+        }
+    }
+
+    pub fn ocr_page(&mut self, gray: GrayPage) -> Result<NativePage, String> {
+        // upright: orient.onnx quarter turns undone, then deskew
+        // (pipeline.py __call__ / upright). Boxes stay in straightened-page
+        // coordinates — only order/text/blocks are consumed downstream.
+        let k = self.orientation(&gray);
+        let gray = if k != 0 {
+            rotate_gray(&gray, (k as f32) * 90.0)
+        } else {
+            gray
+        };
+        let skew = estimate_skew(&gray);
+        let gray = if skew.abs() >= DESKEW_MIN {
+            rotate_gray(&gray, skew)
+        } else {
+            gray
+        };
+        let boxes = self.detect(&gray)?;
+        let recs = self.recognize(&gray, &boxes)?;
         let rects: Vec<(f32, f32, f32, f32)> =
             boxes.iter().map(|b| (b.0, b.1, b.2, b.3)).collect();
         let texts: Vec<String> = recs.iter().map(|r| r.text.clone()).collect();
@@ -1325,7 +1467,7 @@ impl IndraNative {
 impl super::pdf::PageOcrEngine for IndraNative {
     fn ocr_page_png(&mut self, page_png: &[u8]) -> Result<(Vec<Block>, Option<f64>), String> {
         let gray = GrayPage::from_png(page_png)?;
-        let page = self.ocr_page(&gray)?;
+        let page = self.ocr_page(gray)?;
         let conf = (!page.lines.is_empty()).then(|| {
             page.lines.iter().map(|l| l.conf as f64).sum::<f64>() / page.lines.len() as f64
         });

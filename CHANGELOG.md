@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Session B: orientation + deskew (pipeline.py upright port)
+
+- orient.onnx (768px square ink map, argmax > 0.95) turns quarter/half-
+  turned scans upright before detection; deskew (ink-profile sharpness
+  search, 5 deg at 0.5 then 0.1 steps, tilts under 0.3 left alone)
+  straightens skewed scans. Verified on a 90-rotated scan fixture
+  (pdf_rot90_scan.pdf): heading text recovered exactly.
+
 ### Removed: subprocess OCR engine (Mode A)
 
 - The Python-subprocess path (`pip install indra-ocr`, `INDRA_OCR_BIN`,
