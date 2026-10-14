@@ -2273,6 +2273,14 @@ fn page_size_pts(bytes: &[u8]) -> Option<(f64, f64)> {
 
 /// Errors if `pdftoppm` (poppler-utils) is not on PATH.
 pub fn render_pages_png(bytes: &[u8], dpi: u32) -> Result<Vec<Vec<u8>>> {
+    render_pages_png_opts(bytes, dpi, true)
+}
+
+/// `clamp_budget=false` skips the 0.4 MP clamp — that budget was tuned for
+/// PaddleOCR-VL's reading window; Indra resizes to a 1024-long-side input
+/// itself and expects ~200 dpi source pixels (its own pipeline renders via
+/// pdfium at dpi/72). Clamping starves it (~64 dpi on A4).
+pub fn render_pages_png_opts(bytes: &[u8], dpi: u32, clamp_budget: bool) -> Result<Vec<Vec<u8>>> {
     use std::process::Command;
     if dpi == 0 || dpi > 600 {
         anyhow::bail!("dpi must be 1..=600, got {dpi}");
@@ -2295,9 +2303,13 @@ pub fn render_pages_png(bytes: &[u8], dpi: u32) -> Result<Vec<Vec<u8>>> {
     // probe the page size in points, back the dpi off by sqrt(budget/mp) —
     // pixels scale with dpi² — so dense pages land inside the OCR window
     // instead of yielding empty grids (PaddleOCR-VL, 2026-10-06).
-    let dpi = match page_size_pts(bytes) {
-        Some((w, h)) => clamp_dpi_to_budget(w, h, dpi),
-        None => dpi, // probe failed: caller's dpi stands, downstream errors if fatal
+    let dpi = if clamp_budget {
+        match page_size_pts(bytes) {
+            Some((w, h)) => clamp_dpi_to_budget(w, h, dpi),
+            None => dpi, // probe failed: caller's dpi stands, downstream errors if fatal
+        }
+    } else {
+        dpi
     };
     static RENDER_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
@@ -2404,7 +2416,14 @@ pub fn parse_with_page_ocr_opts(
     });
 
     if !ocr_pages.is_empty() {
-        let rendered = render_pages_png(bytes, dpi)?;
+        // Indra wants full-resolution source pixels (see render_pages_png_opts)
+        let rendered = render_pages_png_opts(bytes, dpi, false)?;
+        eprintln!(
+            "office-parser: OCR routing {} page(s) of {} through {}",
+            ocr_pages.len(),
+            counts.len(),
+            engine.name()
+        );
         let mut merged: Vec<Block> = Vec::new();
         let mut low_conf = Vec::new();
         for (page_pos, range) in parsed.page_block_ranges.iter().enumerate() {
@@ -2415,6 +2434,11 @@ pub fn parse_with_page_ocr_opts(
                         anyhow::anyhow!("page {} was not rendered", page_pos + 1),
                     )
                 })?;
+                eprintln!(
+                    "office-parser: ocr page {}/{}",
+                    page_pos + 1,
+                    counts.len()
+                );
                 let (mut blocks, conf) = engine
                     .ocr_page_png(png)
                     .map_err(|e| crate::Error::from_parse(crate::Format::Pdf, anyhow::anyhow!(e)))?;
