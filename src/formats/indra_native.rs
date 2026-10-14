@@ -1022,7 +1022,7 @@ fn estimate_skew(gray: &GrayPage) -> f32 {
         rows.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum()
     };
     let (mut best, mut best_v) = (0.0f32, sharpness(0.0));
-    let mut probe = |a: f32, best: &mut f32, best_v: &mut f32, sharp: &dyn Fn(f32) -> f32| {
+    let probe = |a: f32, best: &mut f32, best_v: &mut f32, sharp: &dyn Fn(f32) -> f32| {
         let v = sharp(a);
         if v > *best_v {
             *best = a;
