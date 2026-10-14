@@ -74,6 +74,18 @@ struct Args {
     /// PDF + --ocr: OCR every page and discard the text layer entirely.
     #[arg(long)]
     ocr_force: bool,
+
+    /// PDF: split the output into one document per page. Markdown writes
+    /// `<stem>-p<N>.md` files (each with its own OKF frontmatter and a
+    /// `page:<n>` tag); JSON additionally writes `<stem>.jsonl` with one
+    /// document per line.
+    #[arg(long)]
+    split_pages: bool,
+
+    /// Document name or URL recorded in the frontmatter (`source:`) for
+    /// later injection. Defaults to the input file name.
+    #[arg(long)]
+    source: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -127,28 +139,44 @@ fn run(args: Args) -> Result<()> {
         ..sheet_default
     };
 
-    let doc = match format {
+    let (doc, page_docs) = match format {
         office_parser::Format::Xlsx => {
-            office_parser::xlsx::parse_with_options(&input_bytes, sheet_opts)?
+            (office_parser::xlsx::parse_with_options(&input_bytes, sheet_opts)?, None)
         }
         office_parser::Format::Ods => {
-            office_parser::ods::parse_with_options(&input_bytes, sheet_opts)?
+            (office_parser::ods::parse_with_options(&input_bytes, sheet_opts)?, None)
         }
         office_parser::Format::Csv => {
-            office_parser::csv::parse_with_options(&input_bytes, sheet_opts)?
+            (office_parser::csv::parse_with_options(&input_bytes, sheet_opts)?, None)
         }
         office_parser::Format::Tsv => {
-            office_parser::tsv::parse_with_options(&input_bytes, sheet_opts)?
+            (office_parser::tsv::parse_with_options(&input_bytes, sheet_opts)?, None)
         }
-        office_parser::Format::Pdf if args.ocr => office_parser::pdf_ocr::parse_auto(
-            &input_bytes,
-            &office_parser::pdf_ocr::PdfOcrOptions {
+        office_parser::Format::Pdf if args.split_pages => {
+            let opts = office_parser::pdf_ocr::PdfOcrOptions {
                 min_chars: args.ocr_min_chars,
                 force: args.ocr_force,
                 ..Default::default()
-            },
-        )?,
-        _ => office_parser::parse_as(&input_bytes, format)?,
+            };
+            let (doc, page_docs) =
+                office_parser::pdf_ocr::parse_auto_split(&input_bytes, &opts, args.ocr)?;
+            (doc, Some(page_docs))
+        }
+        office_parser::Format::Pdf if args.ocr => {
+            let doc = office_parser::pdf_ocr::parse_auto(
+                &input_bytes,
+                &office_parser::pdf_ocr::PdfOcrOptions {
+                    min_chars: args.ocr_min_chars,
+                    force: args.ocr_force,
+                    ..Default::default()
+                },
+            )?;
+            (doc, None)
+        }
+        _ => {
+            let doc = office_parser::parse_as(&input_bytes, format)?;
+            (doc, None)
+        }
     };
 
     std::fs::create_dir_all(&args.out)
@@ -200,9 +228,35 @@ fn run(args: Args) -> Result<()> {
             for (id, rel) in &id_to_relpath {
                 md = md.replace(&format!("office-image:{id}"), rel);
             }
-            let md = format!("{}{}", okf_frontmatter(&doc, args.slide_transition), md);
+            let mut md = format!(
+                "{}{}",
+                okf_frontmatter(&doc, args.slide_transition, args.source.as_deref(), None),
+                md
+            );
             std::fs::write(&out_path, md)
                 .with_context(|| format!("write {}", out_path.display()))?;
+            if let Some(pages) = &page_docs {
+                for (page_no, page_doc) in pages {
+                    let pmd = office_parser::render::to_morph_markdown(page_doc);
+                    let mut pmd = pmd;
+                    for (id, rel) in &id_to_relpath {
+                        pmd = pmd.replace(&format!("office-image:{id}"), rel);
+                    }
+                    let fm = okf_frontmatter(
+                        page_doc,
+                        args.slide_transition,
+                        args.source.as_deref(),
+                        Some(*page_no),
+                    );
+                    let page_path = out_path.with_file_name(format!(
+                        "{}-p{:03}.md",
+                        out_path.file_stem().and_then(|s| s.to_str()).unwrap_or("page"),
+                        page_no
+                    ));
+                    std::fs::write(&page_path, format!("{fm}{pmd}"))
+                        .with_context(|| format!("write {}", page_path.display()))?;
+                }
+            }
         }
         OutputFormat::Json => {
             let v = office_parser::render::to_json_value_with_options(
@@ -214,6 +268,24 @@ fn run(args: Args) -> Result<()> {
             let s = serde_json::to_string_pretty(&v).context("serialize json")?;
             std::fs::write(&out_path, s)
                 .with_context(|| format!("write {}", out_path.display()))?;
+            if let Some(pages) = &page_docs {
+                // one document per line — the paginated JSONL view
+                let jsonl_path = out_path.with_extension("jsonl");
+                let mut lines = String::new();
+                for (page_no, page_doc) in pages {
+                    let pv = office_parser::render::to_json_value_with_options(
+                        page_doc,
+                        office_parser::render::JsonRenderOptions {
+                            include_image_bytes: false,
+                        },
+                    );
+                    lines.push_str(&serde_json::to_string(&pv)?);
+                    lines.push('\n');
+                    let _ = page_no;
+                }
+                std::fs::write(&jsonl_path, lines)
+                    .with_context(|| format!("write {}", jsonl_path.display()))?;
+            }
         }
     }
 
@@ -323,6 +395,8 @@ fn write_assets_and_rewrite_filenames(
 fn okf_frontmatter(
     doc: &office_parser::Document,
     slide_transition: Option<SlideTransition>,
+    source: Option<&str>,
+    page: Option<u32>,
 ) -> String {
     fn quote(s: &str) -> String {
         let one_line = s.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -362,7 +436,14 @@ fn okf_frontmatter(
     if let Some(d) = description {
         fm.push_str(&format!("description: {}\n", quote(d)));
     }
-    fm.push_str(&format!("tags: [{}]\n", doc.metadata.format.as_str()));
+    let mut tags = vec![doc.metadata.format.as_str().to_string()];
+    if let Some(p) = page {
+        tags.push(format!("page:{p}"));
+    }
+    fm.push_str(&format!("tags: [{}]\n", tags.join(", ")));
+    if let Some(src) = source {
+        fm.push_str(&format!("source: {}\n", quote(src)));
+    }
     if matches!(
         doc.metadata.format,
         office_parser::Format::Pptx | office_parser::Format::Odp

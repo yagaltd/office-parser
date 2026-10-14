@@ -246,7 +246,8 @@ pub mod pdf {
 pub mod pdf_ocr {
     use super::{Document, Result};
     pub use crate::formats::pdf_ocr::{
-    map_jsonl_to_blocks, ocr_document, parse_auto, parse_with_indra, PdfOcrOptions,
+    map_jsonl_to_blocks, ocr_document, parse_auto, parse_auto_split, parse_with_indra,
+    PdfOcrOptions,
 };
 
     pub fn parse(bytes: &[u8]) -> Result<Document> {

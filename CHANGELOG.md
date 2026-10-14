@@ -1,5 +1,19 @@
 ## Unreleased
 
+### Per-page split output (1 page = 1 document)
+
+- `--split-pages` (PDF): markdown writes `<stem>-p<N>.md` per page, each
+  with its own OKF frontmatter — `tags: [pdf, page:<n>]` — while the
+  combined document is still written; JSON additionally writes
+  `<stem>.jsonl` with one document per line (paginated JSONL view).
+- `--source <name-or-url>` records the document name/URL in the OKF
+  `source:` field for later injection; defaults to nothing, file name
+  recommended.
+- Library: `pdf::parse_pdf_split(bytes, engine, dpi, min_chars, force)`
+  returns the combined document plus per-page documents;
+  `pdf_ocr::parse_auto_split` picks the best engine (native →
+  subprocess → text layer only).
+
 ### PDF OCR — pdfium rendering backend
 
 - The pdfium library (auto-installable via

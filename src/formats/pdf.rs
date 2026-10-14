@@ -2208,6 +2208,7 @@ fn pdfium_handle() -> Option<&'static std::sync::Mutex<pdfium_render::prelude::P
         .as_ref()
 }
 
+#[cfg(feature = "render-pdfium")]
 fn render_pages_png_pdfium(bytes: &[u8], dpi: u32, clamp_budget: bool) -> Result<Vec<Vec<u8>>> {
     use pdfium_render::prelude::*;
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -2427,6 +2428,32 @@ pub fn parse_with_page_ocr_opts(
     min_chars: usize,
     force: bool,
 ) -> crate::Result<crate::Document> {
+    parse_with_page_ocr_inner(bytes, &mut Some(engine), dpi, min_chars, force).map(|(doc, _)| doc)
+}
+
+/// Split a PDF into one [`crate::Document`] per page (1 page = 1 document).
+/// `engine` enables OCR routing for image-like pages; `None` keeps the text
+/// layer only. The combined document is returned alongside the pages.
+pub fn parse_pdf_split(
+    bytes: &[u8],
+    mut engine: Option<&mut dyn PageOcrEngine>,
+    dpi: u32,
+    min_chars: usize,
+    force: bool,
+) -> crate::Result<(crate::Document, Vec<(u32, crate::Document)>)> {
+    parse_with_page_ocr_inner(bytes, &mut engine, dpi, min_chars, force)
+}
+
+fn parse_with_page_ocr_inner<'e>(
+    bytes: &[u8],
+    engine: &mut Option<&'e mut (dyn PageOcrEngine + 'e)>,
+    dpi: u32,
+    min_chars: usize,
+    force: bool,
+) -> crate::Result<(
+    crate::Document,
+    Vec<(u32, crate::Document)>,
+)> {
     let mut parsed =
         parse_pdf_full(bytes).map_err(|e| crate::Error::from_parse(crate::Format::Pdf, e))?;
     let quality = classify_pdf_text_quality(&parsed.blocks);
@@ -2439,18 +2466,19 @@ pub fn parse_with_page_ocr_opts(
         .collect();
 
     let mut ocr_meta = serde_json::json!({
-        "engine": engine.name(),
+        "engine": engine.as_ref().map(|e| e.name()).unwrap_or("none"),
         "pages_ocr": 0,
     });
 
-    if !ocr_pages.is_empty() {
+    if !ocr_pages.is_empty() && engine.is_some() {
         // Indra wants full-resolution source pixels (see render_pages_png_opts)
         let rendered = render_pages_png_opts(bytes, dpi, false)?;
+        let engine_name = engine.as_deref_mut().map(|e| e.name()).unwrap_or("none").to_string();
         eprintln!(
             "office-parser: OCR routing {} page(s) of {} through {}",
             ocr_pages.len(),
             counts.len(),
-            engine.name()
+            engine_name
         );
         let mut merged: Vec<Block> = Vec::new();
         let mut low_conf = Vec::new();
@@ -2467,7 +2495,10 @@ pub fn parse_with_page_ocr_opts(
                     page_pos + 1,
                     counts.len()
                 );
-                let (mut blocks, conf) = engine
+                let Some(engine_ref) = engine.as_deref_mut() else {
+                    unreachable!("engine present when ocr_pages non-empty")
+                };
+                let (mut blocks, conf) = engine_ref
                     .ocr_page_png(png)
                     .map_err(|e| crate::Error::from_parse(crate::Format::Pdf, anyhow::anyhow!(e)))?;
                 if let Some(conf) = conf {
@@ -2492,17 +2523,40 @@ pub fn parse_with_page_ocr_opts(
         ocr_meta["low_confidence_pages"] = serde_json::Value::Array(low_conf);
     }
 
+    let images = parsed.images;
+    let metadata_json = parsed.metadata_json;
     let office = super::ParsedOfficeDocument {
         blocks: parsed.blocks,
-        images: parsed.images,
-        metadata_json: parsed.metadata_json,
+        images: images.clone(),
+        metadata_json: metadata_json.clone(),
     };
     let mut doc = super::finalize(crate::Format::Pdf, office);
     doc.metadata.pdf_text_quality = Some(quality);
     if ocr_meta["pages_ocr"].as_u64().unwrap_or(0) > 0 {
         doc.metadata.extra["ocr"] = ocr_meta;
     }
-    Ok(doc)
+
+    // 1 page = 1 document (page-tagged via metadata.extra["page"])
+    let mut pages = Vec::new();
+    for r in &parsed.page_block_ranges {
+        let page_blocks: Vec<Block> = doc.blocks[r.block_start..r.block_end]
+            .iter()
+            .cloned()
+            .collect();
+        let office = super::ParsedOfficeDocument {
+            blocks: page_blocks,
+            images: images.clone(),
+            metadata_json: metadata_json.clone(),
+        };
+        let mut page_doc = super::finalize(crate::Format::Pdf, office);
+        page_doc.metadata.pdf_text_quality = Some(quality);
+        page_doc.metadata.extra["page"] = serde_json::json!(r.page_number);
+        if doc.metadata.extra.get("ocr").is_some() {
+            page_doc.metadata.extra["ocr"] = doc.metadata.extra["ocr"].clone();
+        }
+        pages.push((r.page_number, page_doc));
+    }
+    Ok((doc, pages))
 }
 
 fn set_block_index(b: &mut Block, i: usize) {

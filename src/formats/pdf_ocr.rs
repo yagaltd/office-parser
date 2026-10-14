@@ -221,6 +221,41 @@ fn parse_jsonl(bytes: &[u8]) -> Vec<IndraPage> {
         .collect()
 }
 
+/// [`parse_auto`] plus per-page splitting (1 page = 1 document). Without
+/// `ocr` the split is text-layer only.
+pub fn parse_auto_split(
+    bytes: &[u8],
+    opts: &PdfOcrOptions,
+    ocr: bool,
+) -> crate::Result<(
+    crate::Document,
+    Vec<(u32, crate::Document)>,
+)> {
+    #[cfg(feature = "ocr-indra-native")]
+    if ocr {
+        if let Ok(mut engine) = crate::formats::indra_native::IndraNative::load() {
+            return crate::formats::pdf::parse_pdf_split(
+                bytes,
+                Some(&mut engine),
+                opts.dpi,
+                opts.min_chars,
+                opts.force,
+            );
+        }
+    }
+    if ocr {
+        let mut sub = SubprocessOcr::new();
+        return crate::formats::pdf::parse_pdf_split(
+            bytes,
+            Some(&mut sub),
+            opts.dpi,
+            opts.min_chars,
+            opts.force,
+        );
+    }
+    crate::formats::pdf::parse_pdf_split(bytes, None, opts.dpi, opts.min_chars, opts.force)
+}
+
 /// Parse a scanned PDF with the best available Indra engine: the native
 /// ONNX pipeline when compiled with `ocr-indra-native` and its models are
 /// present, else the subprocess engine (Mode A).
