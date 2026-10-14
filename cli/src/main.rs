@@ -86,6 +86,11 @@ struct Args {
     /// later injection. Defaults to the input file name.
     #[arg(long)]
     source: Option<String>,
+
+    /// PDF: insert `<!-- page N -->` markers between pages in the combined
+    /// markdown, so page boundaries stay visible in the single-file view.
+    #[arg(long)]
+    page_markers: bool,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -233,6 +238,32 @@ fn run(args: Args) -> Result<()> {
                 okf_frontmatter(&doc, args.slide_transition, args.source.as_deref(), None),
                 md
             );
+            // with --page-markers, the combined file is page-delimited
+            if args.page_markers {
+                if let Some(pages) = &page_docs {
+                    let mut paged = String::new();
+                    for (page_no, page_doc) in pages {
+                        paged.push_str(&format!("<!-- page {} -->\n", page_no));
+                        let pmd = office_parser::render::to_morph_markdown(page_doc);
+                        let mut pmd = pmd;
+                        for (id, rel) in &id_to_relpath {
+                            pmd = pmd.replace(&format!("office-image:{id}"), rel);
+                        }
+                        let fm = okf_frontmatter(
+                            page_doc,
+                            args.slide_transition,
+                            args.source.as_deref(),
+                            Some(*page_no),
+                        );
+                        paged.push_str(&fm);
+                        paged.push_str(&pmd);
+                        paged.push('\n');
+                    }
+                    std::fs::write(&out_path, paged)
+                        .with_context(|| format!("write {}", out_path.display()))?;
+                    return Ok(());
+                }
+            }
             std::fs::write(&out_path, md)
                 .with_context(|| format!("write {}", out_path.display()))?;
             if let Some(pages) = &page_docs {

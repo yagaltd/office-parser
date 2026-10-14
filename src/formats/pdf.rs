@@ -2553,6 +2553,11 @@ fn parse_with_page_ocr_inner<'e>(
     let mut pages_from_merge: Vec<Vec<Block>> = Vec::new();
     if !ocr_pages.is_empty() && engine.is_some() {
         // Indra wants full-resolution source pixels (see render_pages_png_opts)
+        eprintln!(
+            "office-parser: rendering {} page(s) at {} dpi...",
+            counts.len(),
+            dpi
+        );
         let rendered = render_pages_png_opts(bytes, dpi, false)?;
         let engine_name = engine.as_deref_mut().map(|e| e.name()).unwrap_or("none").to_string();
         eprintln!(

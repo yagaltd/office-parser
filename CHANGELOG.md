@@ -28,6 +28,17 @@
   + pdfium. `--ocr` now errors with instructions when the models are
   missing instead of falling back to a subprocess.
 
+### Page markers + render progress
+
+- `--page-markers` (PDF + `--split-pages`): the combined markdown is
+  written page-delimited — `<!-- page N -->` before each page's OKF +
+  content — so page boundaries stay visible in the single-file view.
+  (The per-page `-pNNN.md` files were already exact; this fixes the
+  combined view, where a heading opening page N+1 previously looked
+  like part of page N.)
+- Earlier stderr feedback: `rendering N page(s) at D dpi` prints before
+  the pdfium render pass (the previously silent few seconds).
+
 ### Per-page split fix: every page routed, correct per-page blocks
 
 - Fixed stale block ranges: per-page documents were sliced with the
