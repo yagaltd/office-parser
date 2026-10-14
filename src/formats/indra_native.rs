@@ -36,6 +36,10 @@ const MIN_CONF: f32 = 0.5;
 const ADAPTIVE_MIN_H: f32 = 9.0;
 const ADAPTIVE_TARGET_H: f32 = 12.0;
 const ADAPTIVE_MAX_SIDE: f32 = 2048.0;
+/// Cut a detected line at a wider gap (label rule outside tables).
+const SPLIT_GAP: f32 = 3.0;
+/// Cut a table line into cells at a wider gap (label rule in tables).
+const CELL_GAP: f32 = 1.8;
 
 // BLOCK_CLASSES — the OrderNet layout heads' class ids (order_post.py).
 pub const BLOCK_CLASSES: [&str; 10] = [
@@ -409,13 +413,15 @@ fn line_features(boxes: &[(f32, f32, f32, f32)], wh: (f32, f32), texts: &[String
             continue;
         }
         let digits = t.chars().filter(|c| c.is_ascii_digit()).count() as f32 / t.len() as f32;
+        // t[:3] in Python is CHAR-based; slicing bytes panics on multibyte text
+        let first3: String = t.chars().take(3).collect();
+        let first3_num = first3
+            .trim_end_matches(['.', ')'])
+            .chars()
+            .all(|c| c.is_ascii_digit())
+            && first3.ends_with(|c: char| c.is_ascii_digit() || c == ')' || c == '.');
         let starts_item = "•-–▪◦*·→".contains(t.chars().next().unwrap_or(' '))
-            || (t.len() > 3
-                && t[..3]
-                    .trim_end_matches(['.', ')'])
-                    .chars()
-                    .all(|c| c.is_ascii_digit())
-                && t[..3].ends_with(|c: char| c.is_ascii_digit() || c == ')' || c == '.'));
+            || (t.chars().count() > 3 && first3_num);
         feats[i * N_FEATS + 10] = (t.len() as f32).ln_1p() / 5.0;
         feats[i * N_FEATS + 11] = digits;
         feats[i * N_FEATS + 12] = if starts_item { 1.0 } else { 0.0 };
@@ -756,6 +762,159 @@ fn decode_blocks_order(
     out
 }
 
+// --- line splitting + table grid (pipeline.py split_line / layout_post) ---
+
+fn is_space(tok: &str) -> bool {
+    tok == " "
+}
+
+fn decode_toks<'a>(toks: impl IntoIterator<Item = &'a (String, f32)>) -> String {
+    let joined: String = toks.into_iter().map(|(s, _)| s.as_str()).collect();
+    joined.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// pipeline.py split_line — cut a line where neighbouring tokens are more
+/// than `gap` line-heights apart (the detector merged two cells or columns).
+/// Returns (sub-box, text) segments; one item when nothing is cut.
+fn split_line(
+    box_: &(f32, f32, f32, f32),
+    toks: &[(String, f32)],
+    gap: f32,
+) -> Vec<((f32, f32, f32, f32), String)> {
+    let (x0, y0, x1, y1) = *box_;
+    let h = (y1 - y0).max(1.0);
+    let mut segs: Vec<Vec<&(String, f32)>> = vec![Vec::new()];
+    let mut prev: Option<f32> = None;
+    for tk in toks {
+        let x = tk.1;
+        if !is_space(&tk.0) {
+            let cut = prev.is_some_and(|p| x - p > gap * h);
+            if cut {
+                segs.push(Vec::new());
+            }
+            prev = Some(x);
+        }
+        segs.last_mut().expect("segs never empty").push(tk);
+    }
+    if segs.len() == 1 {
+        return vec![(*box_, decode_toks(toks))];
+    }
+    let mut out = Vec::new();
+    for sg in segs {
+        let text = decode_toks(sg.iter().copied());
+        let xs: Vec<f32> = sg.iter().filter(|tk| !is_space(&tk.0)).map(|tk| tk.1).collect();
+        if !text.is_empty() && !xs.is_empty() {
+            let min_x = xs.iter().cloned().fold(f32::MAX, f32::min);
+            let max_x = xs.iter().cloned().fold(f32::MIN, f32::max);
+            let bx = (
+                x0.max(min_x - 0.35 * h),
+                y0,
+                x1.min(max_x + 0.35 * h),
+                y1,
+            );
+            out.push((bx, text));
+        }
+    }
+    out
+}
+
+/// layout_post _rows + column clustering: group cells into rows by vertical
+/// centre, then assign columns by clustered x positions. Returns rows × cols
+/// of cell texts, or None when nothing parses.
+fn build_table_grid(cells: &[(f32, f32, f32, f32, String)]) -> Option<Vec<Vec<String>>> {
+    if cells.is_empty() {
+        return None;
+    }
+    // rows: sort by centre y, merge within half the median height
+    let mut heights: Vec<f32> = cells.iter().map(|c| c.3 - c.1).collect();
+    let h = {
+        heights.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        *heights.get(heights.len() / 2).unwrap_or(&1.0)
+    }
+    .max(1.0);
+    let mut order: Vec<usize> = (0..cells.len()).collect();
+    order.sort_by(|&a, &b| {
+        let ca = (cells[a].1 + cells[a].3) / 2.0;
+        let cb = (cells[b].1 + cells[b].3) / 2.0;
+        ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut rows: Vec<Vec<usize>> = Vec::new();
+    for &i in &order {
+        let cy = (cells[i].1 + cells[i].3) / 2.0;
+        if let Some(last) = rows.last_mut() {
+            let last_cy = last.iter().map(|&j| (cells[j].1 + cells[j].3) / 2.0).sum::<f32>()
+                / last.len() as f32;
+            if (cy - last_cy).abs() < 0.5 * h {
+                last.push(i);
+                continue;
+            }
+        }
+        rows.push(vec![i]);
+    }
+    for r in &mut rows {
+        r.sort_by(|&a, &b| {
+            cells[a].0
+                .partial_cmp(&cells[b].0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+    // columns: cluster all cell left edges with a gap threshold
+    let mut xs: Vec<f32> = cells.iter().map(|c| c.0).collect();
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mut col_centers: Vec<f32> = Vec::new();
+    for &x in &xs {
+        match col_centers.last() {
+            Some(&c) if x - c <= 1.2 * h => continue, // same column band
+            _ => col_centers.push(x),
+        }
+    }
+    let col_of = |x: f32| -> usize {
+        col_centers
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| {
+                (**a - x)
+                    .abs()
+                    .partial_cmp(&((**b - x).abs()))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(i, _)| i)
+            .unwrap_or(0)
+    };
+    let ncols = col_centers.len();
+    let mut grid: Vec<Vec<String>> = rows
+        .iter()
+        .map(|_| vec![String::new(); ncols])
+        .collect();
+    for (ri, r) in rows.iter().enumerate() {
+        for &i in r {
+            let col = col_of(cells[i].0).min(ncols - 1);
+            let text = cells[i].4.trim().to_string();
+            if grid[ri][col].is_empty() {
+                grid[ri][col] = text;
+            } else {
+                grid[ri][col].push(' ');
+                grid[ri][col].push_str(&text);
+            }
+        }
+    }
+    // drop empty trailing columns
+    let mut keep = ncols;
+    while keep > 1 && grid.iter().all(|r| r[keep - 1].is_empty()) {
+        keep -= 1;
+    }
+    let mut out: Vec<Vec<String>> = grid
+        .into_iter()
+        .map(|mut r| {
+            r.truncate(keep);
+            r
+        })
+        .collect();
+    // drop fully-empty rows
+    out.retain(|r| r.iter().any(|c| !c.is_empty()));
+    (!out.is_empty()).then_some(out)
+}
+
 // --- engine --------------------------------------------------------------
 
 pub struct IndraNative {
@@ -775,10 +934,21 @@ pub struct NativeLine {
     pub conf: f32,
 }
 
+/// One recognized line with per-token page-x positions (for cell splitting).
+pub struct LineRec {
+    pub box_: (f32, f32, f32, f32),
+    pub text: String,
+    pub conf: f32,
+    /// (token text, page x) for every kept CTC token, in reading order.
+    pub toks: Vec<(String, f32)>,
+}
+
 pub struct NativeBlock {
     pub label: String,
     pub bbox: (f32, f32, f32, f32),
     pub text: String,
+    /// Reconstructed cells for Table-class blocks (rows × columns).
+    pub table: Option<Vec<Vec<String>>>,
 }
 
 pub struct NativePage {
@@ -890,17 +1060,25 @@ impl IndraNative {
         &mut self,
         gray: &GrayPage,
         boxes: &[(f32, f32, f32, f32, f32)],
-    ) -> Result<Vec<(String, f32)>, String> {
+    ) -> Result<Vec<LineRec>, String> {
         let crops: Vec<(usize, Vec<f32>)> = boxes
             .iter()
             .map(|b| crop_line(gray, (b.0, b.1, b.2, b.3), self.rec_height))
             .collect();
-        let mut out = vec![(String::new(), 0.0f32); crops.len()];
+        let mut out: Vec<LineRec> = boxes
+            .iter()
+            .map(|b| LineRec {
+                box_: (b.0, b.1, b.2, b.3),
+                text: String::new(),
+                conf: 0.0,
+                toks: Vec::new(),
+            })
+            .collect();
         if crops.is_empty() {
             return Ok(out);
         }
-        // simple fixed-size batches (v1: no width-aware batching)
-        for chunk in crops.chunks(16) {
+        for (chunk_start, chunk) in crops.chunks(16).enumerate() {
+            let chunk_start = chunk_start * 16;
             let (data, widths, wm) = pad_batch(chunk);
             let b = chunk.len() as i64;
             let x = ort::value::Tensor::from_array(([b, 1, LINE_HEIGHT as i64, wm as i64], data))
@@ -923,24 +1101,36 @@ impl IndraNative {
             let t = ids_shape.iter().nth(1).copied().unwrap_or(0) as usize;
             for k in 0..chunk.len() {
                 let n = (lengths[k].max(0) as usize).min(t);
-                let mut text = String::new();
+                let (bx0, _, bx1, by0, by1) = boxes[chunk_start + k];
+                let bh = (by1 - by0).max(1.0);
+                // token page-x: timestep → ink px → crop px (rec_preproc decode)
+                let ix0 = (bx0 - PAD_X * bh).floor();
+                let cw = (bx1 + PAD_X * bh).ceil() - ix0;
+                let f = cw / chunk[k].0 as f32;
+                let stride = wm as f32 / t.max(1) as f32;
+                let mut toks: Vec<(String, f32)> = Vec::new();
                 let mut conf_sum = 0.0f32;
                 let mut conf_n = 0usize;
                 let mut prev = 0i64;
                 for i in 0..n {
                     let id = ids[k * t + i];
                     if id != 0 && id != prev {
-                        // collapse repeats, drop blank
-                        if let Some(ch) = self.vocab.get(id as usize - 1) {
-                            text.push_str(ch);
-                        }
+                        let tok = self.vocab.get(id as usize - 1).cloned().unwrap_or_default();
+                        let px = ix0 as f32 + (i as f32 + 0.5) * stride * f;
+                        toks.push((tok, px));
                         conf_sum += confs[k * t + i];
                         conf_n += 1;
                     }
                     prev = id;
                 }
                 let conf = if conf_n > 0 { conf_sum / conf_n as f32 } else { 0.0 };
-                out[k] = if conf >= MIN_CONF { (text, conf) } else { (String::new(), conf) };
+                let text: String = toks.iter().map(|(s, _)| s.as_str()).collect();
+                out[chunk_start + k] = LineRec {
+                    box_: (bx0, by0, bx1, by1),
+                    text: if conf >= MIN_CONF { text } else { String::new() },
+                    conf,
+                    toks: if conf >= MIN_CONF { toks } else { Vec::new() },
+                };
             }
         }
         Ok(out)
@@ -983,10 +1173,10 @@ impl IndraNative {
     /// OCR one grayscale page → lines (reading order) + layout blocks.
     pub fn ocr_page(&mut self, gray: &GrayPage) -> Result<NativePage, String> {
         let boxes = self.detect(gray)?;
-        let rec = self.recognize(gray, &boxes)?;
+        let recs = self.recognize(gray, &boxes)?;
         let rects: Vec<(f32, f32, f32, f32)> =
             boxes.iter().map(|b| (b.0, b.1, b.2, b.3)).collect();
-        let texts: Vec<String> = rec.iter().map(|(t, _)| t.clone()).collect();
+        let texts: Vec<String> = recs.iter().map(|r| r.text.clone()).collect();
         let wh = (gray.w as f32, gray.h as f32);
         let (order, layout) = self.reading_order(&rects, &texts, wh)?;
         let lines: Vec<NativeLine> = order
@@ -994,7 +1184,7 @@ impl IndraNative {
             .map(|&i| NativeLine {
                 box_: rects[i],
                 text: texts[i].clone(),
-                conf: rec[i].1,
+                conf: recs[i].conf,
             })
             .collect();
         let mut blocks = Vec::new();
@@ -1050,10 +1240,26 @@ impl IndraNative {
                         sum[x].partial_cmp(&sum[y]).unwrap_or(std::cmp::Ordering::Equal)
                     })
                     .unwrap_or(0);
+                let label = BLOCK_CLASSES[label].to_string();
+                // Table-class blocks: split lines into cells and rebuild the grid.
+                let table = if label == "Table" {
+                    let cells: Vec<(f32, f32, f32, f32, String)> = run
+                        .iter()
+                        .flat_map(|&i| {
+                            split_line(&rects[i], &recs[i].toks, CELL_GAP)
+                                .into_iter()
+                                .map(|(bx, txt)| (bx.0, bx.1, bx.2, bx.3, txt))
+                        })
+                        .collect();
+                    build_table_grid(&cells)
+                } else {
+                    None
+                };
                 blocks.push(NativeBlock {
-                    label: BLOCK_CLASSES[label].to_string(),
+                    label,
                     bbox: (bx0, by0, bx1, by1),
                     text: joined,
+                    table,
                 });
             }
         }
@@ -1069,6 +1275,16 @@ impl IndraNative {
     ) -> crate::Result<crate::Document> {
         self.min_page_confidence = min_page_confidence;
         super::pdf::parse_with_page_ocr(bytes, self, super::pdf_ocr::DEFAULT_DPI)
+    }
+
+    /// Full-control variant (min_chars / force) for the CLI.
+    pub fn parse_document_opts(
+        &mut self,
+        bytes: &[u8],
+        opts: &super::pdf_ocr::PdfOcrOptions,
+    ) -> crate::Result<crate::Document> {
+        self.min_page_confidence = opts.min_page_confidence;
+        super::pdf::parse_with_page_ocr_opts(bytes, self, opts.dpi, opts.min_chars, opts.force)
     }
 }
 
@@ -1098,6 +1314,28 @@ impl super::pdf::PageOcrEngine for IndraNative {
                     marks: Vec::new(),
                     source: Default::default(),
                 }),
+                "Table" if b.table.is_some() => {
+                    let rows = b.table.as_ref().expect("checked");
+                    let table_rows: Vec<Vec<crate::document_ast::Cell>> = rows
+                        .iter()
+                        .map(|r| {
+                            r.iter()
+                                .map(|c| crate::document_ast::Cell {
+                                    text: c.clone(),
+                                    colspan: 1,
+                                    rowspan: 1,
+                                })
+                                .collect()
+                        })
+                        .collect();
+                    // keep a paragraph twin of the table text for searchability
+                    blocks.push(Block::Table {
+                        block_index: blocks.len(),
+                        rows: table_rows,
+                        widths: Vec::new(),
+                        source: Default::default(),
+                    });
+                }
                 _ => blocks.push(Block::Paragraph {
                     block_index: blocks.len(),
                     text: b.text.clone(),

@@ -2359,6 +2359,15 @@ pub trait PageOcrEngine {
     fn name(&self) -> &'static str;
 }
 
+/// Router with default thresholds (50 chars, no force).
+pub fn parse_with_page_ocr(
+    bytes: &[u8],
+    engine: &mut dyn PageOcrEngine,
+    dpi: u32,
+) -> crate::Result<crate::Document> {
+    parse_with_page_ocr_opts(bytes, engine, dpi, PAGE_TEXT_THRESHOLD, false)
+}
+
 /// Per-page alphanumeric char counts (extraction order == page order).
 fn page_char_counts(parsed: &ParsedPdfDocument) -> Vec<usize> {
     parsed
@@ -2371,10 +2380,12 @@ fn page_char_counts(parsed: &ParsedPdfDocument) -> Vec<usize> {
 /// Parse a PDF and route image-like pages through a per-page OCR engine while
 /// keeping the text layer for text-rich pages — mixed documents (a digital
 /// compilation with scanned inserts) get every page recovered.
-pub fn parse_with_page_ocr(
+pub fn parse_with_page_ocr_opts(
     bytes: &[u8],
     engine: &mut dyn PageOcrEngine,
     dpi: u32,
+    min_chars: usize,
+    force: bool,
 ) -> crate::Result<crate::Document> {
     let mut parsed =
         parse_pdf_full(bytes).map_err(|e| crate::Error::from_parse(crate::Format::Pdf, e))?;
@@ -2383,7 +2394,7 @@ pub fn parse_with_page_ocr(
     let ocr_pages: Vec<usize> = counts
         .iter()
         .enumerate()
-        .filter(|(_, c)| **c < PAGE_TEXT_THRESHOLD)
+        .filter(|(_, c)| force || **c < min_chars)
         .map(|(i, _)| i)
         .collect();
 

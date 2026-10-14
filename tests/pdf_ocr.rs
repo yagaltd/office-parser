@@ -224,3 +224,46 @@ fn mixed_pdf_routes_per_page() {
     assert_eq!(ocr["pages_ocr"], 1, "exactly one page routed to OCR");
     assert_eq!(doc.metadata.pdf_text_quality, Some(PdfTextQuality::TextSparse));
 }
+
+/// Table reconstruction: a scanned table page comes back as a real Table
+/// block with rows and columns (not flattened paragraph text).
+#[test]
+fn native_table_reconstruction() {
+    let Ok(mut engine) = office_parser::IndraNative::load() else {
+        eprintln!("skipping: Indra models unavailable");
+        return;
+    };
+    let bytes = std::fs::read("tests/fixtures/pdf_table_scan.pdf").expect("fixture");
+    let doc = engine.parse_document(&bytes, 0.60).expect("table ocr");
+    use office_parser::document_ast::Block;
+
+    let tables: Vec<&Vec<Vec<office_parser::document_ast::Cell>>> = doc
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            Block::Table { rows, .. } => Some(rows),
+            _ => None,
+        })
+        .collect();
+    assert!(!tables.is_empty(), "no Table block; blocks: {:#?}", doc.blocks.iter().map(|b| match b {
+        Block::Table { rows, .. } => format!("Table {}x{}", rows.len(), rows.first().map_or(0, |r| r.len())),
+        Block::Paragraph { text, .. } => format!("Para({text})"),
+        Block::Heading { text, .. } => format!("Head({text})"),
+        _ => "other".into(),
+    }).collect::<Vec<_>>());
+    let rows = tables[0];
+    assert!(rows.len() >= 3, "expected >=3 rows, got {rows:?}");
+    let flat: Vec<String> = rows
+        .iter()
+        .flat_map(|r| r.iter().map(|c| c.text.clone()))
+        .collect();
+    let joined = flat.join(" ");
+    for expected in ["DP Sensor", "12", "49.90", "Temp Probe", "Valve Kit", "120.00"] {
+        assert!(joined.contains(expected), "missing {expected:?} in {joined:?}");
+    }
+    // Qty column: rows 1..3 second cell should be numeric
+    assert!(
+        rows.iter().skip(1).all(|r| r.len() >= 3 && r[1].text.chars().all(|c| c.is_ascii_digit())),
+        "Qty column not aligned: {rows:?}"
+    );
+}

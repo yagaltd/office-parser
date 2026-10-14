@@ -37,6 +37,12 @@ pub struct PdfOcrOptions {
     /// Pages whose mean line confidence falls below this are recorded in
     /// `metadata.extra["ocr"]["low_confidence_pages"]`.
     pub min_page_confidence: f64,
+    /// A page whose text layer has fewer alphanumeric chars than this is
+    /// routed to OCR. Lower it when pages carry thin/garbage text layers.
+    pub min_chars: usize,
+    /// OCR every page regardless of its text layer (the text layer is then
+    /// discarded for pages that have one).
+    pub force: bool,
 }
 
 impl Default for PdfOcrOptions {
@@ -44,6 +50,8 @@ impl Default for PdfOcrOptions {
         Self {
             dpi: DEFAULT_DPI,
             min_page_confidence: DEFAULT_MIN_PAGE_CONFIDENCE,
+            min_chars: super::pdf::PAGE_TEXT_THRESHOLD,
+            force: false,
         }
     }
 }
@@ -219,7 +227,7 @@ fn parse_jsonl(bytes: &[u8]) -> Vec<IndraPage> {
 pub fn parse_auto(bytes: &[u8], opts: &PdfOcrOptions) -> crate::Result<crate::Document> {
     #[cfg(feature = "ocr-indra-native")]
     if let Ok(mut engine) = crate::formats::indra_native::IndraNative::load() {
-        return engine.parse_document(bytes, opts.min_page_confidence);
+        return engine.parse_document_opts(bytes, opts);
     }
     parse_with_indra(bytes, opts)
 }
@@ -288,7 +296,13 @@ fn set_block_index_pub(b: &mut Block, i: usize) {
 
 /// Parse a PDF, routing image-like pages through the Indra OCR subprocess.
 pub fn parse_with_indra(bytes: &[u8], opts: &PdfOcrOptions) -> crate::Result<crate::Document> {
-    super::pdf::parse_with_page_ocr(bytes, &mut SubprocessOcr::new(opts.clone()), opts.dpi)
+    super::pdf::parse_with_page_ocr_opts(
+        bytes,
+        &mut SubprocessOcr::new(opts.clone()),
+        opts.dpi,
+        opts.min_chars,
+        opts.force,
+    )
 }
 
 /// Run Indra over an already-parsed scanned PDF document and replace its

@@ -43,4 +43,8 @@ office-parser-cli scan.pdf --out results/ --ocr
 - Override the binary with `INDRA_OCR_BIN` (e.g. a venv install).
 - Output flows through the normal markdown/JSON render path; OCR
   provenance and low-confidence pages are recorded in
-  `metadata.extra["ocr"]`.
+  `metadata.extra["ocr"]`. Table-class pages come back as real pipe
+  tables (native engine).
+- Tuning: `--ocr-min-chars N` routes pages with fewer than N
+  alphanumeric chars to OCR (default 50 — lower for thin/garbage text
+  layers); `--ocr-force` OCRs every page and discards text layers.

@@ -65,6 +65,15 @@ struct Args {
     /// binary with INDRA_OCR_BIN. Ignored for other formats.
     #[arg(long)]
     ocr: bool,
+
+    /// PDF + --ocr: route pages with fewer than N alphanumeric chars to OCR
+    /// (lower it when pages carry thin or garbage text layers).
+    #[arg(long, default_value_t = 50)]
+    ocr_min_chars: usize,
+
+    /// PDF + --ocr: OCR every page and discard the text layer entirely.
+    #[arg(long)]
+    ocr_force: bool,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -131,9 +140,14 @@ fn run(args: Args) -> Result<()> {
         office_parser::Format::Tsv => {
             office_parser::tsv::parse_with_options(&input_bytes, sheet_opts)?
         }
-        office_parser::Format::Pdf if args.ocr => {
-            office_parser::pdf_ocr::parse_auto(&input_bytes, &Default::default())?
-        }
+        office_parser::Format::Pdf if args.ocr => office_parser::pdf_ocr::parse_auto(
+            &input_bytes,
+            &office_parser::pdf_ocr::PdfOcrOptions {
+                min_chars: args.ocr_min_chars,
+                force: args.ocr_force,
+                ..Default::default()
+            },
+        )?,
         _ => office_parser::parse_as(&input_bytes, format)?,
     };
 

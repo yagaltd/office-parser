@@ -1,5 +1,22 @@
 ## Unreleased
 
+### PDF OCR — table reconstruction + routing controls
+
+- Table-class OCR blocks are now rebuilt as real `Table` blocks: the
+  recognizer emits per-token page-x positions, lines split into cells
+  at the engine's cell-gap rule, cells grouped into rows by vertical
+  centre and aligned to clustered columns; rendered as pipe tables in
+  markdown. Native engine only (the subprocess JSONL carries no cell
+  geometry).
+- `--ocr-min-chars N` (default 50) and `--ocr-force`: control the
+  per-page routing threshold and OCR-everything mode — closes the
+  blind spot where a thin/garbage text layer suppressed OCR.
+- Fix a panic on multibyte text (Greek/Cyrillic): the reading-order
+  line features sliced bytes where the Python engine sliced chars.
+- Remaining known gaps (by design, the vision-LLM tier): image
+  descriptions and handwriting/degraded-scan escalation — both route
+  off `metadata.extra["ocr"]["low_confidence_pages"]`.
+
 ### PDF OCR — per-page routing for mixed PDFs
 
 - `--ocr` no longer requires the whole document to classify as
