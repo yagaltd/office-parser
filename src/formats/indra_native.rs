@@ -20,7 +20,6 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::document::PdfTextQuality;
 use crate::document_ast::Block;
 
 pub const DET_LONG_SIDE_DEFAULT: i64 = 1024;
@@ -766,6 +765,8 @@ pub struct IndraNative {
     vocab: Vec<String>,
     det_long_side: i64,
     rec_height: usize,
+    min_page_confidence: f64,
+    last_page_confidence: Option<f64>,
 }
 
 pub struct NativeLine {
@@ -820,6 +821,8 @@ impl IndraNative {
             vocab,
             det_long_side: meta.det_long_side,
             rec_height: meta.rec_height as usize,
+            min_page_confidence: super::pdf_ocr::DEFAULT_MIN_PAGE_CONFIDENCE,
+            last_page_confidence: None,
         })
     }
 
@@ -1057,69 +1060,57 @@ impl IndraNative {
         Ok(NativePage { lines, blocks })
     }
 
-    /// Parse a PDF: render pages, OCR each in-process, map to office-parser
-    /// blocks. Caller has already checked `pdf_text_quality == ImageOnly`.
+    /// Parse a PDF: image-like pages are OCR'd in-process, text-rich pages
+    /// keep their text layer (per-page routing for mixed documents).
     pub fn parse_document(
         &mut self,
         bytes: &[u8],
         min_page_confidence: f64,
     ) -> crate::Result<crate::Document> {
-        let mut doc = super::pdf::parse(bytes)?;
-        if doc.metadata.pdf_text_quality != Some(PdfTextQuality::ImageOnly) {
-            return Ok(doc);
-        }
-        let pages_png = super::pdf::render_pages_png(bytes, super::pdf_ocr::DEFAULT_DPI)?;
-        let mut blocks: Vec<Block> = Vec::new();
-        let mut low_conf = Vec::new();
-        let mut page_confs: Vec<f64> = Vec::new();
-        for (i, png) in pages_png.iter().enumerate() {
-            let gray = GrayPage::from_png(png)
-                .map_err(|e| crate::Error::from_parse(crate::Format::Pdf, anyhow::anyhow!(e)))?;
-            let page = self
-                .ocr_page(&gray)
-                .map_err(|e| crate::Error::from_parse(crate::Format::Pdf, anyhow::anyhow!(e)))?;
-            if !page.lines.is_empty() {
-                let conf =
-                    page.lines.iter().map(|l| l.conf as f64).sum::<f64>() / page.lines.len() as f64;
-                page_confs.push(conf);
-                if conf < min_page_confidence {
-                    low_conf.push(serde_json::json!(i));
-                }
-            }
-            for b in &page.blocks {
-                match b.label.as_str() {
-                    // page furniture: dropped, consistent with DOCX policy
-                    "Page-Header" | "Page-Footer" => {}
-                    "Title" => blocks.push(Block::Heading {
-                        block_index: blocks.len(),
-                        level: 1,
-                        text: b.text.clone(),
-                        marks: Vec::new(),
-                        source: Default::default(),
-                    }),
-                    "Section-Header" => blocks.push(Block::Heading {
-                        block_index: blocks.len(),
-                        level: 2,
-                        text: b.text.clone(),
-                        marks: Vec::new(),
-                        source: Default::default(),
-                    }),
-                    _ => blocks.push(Block::Paragraph {
-                        block_index: blocks.len(),
-                        text: b.text.clone(),
-                        marks: Vec::new(),
-                        source: Default::default(),
-                    }),
-                }
-            }
-        }
-        doc.blocks = blocks;
-        doc.metadata.extra["ocr"] = serde_json::json!({
-            "engine": "indra-native",
-            "pages_ocr": pages_png.len(),
-            "low_confidence_pages": low_conf,
-            "page_confidences": page_confs,
+        self.min_page_confidence = min_page_confidence;
+        super::pdf::parse_with_page_ocr(bytes, self, super::pdf_ocr::DEFAULT_DPI)
+    }
+}
+
+impl super::pdf::PageOcrEngine for IndraNative {
+    fn ocr_page_png(&mut self, page_png: &[u8]) -> Result<(Vec<Block>, Option<f64>), String> {
+        let gray = GrayPage::from_png(page_png)?;
+        let page = self.ocr_page(&gray)?;
+        let conf = (!page.lines.is_empty()).then(|| {
+            page.lines.iter().map(|l| l.conf as f64).sum::<f64>() / page.lines.len() as f64
         });
-        Ok(doc)
+        let mut blocks = Vec::new();
+        for b in &page.blocks {
+            match b.label.as_str() {
+                // page furniture: dropped, consistent with DOCX policy
+                "Page-Header" | "Page-Footer" => {}
+                "Title" => blocks.push(Block::Heading {
+                    block_index: blocks.len(),
+                    level: 1,
+                    text: b.text.clone(),
+                    marks: Vec::new(),
+                    source: Default::default(),
+                }),
+                "Section-Header" => blocks.push(Block::Heading {
+                    block_index: blocks.len(),
+                    level: 2,
+                    text: b.text.clone(),
+                    marks: Vec::new(),
+                    source: Default::default(),
+                }),
+                _ => blocks.push(Block::Paragraph {
+                    block_index: blocks.len(),
+                    text: b.text.clone(),
+                    marks: Vec::new(),
+                    source: Default::default(),
+                }),
+            }
+        }
+        self.last_page_confidence = conf;
+        Ok((blocks, conf))
+    }
+
+    fn name(&self) -> &'static str {
+        "indra-native"
     }
 }

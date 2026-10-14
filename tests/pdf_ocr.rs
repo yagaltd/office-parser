@@ -193,3 +193,34 @@ fn native_engine_end_to_end() {
     assert_eq!(ocr["engine"], "indra-native");
     assert_eq!(ocr["pages_ocr"], 2);
 }
+
+/// Per-page routing: a mixed PDF (digital page + scanned page) gets BOTH —
+/// text layer for the rich page, OCR for the empty one.
+#[test]
+fn mixed_pdf_routes_per_page() {
+    let Ok(mut engine) = office_parser::IndraNative::load() else {
+        eprintln!("skipping: Indra models unavailable");
+        return;
+    };
+    let bytes = std::fs::read("tests/fixtures/pdf_mixed.pdf").expect("fixture");
+    let doc = engine.parse_document(&bytes, 0.60).expect("mixed parse");
+
+    let texts: Vec<String> = doc
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            office_parser::document_ast::Block::Paragraph { text, .. } => Some(text.clone()),
+            office_parser::document_ast::Block::Heading { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    let joined = texts.join("\n");
+    // text-layer page content survived…
+    assert!(joined.contains("Quarterly Field Report"), "got {joined:?}");
+    // …AND the scanned page was OCR'd (its content is the same document, rasterized)
+    assert!(joined.contains("eleven hours"), "scanned page missing; got {joined:?}");
+
+    let ocr = doc.metadata.extra.get("ocr").expect("ocr metadata");
+    assert_eq!(ocr["pages_ocr"], 1, "exactly one page routed to OCR");
+    assert_eq!(doc.metadata.pdf_text_quality, Some(PdfTextQuality::TextSparse));
+}

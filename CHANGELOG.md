@@ -1,5 +1,20 @@
 ## Unreleased
 
+### PDF OCR — per-page routing for mixed PDFs
+
+- `--ocr` no longer requires the whole document to classify as
+  `ImageOnly`. Page text is now counted per page: pages under the
+  50-character threshold are routed through Indra while text-rich pages
+  keep their text layer — digital compilations with scanned inserts
+  (visa bundles, signed contracts with attached scans) recover every
+  page in order. Driven by the existing per-page block ranges; both
+  engines (native and subprocess) route through the same
+  `PageOcrEngine` seam.
+- Fixed a temp-dir race when two renders ran in one process (parallel
+  tests): render/OCR scratch dirs now carry a sequence number.
+- New fixture `tests/fixtures/pdf_mixed.pdf` (digital page + rasterized
+  page) with a routing test asserting both sources survive.
+
 ### PDF OCR — native Indra engine (Mode B, feature `ocr-indra-native`)
 
 - The full Indra OCR pipeline ported to Rust over ONNX Runtime

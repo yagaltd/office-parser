@@ -111,8 +111,9 @@ and `tests/docx_marks.rs`.
 ### Limitations
 
 - **PDF page images**: by default PDFs are parsed for text (lopdf) and
-  embedded image objects; scanned/image-only files are flagged via
-  `pdf_text_quality: ImageOnly`. With the `ocr-indra` feature + `--ocr`,
+  embedded image objects; scanned/image-only **pages** are flagged via
+  `pdf_text_quality` (and with `--ocr` recovered per page — mixed
+  documents keep text-layer pages and OCR the rest). With the `ocr-indra` feature + `--ocr`,
   flagged documents are instead recovered through the
   [Indra OCR](https://huggingface.co/datalab-to/indra-ocr) engine —
   in-process over ONNX Runtime (`ocr-indra-native` feature, models from

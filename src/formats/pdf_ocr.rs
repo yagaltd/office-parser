@@ -25,7 +25,6 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 use crate::document_ast::{Block, ListItem, SourceSpan};
-use crate::document::PdfTextQuality;
 
 pub const DEFAULT_DPI: u32 = 200;
 pub const DEFAULT_MIN_PAGE_CONFIDENCE: f64 = 0.60;
@@ -225,15 +224,71 @@ pub fn parse_auto(bytes: &[u8], opts: &PdfOcrOptions) -> crate::Result<crate::Do
     parse_with_indra(bytes, opts)
 }
 
-/// Parse a PDF, and when it is detected as [`PdfTextQuality::ImageOnly`],
-/// recover its content through the Indra OCR engine.
-pub fn parse_with_indra(bytes: &[u8], opts: &PdfOcrOptions) -> crate::Result<crate::Document> {
-    let mut doc = super::pdf::parse(bytes)?;
-    if doc.metadata.pdf_text_quality != Some(PdfTextQuality::ImageOnly) {
-        return Ok(doc);
+/// Subprocess engine: one indra-ocr call per routed page.
+struct SubprocessOcr {
+    opts: PdfOcrOptions,
+}
+
+impl SubprocessOcr {
+    fn new(opts: PdfOcrOptions) -> Self {
+        Self { opts }
     }
-    ocr_document(bytes, opts, &mut doc)?;
-    Ok(doc)
+}
+
+impl super::pdf::PageOcrEngine for SubprocessOcr {
+    fn ocr_page_png(&mut self, page_png: &[u8]) -> Result<(Vec<Block>, Option<f64>), String> {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let tmp = std::env::temp_dir().join(format!(
+            "office-parser-indra-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+        let png_path = tmp.join("page.png");
+        let out_dir = tmp.join("out");
+        std::fs::write(&png_path, page_png).map_err(|e| e.to_string())?;
+        let run = run_indra(std::slice::from_ref(&png_path), &out_dir);
+        let _ = std::fs::remove_dir_all(&tmp);
+        let jsonl_paths = run.map_err(|e| e.to_string())?;
+        let mut raw = Vec::new();
+        for p in &jsonl_paths {
+            raw.extend(std::fs::read(p).map_err(|e| e.to_string())?);
+        }
+        let mut blocks = map_jsonl_to_blocks(&raw);
+        // mean line confidence for the routing metadata
+        let mut confs: Vec<f64> = Vec::new();
+        for line in String::from_utf8_lossy(&raw).lines() {
+            if let Ok(page) = serde_json::from_str::<IndraPage>(line) {
+                confs.extend(page.lines.iter().map(|l| l.conf));
+            }
+        }
+        let conf = (!confs.is_empty()).then(|| confs.iter().sum::<f64>() / confs.len() as f64);
+        for (i, b) in blocks.iter_mut().enumerate() {
+            set_block_index_pub(b, i);
+        }
+        Ok((std::mem::take(&mut blocks), conf))
+    }
+
+    fn name(&self) -> &'static str {
+        "indra"
+    }
+}
+
+fn set_block_index_pub(b: &mut Block, i: usize) {
+    match b {
+        Block::Heading { block_index, .. }
+        | Block::Paragraph { block_index, .. }
+        | Block::List { block_index, .. }
+        | Block::Table { block_index, .. }
+        | Block::Image { block_index, .. }
+        | Block::Link { block_index, .. }
+        | Block::Note { block_index, .. } => *block_index = i,
+    }
+}
+
+/// Parse a PDF, routing image-like pages through the Indra OCR subprocess.
+pub fn parse_with_indra(bytes: &[u8], opts: &PdfOcrOptions) -> crate::Result<crate::Document> {
+    super::pdf::parse_with_page_ocr(bytes, &mut SubprocessOcr::new(opts.clone()), opts.dpi)
 }
 
 /// Run Indra over an already-parsed scanned PDF document and replace its

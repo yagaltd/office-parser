@@ -59,9 +59,10 @@ struct Args {
     #[arg(long)]
     slide_transition: Option<SlideTransition>,
 
-    /// PDF: OCR scanned pages with the Indra engine (runs only when the
-    /// document classifies as ImageOnly). Requires `pip install indra-ocr`;
-    /// override the binary with INDRA_OCR_BIN. Ignored for other formats.
+    /// PDF: OCR image-like pages with the Indra engine (per-page routing —
+    /// text-rich pages keep their text layer, scanned pages are recovered).
+    /// Requires the native models or `pip install indra-ocr`; override the
+    /// binary with INDRA_OCR_BIN. Ignored for other formats.
     #[arg(long)]
     ocr: bool,
 }

@@ -2299,7 +2299,12 @@ pub fn render_pages_png(bytes: &[u8], dpi: u32) -> Result<Vec<Vec<u8>>> {
         Some((w, h)) => clamp_dpi_to_budget(w, h, dpi),
         None => dpi, // probe failed: caller's dpi stands, downstream errors if fatal
     };
-    let dir = std::env::temp_dir().join(format!("office-parser-render-{}", std::process::id()));
+    static RENDER_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "office-parser-render-{}-{}",
+        std::process::id(),
+        RENDER_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     std::fs::create_dir_all(&dir)?;
     let result = (|| -> Result<Vec<Vec<u8>>> {
         let src = dir.join("doc.pdf");
@@ -2341,6 +2346,112 @@ pub fn parse(bytes: &[u8]) -> crate::Result<crate::Document> {
     let mut doc = super::finalize(crate::Format::Pdf, office);
     doc.metadata.pdf_text_quality = Some(quality);
     Ok(doc)
+}
+
+/// Alphanumeric-character count below which a page counts as image-like
+/// (same threshold as the document-level `ImageOnly` classification, applied
+/// per page).
+pub const PAGE_TEXT_THRESHOLD: usize = 50;
+
+/// Per-page OCR: an engine that turns one rendered page PNG into blocks.
+pub trait PageOcrEngine {
+    fn ocr_page_png(&mut self, page_png: &[u8]) -> Result<(Vec<Block>, Option<f64>), String>;
+    fn name(&self) -> &'static str;
+}
+
+/// Per-page alphanumeric char counts (extraction order == page order).
+fn page_char_counts(parsed: &ParsedPdfDocument) -> Vec<usize> {
+    parsed
+        .page_block_ranges
+        .iter()
+        .map(|r| count_alphanumeric(&parsed.blocks[r.block_start..r.block_end]))
+        .collect()
+}
+
+/// Parse a PDF and route image-like pages through a per-page OCR engine while
+/// keeping the text layer for text-rich pages — mixed documents (a digital
+/// compilation with scanned inserts) get every page recovered.
+pub fn parse_with_page_ocr(
+    bytes: &[u8],
+    engine: &mut dyn PageOcrEngine,
+    dpi: u32,
+) -> crate::Result<crate::Document> {
+    let mut parsed =
+        parse_pdf_full(bytes).map_err(|e| crate::Error::from_parse(crate::Format::Pdf, e))?;
+    let quality = classify_pdf_text_quality(&parsed.blocks);
+    let counts = page_char_counts(&parsed);
+    let ocr_pages: Vec<usize> = counts
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| **c < PAGE_TEXT_THRESHOLD)
+        .map(|(i, _)| i)
+        .collect();
+
+    let mut ocr_meta = serde_json::json!({
+        "engine": engine.name(),
+        "pages_ocr": 0,
+    });
+
+    if !ocr_pages.is_empty() {
+        let rendered = render_pages_png(bytes, dpi)?;
+        let mut merged: Vec<Block> = Vec::new();
+        let mut low_conf = Vec::new();
+        for (page_pos, range) in parsed.page_block_ranges.iter().enumerate() {
+            if ocr_pages.contains(&page_pos) {
+                let png = rendered.get(page_pos).ok_or_else(|| {
+                    crate::Error::from_parse(
+                        crate::Format::Pdf,
+                        anyhow::anyhow!("page {} was not rendered", page_pos + 1),
+                    )
+                })?;
+                let (mut blocks, conf) = engine
+                    .ocr_page_png(png)
+                    .map_err(|e| crate::Error::from_parse(crate::Format::Pdf, anyhow::anyhow!(e)))?;
+                if let Some(conf) = conf {
+                    if conf < 0.60 {
+                        low_conf.push(serde_json::json!(page_pos));
+                    }
+                }
+                for b in &mut blocks {
+                    set_block_index(b, merged.len());
+                    merged.push(b.clone());
+                }
+                ocr_meta["pages_ocr"] = serde_json::json!(ocr_meta["pages_ocr"].as_u64().unwrap_or(0) + 1);
+            } else {
+                for b in &parsed.blocks[range.block_start..range.block_end] {
+                    let mut b = b.clone();
+                    set_block_index(&mut b, merged.len());
+                    merged.push(b);
+                }
+            }
+        }
+        parsed.blocks = merged;
+        ocr_meta["low_confidence_pages"] = serde_json::Value::Array(low_conf);
+    }
+
+    let office = super::ParsedOfficeDocument {
+        blocks: parsed.blocks,
+        images: parsed.images,
+        metadata_json: parsed.metadata_json,
+    };
+    let mut doc = super::finalize(crate::Format::Pdf, office);
+    doc.metadata.pdf_text_quality = Some(quality);
+    if ocr_meta["pages_ocr"].as_u64().unwrap_or(0) > 0 {
+        doc.metadata.extra["ocr"] = ocr_meta;
+    }
+    Ok(doc)
+}
+
+fn set_block_index(b: &mut Block, i: usize) {
+    match b {
+        Block::Heading { block_index, .. }
+        | Block::Paragraph { block_index, .. }
+        | Block::List { block_index, .. }
+        | Block::Table { block_index, .. }
+        | Block::Image { block_index, .. }
+        | Block::Link { block_index, .. }
+        | Block::Note { block_index, .. } => *block_index = i,
+    }
 }
 
 #[cfg(test)]
