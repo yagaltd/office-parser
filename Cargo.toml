@@ -58,9 +58,8 @@ mmap = ["dep:zip", "dep:quick-xml"]
 # PDF
 pdf = ["dep:lopdf"]
 render-pdfium = ["dep:pdfium-render", "dep:image"]
-ocr-indra = []
-# In-process Indra engine over ONNX Runtime (no Python). Implies `ocr-indra`.
-ocr-indra-native = ["ocr-indra", "dep:ort", "dep:image"]
+# In-process Indra engine over ONNX Runtime — the only OCR path (Rust + pdfium).
+ocr-indra-native = ["dep:ort", "dep:image"]
 
 # RTF
 rtf = []

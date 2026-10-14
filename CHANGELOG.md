@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Removed: subprocess OCR engine (Mode A)
+
+- The Python-subprocess path (`pip install indra-ocr`, `INDRA_OCR_BIN`,
+  `--ocr-indra` feature, the JSONL bridge) is removed: the PDF OCR
+  pipeline is Rust-only — in-process ONNX Runtime (`ocr-indra-native`)
+  + pdfium. `--ocr` now errors with instructions when the models are
+  missing instead of falling back to a subprocess.
+
 ### Per-page split output (1 page = 1 document)
 
 - `--split-pages` (PDF): markdown writes `<stem>-p<N>.md` per page, each

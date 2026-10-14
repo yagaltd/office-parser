@@ -15,7 +15,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"
 
-office-parser = { version = "0.2.0", path = "..", features = ["ocr-indra"] }
+office-parser = { version = "0.2.0", path = "..", features = ["ocr-indra-native"] }
 
 [features]
 # In-process Indra engine (Mode B); without it --ocr uses the subprocess engine.

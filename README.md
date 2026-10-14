@@ -115,12 +115,10 @@ and `tests/docx_marks.rs`.
   `pdf_text_quality` (and with `--ocr` recovered per page — mixed
   documents keep text-layer pages and OCR the rest). With the `ocr-indra` feature + `--ocr`,
   flagged documents are instead recovered through the
-  [Indra OCR](https://huggingface.co/datalab-to/indra-ocr) engine —
-  in-process over ONNX Runtime (`ocr-indra-native` feature, models from
-  `INDRA_OCR_MODEL_DIR` or the HF cache, no Python) or as a subprocess
-  (`ocr-indra` feature, `pip install indra-ocr`); either way a page
-  renderer is needed (the `render-pdfium` feature or system
-  `pdftoppm`). Pages are rasterized,
+  [Indra OCR](https://huggingface.co/datalab-to/indra-ocr) engine
+  running in-process over ONNX Runtime (`ocr-indra-native` feature,
+  models from `INDRA_OCR_MODEL_DIR` or the HF cache — Rust + pdfium
+  only, no Python). Pages are rasterized,
   OCR'd, and layout-mapped (headings/paragraphs/lists; page furniture
   dropped); low-confidence pages are reported in
   `metadata.extra["ocr"]["low_confidence_pages"]` for vision-LLM

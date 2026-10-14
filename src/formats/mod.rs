@@ -373,9 +373,8 @@ pub mod pdf {
     }
 }
 
-/// Indra OCR pipeline for scanned PDFs (Mode A: subprocess). Zero new
-/// dependencies — needs `pip install indra-ocr` at runtime.
-#[cfg(all(feature = "pdf", feature = "ocr-indra"))]
+/// Indra OCR options + native engine dispatch for scanned PDFs.
+#[cfg(all(feature = "pdf", feature = "ocr-indra-native"))]
 pub mod pdf_ocr;
 
 /// Native in-process Indra engine over ONNX Runtime (Mode B).

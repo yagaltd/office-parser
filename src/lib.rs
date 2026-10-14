@@ -242,16 +242,13 @@ pub mod pdf {
 
 /// Convenience wrapper: parse a PDF, running the Indra OCR pass when the
 /// document classifies as `ImageOnly`.
-#[cfg(all(feature = "pdf", feature = "ocr-indra"))]
+#[cfg(all(feature = "pdf", feature = "ocr-indra-native"))]
 pub mod pdf_ocr {
     use super::{Document, Result};
-    pub use crate::formats::pdf_ocr::{
-    map_jsonl_to_blocks, ocr_document, parse_auto, parse_auto_split, parse_with_indra,
-    PdfOcrOptions,
-};
+    pub use crate::formats::pdf_ocr::{parse_auto, parse_auto_split, PdfOcrOptions};
 
     pub fn parse(bytes: &[u8]) -> Result<Document> {
-        parse_with_indra(bytes, &PdfOcrOptions::default())
+        parse_auto(bytes, &PdfOcrOptions::default())
     }
 }
 
