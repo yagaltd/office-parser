@@ -28,6 +28,17 @@
   + pdfium. `--ocr` now errors with instructions when the models are
   missing instead of falling back to a subprocess.
 
+### Per-page split fix: every page routed, correct per-page blocks
+
+- Fixed stale block ranges: per-page documents were sliced with the
+  PRE-merge block ranges, so split output could be empty or carry
+  another page's blocks (page 2 = frontmatter only). The merge loop now
+  records each page's blocks at merge time.
+- `--split-pages --ocr` now routes **every** page through the engine
+  (force), not only image-like ones — the user gets the engine's layout
+  output per page regardless of text-layer quality. Text-layer-only
+  splits (no `--ocr`) still use lopdf blocks.
+
 ### Per-page split output (1 page = 1 document)
 
 - `--split-pages` (PDF): markdown writes `<stem>-p<N>.md` per page, each

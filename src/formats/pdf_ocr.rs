@@ -56,6 +56,9 @@ pub fn parse_auto_split(
     if !ocr {
         return crate::formats::pdf::parse_pdf_split(bytes, None, opts.dpi, opts.min_chars, opts.force);
     }
+    // split + ocr routes EVERY page through the engine (the user wants the
+    // engine's layout output per page, not the raw text layer)
+    let force = true;
     let mut engine = crate::formats::indra_native::IndraNative::load().map_err(|e| {
         crate::Error::from_parse(
             crate::Format::Pdf,
@@ -70,7 +73,7 @@ pub fn parse_auto_split(
         Some(&mut engine),
         opts.dpi,
         opts.min_chars,
-        opts.force,
+        force,
     )
 }
 

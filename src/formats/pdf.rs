@@ -2543,11 +2543,14 @@ fn parse_with_page_ocr_inner<'e>(
         .map(|(i, _)| i)
         .collect();
 
+    
+        #[allow(unused_assignments)]
     let mut ocr_meta = serde_json::json!({
         "engine": engine.as_ref().map(|e| e.name()).unwrap_or("none"),
         "pages_ocr": 0,
     });
 
+    let mut pages_from_merge: Vec<Vec<Block>> = Vec::new();
     if !ocr_pages.is_empty() && engine.is_some() {
         // Indra wants full-resolution source pixels (see render_pages_png_opts)
         let rendered = render_pages_png_opts(bytes, dpi, false)?;
@@ -2561,6 +2564,7 @@ fn parse_with_page_ocr_inner<'e>(
         let mut merged: Vec<Block> = Vec::new();
         let mut low_conf = Vec::new();
         for (page_pos, range) in parsed.page_block_ranges.iter().enumerate() {
+            let mut page_vec: Vec<Block> = Vec::new();
             if ocr_pages.contains(&page_pos) {
                 let png = rendered.get(page_pos).ok_or_else(|| {
                     crate::Error::from_parse(
@@ -2584,21 +2588,23 @@ fn parse_with_page_ocr_inner<'e>(
                         low_conf.push(serde_json::json!(page_pos));
                     }
                 }
-                for b in &mut blocks {
-                    set_block_index(b, merged.len());
-                    merged.push(b.clone());
-                }
+                page_vec.append(&mut blocks);
                 ocr_meta["pages_ocr"] = serde_json::json!(ocr_meta["pages_ocr"].as_u64().unwrap_or(0) + 1);
             } else {
-                for b in &parsed.blocks[range.block_start..range.block_end] {
-                    let mut b = b.clone();
-                    set_block_index(&mut b, merged.len());
-                    merged.push(b);
-                }
+                page_vec.extend(parsed.blocks[range.block_start..range.block_end].iter().cloned());
             }
+            let page_start = merged.len();
+            let mut local: Vec<Block> = Vec::new();
+            for (j, mut b) in page_vec.into_iter().enumerate() {
+                set_block_index(&mut b, page_start + j);
+                merged.push(b.clone());
+                local.push(b);
+            }
+            pages_from_merge.push(local);
         }
         parsed.blocks = merged;
         ocr_meta["low_confidence_pages"] = serde_json::Value::Array(low_conf);
+
         if !page_reasons.is_empty() {
             ocr_meta["page_reasons"] = serde_json::Value::Array(page_reasons);
         }
@@ -2619,11 +2625,12 @@ fn parse_with_page_ocr_inner<'e>(
 
     // 1 page = 1 document (page-tagged via metadata.extra["page"])
     let mut pages = Vec::new();
-    for r in &parsed.page_block_ranges {
-        let page_blocks: Vec<Block> = doc.blocks[r.block_start..r.block_end]
-            .iter()
-            .cloned()
-            .collect();
+    for (pos, r) in parsed.page_block_ranges.iter().enumerate() {
+        let page_blocks: Vec<Block> = if pages_from_merge.is_empty() {
+            doc.blocks[r.block_start..r.block_end].to_vec()
+        } else {
+            pages_from_merge.get(pos).cloned().unwrap_or_default()
+        };
         let office = super::ParsedOfficeDocument {
             blocks: page_blocks,
             images: images.clone(),
