@@ -58,6 +58,12 @@ struct Args {
     /// Validated against MorphEditor SLIDE_TRANSITIONS; ignored elsewhere.
     #[arg(long)]
     slide_transition: Option<SlideTransition>,
+
+    /// PDF: OCR scanned pages with the Indra engine (runs only when the
+    /// document classifies as ImageOnly). Requires `pip install indra-ocr`;
+    /// override the binary with INDRA_OCR_BIN. Ignored for other formats.
+    #[arg(long)]
+    ocr: bool,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -123,6 +129,9 @@ fn run(args: Args) -> Result<()> {
         }
         office_parser::Format::Tsv => {
             office_parser::tsv::parse_with_options(&input_bytes, sheet_opts)?
+        }
+        office_parser::Format::Pdf if args.ocr => {
+            office_parser::pdf_ocr::parse(&input_bytes)?
         }
         _ => office_parser::parse_as(&input_bytes, format)?,
     };

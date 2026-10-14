@@ -1,5 +1,28 @@
 ## Unreleased
 
+### PDF OCR — Indra engine (Mode A, feature `ocr-indra`)
+
+- Scanned PDFs (`pdf_text_quality: ImageOnly`) can now be recovered
+  end-to-end inside the parser: render pages → run `indra-ocr`
+  (subprocess; `INDRA_OCR_BIN` override) → map layout JSON to blocks
+  (Title/Section-Header → headings, Text → paragraphs, consecutive
+  List-items merged, page furniture and pictures dropped, unknown labels
+  degrade to paragraphs).
+- Per-page mean line confidence recorded in
+  `metadata.extra["ocr"]` with `low_confidence_pages` for downstream
+  vision-LLM fallback routing.
+- New CLI flag `--ocr` (PDF only). Zero new Rust dependencies — the
+  gate exists so library consumers can exclude the OCR code path.
+- Real-fixture tests: a genuine image-only scanned PDF
+  (`tests/fixtures/pdf_scanned.pdf` — rasterized text pages re-wrapped)
+  plus the engine's actual JSONL output as mapping golden. The
+  end-to-end test auto-skips when no indra binary is present.
+- Note: Indra model weights are OpenRAIL-M licensed (free for research/
+  personal/startups under $20M; not usable competitively with Datalab's
+  API) — review before commercial shipping.
+- Fix pre-existing clippy deny lint in xlsx number-format detection
+  (logically redundant disjunct removed; behavior identical).
+
 ### MorphEditor dialect (`--format markdown`)
 
 - OKF frontmatter on every export: `type: document`, optional

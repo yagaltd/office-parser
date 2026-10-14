@@ -58,6 +58,7 @@ mmap = ["dep:zip", "dep:quick-xml"]
 # PDF
 pdf = ["dep:lopdf"]
 render-pdfium = ["dep:pdfium-render", "dep:image"]
+ocr-indra = []
 
 # RTF
 rtf = []

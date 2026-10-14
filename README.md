@@ -110,11 +110,20 @@ and `tests/docx_marks.rs`.
 
 ### Limitations
 
-- **PDF page images**: PDFs are parsed for text (lopdf) and embedded
-  image objects — pages are **not rasterized**. Scanned/image-only PDFs
-  are flagged via `pdf_text_quality: ImageOnly` so downstream pipelines
-  can OCR them from the extracted embedded scans, but no composed page
-  PNG is produced.
+- **PDF page images**: by default PDFs are parsed for text (lopdf) and
+  embedded image objects; scanned/image-only files are flagged via
+  `pdf_text_quality: ImageOnly`. With the `ocr-indra` feature + `--ocr`,
+  flagged documents are instead recovered through the
+  [Indra OCR](https://huggingface.co/datalab-to/indra-ocr) engine
+  (subprocess, `pip install indra-ocr`; needs a page renderer — the
+  `render-pdfium` feature or system `pdftoppm`). Pages are rasterized,
+  OCR'd, and layout-mapped (headings/paragraphs/lists; page furniture
+  dropped); low-confidence pages are reported in
+  `metadata.extra["ocr"]["low_confidence_pages"]` for vision-LLM
+  fallback. Handwriting and complex tables exceed Indra's envelope —
+  route them to a stronger model using that signal. Indra's weights are
+  OpenRAIL-M licensed (free < $20M revenue/funding; not usable
+  competitively with Datalab's API) — review before commercial use.
 - **Presentations**: slide **transitions** are not auto-detected (an
   explicit `--slide-transition` flag sets the MorphEditor `transition:`
   frontmatter). **WordArt, 3-D, shadows, gradients, animations/timing**

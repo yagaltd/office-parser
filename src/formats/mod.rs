@@ -373,6 +373,11 @@ pub mod pdf {
     }
 }
 
+/// Indra OCR pipeline for scanned PDFs (Mode A: subprocess). Zero new
+/// dependencies — needs `pip install indra-ocr` at runtime.
+#[cfg(all(feature = "pdf", feature = "ocr-indra"))]
+pub mod pdf_ocr;
+
 #[cfg(feature = "json")]
 pub mod json;
 #[cfg(not(feature = "json"))]

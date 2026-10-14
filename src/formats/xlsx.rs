@@ -907,7 +907,7 @@ fn classify_format_code(code: &str) -> Option<DateTimeKind> {
     let has_s = out.contains('s');
     let has_ampm = out.contains("am/pm");
     let has_time = has_h || has_s || has_ampm;
-    let has_date = has_y || has_d || (out.contains('m') && (has_y || has_d));
+    let has_date = has_y || has_d; // `m` alone implies nothing; y/d already covered
 
     match (has_date, has_time) {
         (true, true) => Some(DateTimeKind::DateTime),
