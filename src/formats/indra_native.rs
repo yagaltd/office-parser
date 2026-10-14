@@ -379,6 +379,35 @@ fn pad_batch(crops: &[(usize, Vec<f32>)]) -> (Vec<f32>, Vec<i64>, usize) {
     (data, widths, wm)
 }
 
+/// rec_preproc.width_batches — group line indices into batches that keep
+/// batch width bounded. Narrowest first; a batch closes at MAX_BATCH lines,
+/// when the next line is wider than MAX_RATIO x the batch's first line
+/// (widths below MIN_WIDTH count as MIN_WIDTH), or when lines x width would
+/// pass MAX_AREA pixel columns.
+fn width_batches(crops: &[(usize, Vec<f32>)]) -> Vec<Vec<usize>> {
+    const MAX_BATCH: usize = 48;
+    const MIN_WIDTH: usize = 128;
+    const MAX_RATIO: f32 = 8.0;
+    const MAX_AREA: usize = 512 * 512;
+    let mut order: Vec<usize> = (0..crops.len()).collect();
+    order.sort_by_key(|&i| crops[i].0);
+    let mut batches: Vec<Vec<usize>> = Vec::new();
+    for &i in &order {
+        let w = crops[i].0.max(MIN_WIDTH);
+        match batches.last_mut() {
+            Some(b)
+                if b.len() < MAX_BATCH
+                    && (w as f32) <= crops[b[0]].0.max(MIN_WIDTH) as f32 * MAX_RATIO
+                    && b.len() * w <= MAX_AREA =>
+            {
+                b.push(i)
+            }
+            _ => batches.push(vec![i]),
+        }
+    }
+    batches
+}
+
 // --- reading order (order_post.py) ---------------------------------------
 
 const N_FEATS: usize = 16;
@@ -1077,9 +1106,13 @@ impl IndraNative {
         if crops.is_empty() {
             return Ok(out);
         }
-        for (chunk_start, chunk) in crops.chunks(16).enumerate() {
-            let chunk_start = chunk_start * 16;
-            let (data, widths, wm) = pad_batch(chunk);
+        // width-aware batching (rec_preproc.width_batches port): never let
+        // lines x width blow the arena — Python measured 64 x 4096px = 5 GB.
+        for batch in width_batches(&crops) {
+            let chunk: Vec<(usize, Vec<f32>)> =
+                batch.iter().map(|&i| crops[i].clone()).collect();
+            let _ = batch[0];
+            let (data, widths, wm) = pad_batch(&chunk);
             let b = chunk.len() as i64;
             let x = ort::value::Tensor::from_array(([b, 1, LINE_HEIGHT as i64, wm as i64], data))
                 .map_err(|e| format!("rec input: {e:?}"))?;
@@ -1100,8 +1133,9 @@ impl IndraNative {
                 .map_err(|e| format!("rec lengths: {e:?}"))?;
             let t = ids_shape.iter().nth(1).copied().unwrap_or(0) as usize;
             for k in 0..chunk.len() {
+                let orig = batch[k];
                 let n = (lengths[k].max(0) as usize).min(t);
-                let (bx0, _, bx1, by0, by1) = boxes[chunk_start + k];
+                let (bx0, _, bx1, by0, by1) = boxes[orig];
                 let bh = (by1 - by0).max(1.0);
                 // token page-x: timestep → ink px → crop px (rec_preproc decode)
                 let ix0 = (bx0 - PAD_X * bh).floor();
@@ -1125,7 +1159,7 @@ impl IndraNative {
                 }
                 let conf = if conf_n > 0 { conf_sum / conf_n as f32 } else { 0.0 };
                 let text: String = toks.iter().map(|(s, _)| s.as_str()).collect();
-                out[chunk_start + k] = LineRec {
+                out[orig] = LineRec {
                     box_: (bx0, by0, bx1, by1),
                     text: if conf >= MIN_CONF { text } else { String::new() },
                     conf,

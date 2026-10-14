@@ -2409,6 +2409,62 @@ pub fn parse_with_page_ocr(
     parse_with_page_ocr_opts(bytes, engine, dpi, PAGE_TEXT_THRESHOLD, false)
 }
 
+/// textlayer.py trust verdicts per page: Some(reason) = untrust the text
+/// layer. Invisible render-mode-3 text = OCR layer over a scan; bad
+/// characters (replacement / private-use / control) = broken font map.
+/// Requires the pdfium feature; returns None (skip checks) without it.
+#[cfg(feature = "render-pdfium")]
+fn pdfium_text_layer_reasons(bytes: &[u8]) -> Option<Vec<Option<String>>> {
+    use pdfium_render::prelude::*;
+    let pdfium = pdfium_handle()?;
+    let pdfium = pdfium.lock().ok()?;
+    let doc = pdfium.load_pdf_from_byte_slice(bytes, None).ok()?;
+    let mut out = Vec::new();
+    for page in doc.pages().iter() {
+        let text = match page.text() {
+            Ok(t) => t,
+            Err(_) => {
+                out.push(Some("no text layer".to_string()));
+                continue;
+            }
+        };
+        let mut total = 0usize;
+        let mut invisible = 0usize;
+        let mut bad = 0usize;
+        {
+            for ch in text.chars().iter() {
+                total += 1;
+                match ch.unicode_char() {
+                    Some(c) => {
+                        let bad_char = c == '\u{FFFD}'
+                            || ('\u{E000}'..='\u{F8FF}').contains(&c)
+                            || ('\u{FFF0}'..='\u{FFFF}').contains(&c)
+                            || (c.is_control() && c != '\t' && c != '\n' && c != '\r');
+                        if bad_char {
+                            bad += 1;
+                        }
+                    }
+                    None => bad += 1,
+                }
+                if ch.render_mode().ok() == Some(PdfPageTextRenderMode::Invisible) {
+                    invisible += 1;
+                }
+            }
+        }
+        let verdict = if total == 0 {
+            Some("no text layer".to_string())
+        } else if invisible as f32 / total as f32 > 0.05 {
+            Some(format!("invisible text {}% (OCR layer)", invisible * 100 / total))
+        } else if bad as f32 / total as f32 > 0.005 {
+            Some(format!("broken font map ({}% bad chars)", bad * 100 / total))
+        } else {
+            None
+        };
+        out.push(verdict);
+    }
+    Some(out)
+}
+
 /// Per-page alphanumeric char counts (extraction order == page order).
 fn page_char_counts(parsed: &ParsedPdfDocument) -> Vec<usize> {
     parsed
@@ -2458,10 +2514,32 @@ fn parse_with_page_ocr_inner<'e>(
         parse_pdf_full(bytes).map_err(|e| crate::Error::from_parse(crate::Format::Pdf, e))?;
     let quality = classify_pdf_text_quality(&parsed.blocks);
     let counts = page_char_counts(&parsed);
+    // Text-layer trust checks (port of indra_ocr textlayer.py): invisible
+    // render-mode-3 text = OCR layer over a scan; replacement/private-use/
+    // control chars = broken font map. Either verdict sends the page to OCR
+    // even when the char count looks rich. (no-ink check pending: needs
+    // char-box geometry.)
+    let trust_reasons: Vec<Option<String>> = if force {
+        Vec::new()
+    } else {
+        pdfium_text_layer_reasons(bytes).unwrap_or_default()
+    };
+    let mut page_reasons: Vec<serde_json::Value> = Vec::new();
     let ocr_pages: Vec<usize> = counts
         .iter()
         .enumerate()
-        .filter(|(_, c)| force || **c < min_chars)
+        .filter(|(i, c)| {
+            if force || **c < min_chars {
+                return true;
+            }
+            match trust_reasons.get(*i).and_then(|r| r.as_ref()) {
+                Some(reason) => {
+                    page_reasons.push(serde_json::json!({"page": i + 1, "reason": reason}));
+                    true
+                }
+                None => false,
+            }
+        })
         .map(|(i, _)| i)
         .collect();
 
@@ -2521,6 +2599,9 @@ fn parse_with_page_ocr_inner<'e>(
         }
         parsed.blocks = merged;
         ocr_meta["low_confidence_pages"] = serde_json::Value::Array(low_conf);
+        if !page_reasons.is_empty() {
+            ocr_meta["page_reasons"] = serde_json::Value::Array(page_reasons);
+        }
     }
 
     let images = parsed.images;
