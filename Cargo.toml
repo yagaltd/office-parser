@@ -59,6 +59,8 @@ mmap = ["dep:zip", "dep:quick-xml"]
 pdf = ["dep:lopdf"]
 render-pdfium = ["dep:pdfium-render", "dep:image"]
 ocr-indra = []
+# In-process Indra engine over ONNX Runtime (no Python). Implies `ocr-indra`.
+ocr-indra-native = ["ocr-indra", "dep:ort", "dep:image"]
 
 # RTF
 rtf = []
@@ -84,3 +86,4 @@ quick-xml = { version = "0.39", optional = true }
 lopdf = { version = "0.35", optional = true }
 pdfium-render = { version = "0.9", optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+ort = { version = "=2.0.0-rc.13", optional = true }  # pinned: rc.14 changes the Session API

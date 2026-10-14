@@ -214,6 +214,17 @@ fn parse_jsonl(bytes: &[u8]) -> Vec<IndraPage> {
         .collect()
 }
 
+/// Parse a scanned PDF with the best available Indra engine: the native
+/// ONNX pipeline when compiled with `ocr-indra-native` and its models are
+/// present, else the subprocess engine (Mode A).
+pub fn parse_auto(bytes: &[u8], opts: &PdfOcrOptions) -> crate::Result<crate::Document> {
+    #[cfg(feature = "ocr-indra-native")]
+    if let Ok(mut engine) = crate::formats::indra_native::IndraNative::load() {
+        return engine.parse_document(bytes, opts.min_page_confidence);
+    }
+    parse_with_indra(bytes, opts)
+}
+
 /// Parse a PDF, and when it is detected as [`PdfTextQuality::ImageOnly`],
 /// recover its content through the Indra OCR engine.
 pub fn parse_with_indra(bytes: &[u8], opts: &PdfOcrOptions) -> crate::Result<crate::Document> {

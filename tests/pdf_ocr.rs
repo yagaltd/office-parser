@@ -141,3 +141,55 @@ fn which_available(bin: &str) -> bool {
         })
         .unwrap_or(false)
 }
+
+/// Mode B: the native (in-process ort) engine on the same fixture must
+/// reproduce the Python engine's content. Skips without model files.
+#[test]
+fn native_engine_end_to_end() {
+    let Ok(mut engine) = office_parser::IndraNative::load() else {
+        eprintln!(
+            "skipping: Indra models unavailable ({})",
+            office_parser::IndraNative::load().err().unwrap_or_default()
+        );
+        return;
+    };
+    let bytes = std::fs::read(SCAN).expect("fixture");
+    let doc = engine
+        .parse_document(&bytes, 0.60)
+        .expect("native ocr parse");
+    use office_parser::document_ast::Block;
+
+    let headings: Vec<&str> = doc
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            Block::Heading { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    // The Python engine (golden JSONL) finds all three section headers.
+    for expected in ["Quarterly Field Report", "Network Maintenance Summary", "Recommendations"] {
+        assert!(
+            headings.iter().any(|h| h.contains(expected)),
+            "missing heading {expected:?}; got {headings:?}"
+        );
+    }
+    let paragraphs: Vec<&str> = doc
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            Block::Paragraph { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        paragraphs
+            .iter()
+            .any(|t| t.contains("eleven hours, split over four maintenance windows")),
+        "got {paragraphs:?}"
+    );
+
+    let ocr = doc.metadata.extra.get("ocr").expect("ocr metadata");
+    assert_eq!(ocr["engine"], "indra-native");
+    assert_eq!(ocr["pages_ocr"], 2);
+}

@@ -34,9 +34,12 @@ document classifies as `ImageOnly`):
 office-parser-cli scan.pdf --out results/ --ocr
 ```
 
-- Requires `pip install indra-ocr` (models download on first run) and a
-  page renderer: build with `--features render-pdfium` or have
-  `pdftoppm` on PATH.
+- Two engines: built with `--features ocr-indra-native`, the Indra
+  pipeline runs in-process over ONNX Runtime (models from
+  `INDRA_OCR_MODEL_DIR` or the Hugging Face cache — no Python).
+  Otherwise it shells out to `pip install indra-ocr`.
+- A page renderer is required either way: build with
+  `--features render-pdfium` or have `pdftoppm` on PATH.
 - Override the binary with `INDRA_OCR_BIN` (e.g. a venv install).
 - Output flows through the normal markdown/JSON render path; OCR
   provenance and low-confidence pages are recorded in

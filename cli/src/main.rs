@@ -131,7 +131,7 @@ fn run(args: Args) -> Result<()> {
             office_parser::tsv::parse_with_options(&input_bytes, sheet_opts)?
         }
         office_parser::Format::Pdf if args.ocr => {
-            office_parser::pdf_ocr::parse(&input_bytes)?
+            office_parser::pdf_ocr::parse_auto(&input_bytes, &Default::default())?
         }
         _ => office_parser::parse_as(&input_bytes, format)?,
     };

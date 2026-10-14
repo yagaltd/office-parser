@@ -5,6 +5,8 @@ pub mod render;
 pub mod spreadsheet;
 
 pub use document::{Document, DocumentMetadata, ExtractedImage, Format, PdfTextQuality};
+#[cfg(feature = "ocr-indra-native")]
+pub use formats::indra_native::IndraNative;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -243,7 +245,10 @@ pub mod pdf {
 #[cfg(all(feature = "pdf", feature = "ocr-indra"))]
 pub mod pdf_ocr {
     use super::{Document, Result};
-    pub use crate::formats::pdf_ocr::{map_jsonl_to_blocks, ocr_document, parse_with_indra, PdfOcrOptions};
+    pub use crate::formats::pdf_ocr::{
+    map_jsonl_to_blocks, ocr_document, parse_auto, parse_with_indra, PdfOcrOptions,
+};
+
     pub fn parse(bytes: &[u8]) -> Result<Document> {
         parse_with_indra(bytes, &PdfOcrOptions::default())
     }

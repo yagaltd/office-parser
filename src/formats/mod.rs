@@ -378,6 +378,10 @@ pub mod pdf {
 #[cfg(all(feature = "pdf", feature = "ocr-indra"))]
 pub mod pdf_ocr;
 
+/// Native in-process Indra engine over ONNX Runtime (Mode B).
+#[cfg(all(feature = "pdf", feature = "ocr-indra-native"))]
+pub mod indra_native;
+
 #[cfg(feature = "json")]
 pub mod json;
 #[cfg(not(feature = "json"))]

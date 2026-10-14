@@ -1,5 +1,24 @@
 ## Unreleased
 
+### PDF OCR — native Indra engine (Mode B, feature `ocr-indra-native`)
+
+- The full Indra OCR pipeline ported to Rust over ONNX Runtime
+  (`ort`, pinned rc.13): line detection (connected-component core
+  decoding + adaptive second pass), CTC recognition (graph-decoded
+  ids/conf/lengths), reading order and block classes (OrderNet heads:
+  average-linkage same-block clustering, XY-cut / top-down inner
+  orders, insertion-sweep pairwise ordering), and paragraph assembly
+  with hyphen-joining. No Python, no subprocess.
+- Models resolve from `INDRA_OCR_MODEL_DIR` or the standard Hugging
+  Face cache; vocab comes from the engine's own `meta.json`.
+- `--ocr` now prefers the native engine when built with the feature
+  and models are present, falling back to the subprocess engine.
+- V1 omissions vs the Python engine (degrade gracefully): orientation
+  correction, deskew, CJK/script recognizers, math, CenterMask
+  windows, table cell splitting, digital-text-layer passthrough.
+- Validated against the Python engine's own JSONL output on the
+  scanned-fixture corpus (same headings, same paragraph text).
+
 ### PDF OCR — Indra engine (Mode A, feature `ocr-indra`)
 
 - Scanned PDFs (`pdf_text_quality: ImageOnly`) can now be recovered

@@ -114,9 +114,12 @@ and `tests/docx_marks.rs`.
   embedded image objects; scanned/image-only files are flagged via
   `pdf_text_quality: ImageOnly`. With the `ocr-indra` feature + `--ocr`,
   flagged documents are instead recovered through the
-  [Indra OCR](https://huggingface.co/datalab-to/indra-ocr) engine
-  (subprocess, `pip install indra-ocr`; needs a page renderer — the
-  `render-pdfium` feature or system `pdftoppm`). Pages are rasterized,
+  [Indra OCR](https://huggingface.co/datalab-to/indra-ocr) engine —
+  in-process over ONNX Runtime (`ocr-indra-native` feature, models from
+  `INDRA_OCR_MODEL_DIR` or the HF cache, no Python) or as a subprocess
+  (`ocr-indra` feature, `pip install indra-ocr`); either way a page
+  renderer is needed (the `render-pdfium` feature or system
+  `pdftoppm`). Pages are rasterized,
   OCR'd, and layout-mapped (headings/paragraphs/lists; page furniture
   dropped); low-confidence pages are reported in
   `metadata.extra["ocr"]["low_confidence_pages"]` for vision-LLM
