@@ -2470,7 +2470,6 @@ mod tests {
     use super::cleanup_pdf_text;
 
     #[test]
-    #[test]
     fn clamp_dpi_backs_off_by_sqrt() {
         // A4 (612x792 pts): @300 dpi = 8.4 MP → factor 0.218 → 65 → floor 72
         assert_eq!(super::clamp_dpi_to_budget(612.0, 792.0, 300), 72);
@@ -2493,6 +2492,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn pdf_cleanup_dehyphenates_and_splits_glued_year_citations() {
         let s = "hydro-\n gen 203070 202312 20250131";
         let out = cleanup_pdf_text(s);

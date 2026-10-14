@@ -36,9 +36,9 @@ const MIN_CONF: f32 = 0.5;
 const ADAPTIVE_MIN_H: f32 = 9.0;
 const ADAPTIVE_TARGET_H: f32 = 12.0;
 const ADAPTIVE_MAX_SIDE: f32 = 2048.0;
-/// Cut a detected line at a wider gap (label rule outside tables).
-const SPLIT_GAP: f32 = 3.0;
 /// Cut a table line into cells at a wider gap (label rule in tables).
+/// (The text-line `SPLIT_GAP = 3.0` split of pipeline.py assemble is not
+/// ported yet — merged-column text lines stay whole.)
 const CELL_GAP: f32 = 1.8;
 
 // BLOCK_CLASSES — the OrderNet layout heads' class ids (order_post.py).

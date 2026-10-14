@@ -51,7 +51,7 @@ fn main() {
         text.chars().count(),
         document.images.len()
     );
-    for (i, image) in document.images.iter().enumerate() {
+    for (_i, image) in document.images.iter().enumerate() {
         let name = format!(
             "{out_dir}/embedded-{}.{}",
             image.id,

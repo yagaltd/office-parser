@@ -233,13 +233,12 @@ pub fn parse_auto(bytes: &[u8], opts: &PdfOcrOptions) -> crate::Result<crate::Do
 }
 
 /// Subprocess engine: one indra-ocr call per routed page.
-struct SubprocessOcr {
-    opts: PdfOcrOptions,
-}
+/// (dpi/thresholds flow through `parse_with_page_ocr_opts`, not here.)
+struct SubprocessOcr;
 
 impl SubprocessOcr {
-    fn new(opts: PdfOcrOptions) -> Self {
-        Self { opts }
+    fn new() -> Self {
+        Self
     }
 }
 
@@ -298,7 +297,7 @@ fn set_block_index_pub(b: &mut Block, i: usize) {
 pub fn parse_with_indra(bytes: &[u8], opts: &PdfOcrOptions) -> crate::Result<crate::Document> {
     super::pdf::parse_with_page_ocr_opts(
         bytes,
-        &mut SubprocessOcr::new(opts.clone()),
+        &mut SubprocessOcr::new(),
         opts.dpi,
         opts.min_chars,
         opts.force,
