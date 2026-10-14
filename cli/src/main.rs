@@ -157,26 +157,19 @@ fn run(args: Args) -> Result<()> {
         office_parser::Format::Tsv => {
             (office_parser::tsv::parse_with_options(&input_bytes, sheet_opts)?, None)
         }
-        office_parser::Format::Pdf if args.split_pages => {
+        office_parser::Format::Pdf => {
             let opts = office_parser::pdf_ocr::PdfOcrOptions {
                 min_chars: args.ocr_min_chars,
                 force: args.ocr_force,
                 ..Default::default()
             };
-            let (doc, page_docs) =
-                office_parser::pdf_ocr::parse_auto_split(&input_bytes, &opts, args.ocr)?;
-            (doc, Some(page_docs))
-        }
-        office_parser::Format::Pdf if args.ocr => {
-            let doc = office_parser::pdf_ocr::parse_auto(
+            let (doc, page_docs) = office_parser::pdf_ocr::parse_auto_split(
                 &input_bytes,
-                &office_parser::pdf_ocr::PdfOcrOptions {
-                    min_chars: args.ocr_min_chars,
-                    force: args.ocr_force,
-                    ..Default::default()
-                },
+                &opts,
+                args.ocr,
+                args.split_pages,
             )?;
-            (doc, None)
+            (doc, Some(page_docs))
         }
         _ => {
             let doc = office_parser::parse_as(&input_bytes, format)?;
@@ -266,7 +259,7 @@ fn run(args: Args) -> Result<()> {
             }
             std::fs::write(&out_path, md)
                 .with_context(|| format!("write {}", out_path.display()))?;
-            if let Some(pages) = &page_docs {
+            if let (true, Some(pages)) = (args.split_pages, &page_docs) {
                 for (page_no, page_doc) in pages {
                     let pmd = office_parser::render::to_morph_markdown(page_doc);
                     let mut pmd = pmd;

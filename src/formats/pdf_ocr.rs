@@ -40,7 +40,7 @@ impl Default for PdfOcrOptions {
 /// Parse a scanned PDF with the native engine. Errors when the models are
 /// unavailable (set `INDRA_OCR_MODEL_DIR` or download via huggingface_hub).
 pub fn parse_auto(bytes: &[u8], opts: &PdfOcrOptions) -> crate::Result<crate::Document> {
-    parse_auto_split(bytes, opts, true).map(|(doc, _)| doc)
+    parse_auto_split(bytes, opts, true, false).map(|(doc, _)| doc)
 }
 
 /// [`parse_auto`] plus per-page splitting (1 page = 1 document). Without
@@ -49,6 +49,7 @@ pub fn parse_auto_split(
     bytes: &[u8],
     opts: &PdfOcrOptions,
     ocr: bool,
+    split: bool,
 ) -> crate::Result<(
     crate::Document,
     Vec<(u32, crate::Document)>,
@@ -57,8 +58,9 @@ pub fn parse_auto_split(
         return crate::formats::pdf::parse_pdf_split(bytes, None, opts.dpi, opts.min_chars, opts.force);
     }
     // split + ocr routes EVERY page through the engine (the user wants the
-    // engine's layout output per page, not the raw text layer)
-    let force = true;
+    // engine's layout output per page, not the raw text layer); a plain
+    // --ocr run keeps auto routing (trust checks + char threshold)
+    let force = opts.force || split;
     let mut engine = crate::formats::indra_native::IndraNative::load().map_err(|e| {
         crate::Error::from_parse(
             crate::Format::Pdf,

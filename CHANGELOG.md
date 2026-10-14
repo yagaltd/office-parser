@@ -28,6 +28,15 @@
   + pdfium. `--ocr` now errors with instructions when the models are
   missing instead of falling back to a subprocess.
 
+### JSONL default for PDF JSON output
+
+- `--format json` on a PDF now always writes `<stem>.jsonl` (one
+  document per line, `metadata.extra.page = N`) alongside the combined
+  `<stem>.json` — consumers ingest paginated by default. Markdown
+  per-page files still require `--split-pages`; `--page-markers` still
+  delimits the combined md. Internally the PDF parse always produces
+  per-page documents; md/json/jsonl are views over them.
+
 ### Page markers + render progress
 
 - `--page-markers` (PDF + `--split-pages`): the combined markdown is
