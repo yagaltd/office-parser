@@ -204,3 +204,33 @@ fn native_orientation_recovers_rotated_scan() {
         "rotated scan not recovered: {joined:?}"
     );
 }
+
+/// Session C: the script lane — CJK lines route through rec_cjk.onnx and
+/// come back as Chinese text, not mojibake.
+#[test]
+fn native_cjk_script_lane() {
+    let Ok(mut engine) = office_parser::IndraNative::load() else {
+        eprintln!("skipping: Indra models unavailable");
+        return;
+    };
+    let bytes = std::fs::read("tests/fixtures/pdf_cjk_scan.pdf").expect("fixture");
+    let doc = engine.parse_document(&bytes, 0.30).expect("cjk ocr");
+    let joined: String = doc
+        .blocks
+        .iter()
+        .map(|b| match b {
+            office_parser::document_ast::Block::Paragraph { text, .. }
+            | office_parser::document_ast::Block::Heading { text, .. } => text.clone(),
+            _ => String::new(),
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let cjk_chars = joined
+        .chars()
+        .filter(|c| ('\u{4E00}'..='\u{9FFF}').contains(c))
+        .count();
+    assert!(
+        cjk_chars >= 6,
+        "expected CJK text recovered, got {cjk_chars} hanzi in {joined:?}"
+    );
+}

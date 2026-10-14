@@ -123,6 +123,8 @@ struct Meta {
     /// The vocab is a JSON-encoded string inside meta.json (double-encoded).
     #[serde(default)]
     vocab: Option<String>,
+    #[serde(default)]
+    vocab_cjk: Option<String>,
 }
 
 fn default_long_side() -> i64 {
@@ -1050,6 +1052,9 @@ pub struct IndraNative {
     det_long_side: i64,
     rec_height: usize,
     orient: Option<ort::session::Session>,
+    script: Option<ort::session::Session>,
+    rec_cjk: Option<ort::session::Session>,
+    vocab_cjk: Vec<String>,
     min_page_confidence: f64,
     last_page_confidence: Option<f64>,
 }
@@ -1116,6 +1121,14 @@ impl IndraNative {
             order: session(&dir.join("order.onnx")).ok(),
             vocab,
             orient: session(&dir.join("orient.onnx")).ok(),
+            script: session(&dir.join("script.onnx")).ok(),
+            rec_cjk: session(&dir.join("rec_cjk.onnx")).ok(),
+            vocab_cjk: meta
+                .vocab_cjk
+                .as_deref()
+                .and_then(|v| serde_json::from_str::<VocabJson>(v).ok())
+                .map(|v| v.chars)
+                .unwrap_or_default(),
             det_long_side: meta.det_long_side,
             rec_height: meta.rec_height as usize,
             min_page_confidence: super::pdf_ocr::DEFAULT_MIN_PAGE_CONFIDENCE,
@@ -1204,9 +1217,58 @@ impl IndraNative {
         if crops.is_empty() {
             return Ok(out);
         }
+        // script lane (pipeline.py hanzi_lines): lines holding Chinese go to
+        // rec_cjk.onnx with the CJK vocab; the rest stay on rec.onnx.
+        let hanzi: Option<Vec<bool>> = match (self.script.as_mut(), self.rec_cjk.is_some()) {
+            (Some(script), true) if !crops.is_empty() => {
+                let mut out = vec![false; crops.len()];
+                for batch in width_batches(&crops) {
+                    let chunk: Vec<(usize, Vec<f32>)> =
+                        batch.iter().map(|&i| crops[i].clone()).collect();
+                    let (data, widths, wm) = pad_batch(&chunk);
+                    let b = chunk.len() as i64;
+                    let x = ort::value::Tensor::from_array((
+                        [b, 1, LINE_HEIGHT as i64, wm as i64],
+                        data,
+                    ))
+                    .map_err(|e| format!("script input: {e:?}"))?;
+                    let w = ort::value::Tensor::from_array((vec![b], widths))
+                        .map_err(|e| format!("script widths: {e:?}"))?;
+                    let outputs = script
+                        .run(ort::inputs!["x" => x, "widths" => w])
+                        .map_err(|e| format!("script run: {e:?}"))?;
+                    let (_, p) = outputs["p"]
+                        .try_extract_tensor::<f32>()
+                        .map_err(|e| format!("script p: {e:?}"))?;
+                    for (k, &j) in batch.iter().enumerate() {
+                        out[j] = p[k] > 0.5;
+                    }
+                }
+                Some(out)
+            }
+            _ => None,
+        };
         // width-aware batching (rec_preproc.width_batches port): never let
         // lines x width blow the arena — Python measured 64 x 4096px = 5 GB.
         for batch in width_batches(&crops) {
+            let use_cjk = hanzi.as_ref().map(|h| h[batch[0]]).unwrap_or(false);
+            // a width batch can straddle scripts only when the flag flips
+            // mid-batch; split conservatively by majority flag of the batch
+            let batch: Vec<usize> = match hanzi.as_ref() {
+                Some(h) => {
+                    let (cjk, lat): (Vec<usize>, Vec<usize>) =
+                        batch.iter().partition(|&&i| h[i]);
+                    let pick = if cjk.len() >= lat.len() { cjk } else { lat };
+                    if use_cjk != h[batch[0]] {
+                        pick
+                    } else if pick.len() == batch.len() {
+                        batch
+                    } else {
+                        pick
+                    }
+                }
+                None => batch,
+            };
             let chunk: Vec<(usize, Vec<f32>)> =
                 batch.iter().map(|&i| crops[i].clone()).collect();
             let _ = batch[0];
@@ -1216,10 +1278,16 @@ impl IndraNative {
                 .map_err(|e| format!("rec input: {e:?}"))?;
             let w = ort::value::Tensor::from_array((vec![b], widths))
                 .map_err(|e| format!("rec widths: {e:?}"))?;
-            let outputs = self
-                .rec
-                .run(ort::inputs!["x" => x, "widths" => w])
-                .map_err(|e| format!("rec run: {e:?}"))?;
+            let rec_sess: Option<&mut ort::session::Session> = if use_cjk { self.rec_cjk.as_mut() } else { None };
+            let outputs = match rec_sess {
+                Some(sess) => sess
+                    .run(ort::inputs!["x" => x, "widths" => w])
+                    .map_err(|e| format!("rec_cjk run: {e:?}"))?,
+                None => self
+                    .rec
+                    .run(ort::inputs!["x" => x, "widths" => w])
+                    .map_err(|e| format!("rec run: {e:?}"))?,
+            };
             let (ids_shape, ids) = outputs["ids"]
                 .try_extract_tensor::<i64>()
                 .map_err(|e| format!("rec ids: {e:?}"))?;
@@ -1247,7 +1315,12 @@ impl IndraNative {
                 for i in 0..n {
                     let id = ids[k * t + i];
                     if id != 0 && id != prev {
-                        let tok = self.vocab.get(id as usize - 1).cloned().unwrap_or_default();
+                        let vocab = if use_cjk && !self.vocab_cjk.is_empty() {
+                            &self.vocab_cjk
+                        } else {
+                            &self.vocab
+                        };
+                        let tok = vocab.get(id as usize - 1).cloned().unwrap_or_default();
                         let px = ix0 as f32 + (i as f32 + 0.5) * stride * f;
                         toks.push((tok, px));
                         conf_sum += confs[k * t + i];

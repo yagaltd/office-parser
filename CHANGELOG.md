@@ -1,5 +1,17 @@
 ## Unreleased
 
+### Session C: script/CJK lane (pipeline.py hanzi_lines port)
+
+- script.onnx classifies each line crop (p > 0.5 = holds Chinese);
+  CJK lines route to rec_cjk.onnx with the engine's vocab_cjk (also
+  from meta.json) — Chinese text comes back as hanzi instead of
+  mojibake, Latin lines stay on rec.onnx. Batches partition
+  conservatively by majority flag. New fixture pdf_cjk_scan.pdf
+  (Noto Sans CJK rasterized) with a hanzi-count assertion.
+- CenterMask line windows (mask.onnx) deferred: the model is not in
+  the standard bundle, so there is no ground truth to validate
+  against; upstream treats it as optional too.
+
 ### Session B: orientation + deskew (pipeline.py upright port)
 
 - orient.onnx (768px square ink map, argmax > 0.95) turns quarter/half-
