@@ -65,6 +65,15 @@
 - Earlier stderr feedback: `rendering N page(s) at D dpi` prints before
   the pdfium render pass (the previously silent few seconds).
 
+### Indra revision: adopted v3.1.1
+
+- Resolver now picks the `v3.1.1` HF tag (2026-10-15). All six core
+  model ONNX files are byte-identical to v3.1 (verified by sha256) —
+  outputs unchanged: 6/6 fixture tests and the 4-PDF corpus
+  (51 pages, 66,746 bytes combined markdown) identical. The two added
+  files in v3.1.1 are outside this port's surface. New-format
+  snapshots (`rec_window`) remain rejected.
+
 ### Alternative runtime: rten (feature `ocr-rten`)
 
 - The Indra pipeline now runs on **rten** (robertknight's pure-Rust ONNX
