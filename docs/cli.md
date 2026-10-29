@@ -41,7 +41,11 @@ office-parser-cli scan.pdf --out results/ --ocr
   the Hugging Face cache — no Python, no external OCR binary).
   Alternative pure-Rust runtime: `--features ocr-rten` +
   `INDRA_RUNTIME=rten` (convert models once with `rten-convert` into
-  `~/.cache/office-parser/indra-rten/`).
+  `~/.cache/office-parser/indra-rten/`). Models: Indra `v3.1.1`;
+  `rec_window` snapshots (newer format) are rejected.
+  Alternative pure-Rust renderer: `--features render-hayro` +
+  `OFFICE_PARSER_RENDERER=hayro` (5-10% less content than pdfium on
+  dense scans — pdfium stays the quality default).
 - A page renderer is required: `--features render-pdfium` (preferred —
   engine-faithful pixels) or `pdftoppm` on PATH.
 - Output flows through the normal markdown/JSON render path.

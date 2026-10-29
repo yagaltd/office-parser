@@ -91,8 +91,16 @@ office-parser-cli bundle.pdf --out ./output --format json
   `--ocr-min-chars` go to OCR; text-rich pages keep their text layer.
   `--ocr-force` overrides the checks entirely.
 - Engine: in-process ONNX Runtime (`--features ocr-indra-native`);
-  rendering via pdfium (`--features render-pdfium`, preferred) or
-  `pdftoppm`. Sideways scans are turned upright and deskewed;
+  rendering via pdfium (`--features render-pdfium`, preferred),
+  hayro (`--features render-hayro`, pure-Rust fallback; select with
+  `OFFICE_PARSER_RENDERER=hayro`) or `pdftoppm`. Sideways scans are
+  turned upright and deskewed;
+- Runtime A/B: `--features ocr-rten` +
+  `INDRA_RUNTIME=rten` switches the model runner to rten (pure Rust);
+  models convert once via `rten-convert` into
+  `~/.cache/office-parser/indra-rten/`. Models: Indra `v3.1.1` (auto-
+  resolved from the Hugging Face cache; `rec_window` snapshots are
+  rejected).
   CJK lines route through the CJK recognizer.
 - Provenance lands in `metadata.extra["ocr"]`: engine, per-page trust
   verdicts, low-confidence pages (the vision-LLM escalation signal).
