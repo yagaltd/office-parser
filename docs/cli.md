@@ -39,6 +39,9 @@ office-parser-cli scan.pdf --out results/ --ocr
 - Rust-only: the Indra pipeline runs **in-process** over ONNX Runtime
   (`--features ocr-indra-native`; models from `INDRA_OCR_MODEL_DIR` or
   the Hugging Face cache — no Python, no external OCR binary).
+  Alternative pure-Rust runtime: `--features ocr-rten` +
+  `INDRA_RUNTIME=rten` (convert models once with `rten-convert` into
+  `~/.cache/office-parser/indra-rten/`).
 - A page renderer is required: `--features render-pdfium` (preferred —
   engine-faithful pixels) or `pdftoppm` on PATH.
 - Output flows through the normal markdown/JSON render path.

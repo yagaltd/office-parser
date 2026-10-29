@@ -69,6 +69,16 @@ fn resolve_model_dir() -> Result<PathBuf, String> {
     if let Some(dir) = std::env::var_os("INDRA_OCR_MODEL_DIR") {
         let p = PathBuf::from(dir);
         if needed_files(&p).is_empty() {
+            if std::fs::read_to_string(p.join("meta.json"))
+                .map(|m| m.contains("\"rec_window\""))
+                .unwrap_or(false)
+            {
+                return Err(format!(
+                    "{} is a new-format Indra revision (windowed recognition); \
+                     this port supports the v3.1 layout",
+                    p.display()
+                ));
+            }
             return Ok(p);
         }
         return Err(format!(
@@ -83,7 +93,11 @@ fn resolve_model_dir() -> Result<PathBuf, String> {
         if let Ok(rd) = std::fs::read_dir(&hub) {
             for e in rd.flatten() {
                 let p = e.path();
-                if needed_files(&p).is_empty() {
+                if needed_files(&p).is_empty()
+                    && !std::fs::read_to_string(p.join("meta.json"))
+                        .map(|m| m.contains("\"rec_window\""))
+                        .unwrap_or(false)
+                {
                     candidates.push(p);
                 }
             }
@@ -112,6 +126,37 @@ fn needed_files(dir: &Path) -> Vec<&'static str> {
         .collect()
 }
 
+/// Build the model runner: ort (feature `ocr-indra-native`, .onnx files)
+/// preferred; rten (feature `ocr-rten`, .rten files) as alternative.
+/// `INDRA_RUNTIME=rten|ort` overrides the order for A/B testing.
+fn make_runner(dir: &Path) -> Result<Box<dyn ModelRunner>, String> {
+    let pref = std::env::var("INDRA_RUNTIME").unwrap_or_default();
+    #[cfg(feature = "ocr-indra-native")]
+    if pref != "rten" {
+        match OrtRunner::load(dir) {
+            Ok(r) => return Ok(Box::new(r)),
+            Err(e) => {
+                if pref == "ort" {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    #[cfg(feature = "ocr-rten")]
+    if pref != "ort" {
+        match RtenRunner::load() {
+            Ok(r) => return Ok(Box::new(r)),
+            Err(e) => {
+                if pref == "rten" {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    #[allow(unreachable_code)]
+    Err("no Indra runtime available: enable ocr-indra-native (ort) or ocr-rten".to_string())
+}
+
 // --- meta.json -----------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -123,6 +168,10 @@ struct Meta {
     /// The vocab is a JSON-encoded string inside meta.json (double-encoded).
     #[serde(default)]
     vocab: Option<String>,
+    /// Present only in new-format revisions (windowed recognition) —
+    /// unsupported by this port; detected to reject those snapshots.
+    #[serde(default)]
+    rec_window: Option<u32>,
     #[serde(default)]
     vocab_cjk: Option<String>,
 }
@@ -1042,19 +1091,273 @@ fn estimate_skew(gray: &GrayPage) -> f32 {
     best
 }
 
+// --- runtime abstraction: ort vs rten ------------------------------------
+
+pub(crate) enum TIn {
+    F32(&'static str, Vec<i64>, Vec<f32>),
+    I64(&'static str, Vec<i64>, Vec<i64>),
+    Bool(&'static str, Vec<i64>, Vec<bool>),
+}
+
+pub(crate) struct TOut {
+    f32s: Vec<(&'static str, Vec<i64>, Vec<f32>)>,
+    i64s: Vec<(&'static str, Vec<i64>, Vec<i64>)>,
+}
+
+impl TOut {
+    fn f32(&self, name: &str) -> Option<(&[i64], &[f32])> {
+        self.f32s
+            .iter()
+            .find(|(n, _, _)| *n == name)
+            .map(|(_, s, d)| (s.as_slice(), d.as_slice()))
+    }
+    fn i64(&self, name: &str) -> Option<(&[i64], &[i64])> {
+        self.i64s
+            .iter()
+            .find(|(n, _, _)| *n == name)
+            .map(|(_, s, d)| (s.as_slice(), d.as_slice()))
+    }
+}
+
+pub(crate) trait ModelRunner {
+    fn run(&mut self, model: &str, ins: &[TIn]) -> Result<TOut, String>;
+    fn has(&self, model: &str) -> bool;
+}
+
+#[cfg(feature = "ocr-indra-native")]
+struct OrtRunner {
+    sessions: Vec<(&'static str, ort::session::Session, Vec<(&'static str, bool)>)>,
+}
+
+#[cfg(feature = "ocr-indra-native")]
+impl OrtRunner {
+    fn load(dir: &Path) -> Result<Self, String> {
+        let models: &[(&'static str, bool)] = &[
+            ("det", false),
+            ("rec", false),
+            ("order", false),
+            ("orient", false),
+            ("script", false),
+            ("rec_cjk", false),
+        ];
+        let mut sessions = Vec::new();
+        for (name, _is_i64) in models {
+            // only core models are required; the rest are optional
+            if matches!(*name, "order" | "orient" | "script" | "rec_cjk")
+                && !dir.join(format!("{name}.onnx")).exists()
+            {
+                continue;
+            }
+            let sess = session(&dir.join(format!("{name}.onnx")))?;
+            let out_names: Vec<(&'static str, bool)> = match *name {
+                "det" => vec![("out", false)],
+                "rec" | "rec_cjk" | "rec_world" => {
+                    vec![("ids", true), ("conf", false), ("lengths", true)]
+                }
+                "order" => vec![
+                    ("a", false),
+                    ("cls", false),
+                    ("same", false),
+                    ("tab", false),
+                ],
+                _ => vec![("p", false)],
+            };
+            sessions.push((*name, sess, out_names));
+        }
+        if !sessions.iter().any(|e| e.0 == "det") || !sessions.iter().any(|e| e.0 == "rec") {
+            return Err("det.onnx/rec.onnx missing".to_string());
+        }
+        Ok(OrtRunner { sessions })
+    }
+}
+
+#[cfg(feature = "ocr-indra-native")]
+impl ModelRunner for OrtRunner {
+    fn run(&mut self, model: &str, ins: &[TIn]) -> Result<TOut, String> {
+        use ort::value::Tensor;
+        let (_, sess, out_names) = self
+            .sessions
+            .iter_mut()
+            .find(|(n, _, _)| *n == model)
+            .ok_or_else(|| format!("no session for {model}"))?;
+        let mut inputs: Vec<(&'static str, ort::value::Value)> = Vec::new();
+        for t in ins {
+            match t {
+                TIn::F32(n, shape, d) => inputs.push((
+                    n,
+                    Tensor::from_array((shape.clone(), d.clone()))
+                        .map_err(|e| format!("{model} input {n}: {e:?}"))?
+                        .into(),
+                )),
+                TIn::I64(n, shape, d) => inputs.push((
+                    n,
+                    Tensor::from_array((shape.clone(), d.clone()))
+                        .map_err(|e| format!("{model} input {n}: {e:?}"))?
+                        .into(),
+                )),
+                TIn::Bool(n, shape, d) => inputs.push((
+                    n,
+                    Tensor::from_array((shape.clone(), d.clone()))
+                        .map_err(|e| format!("{model} input {n}: {e:?}"))?
+                        .into(),
+                )),
+            }
+        }
+        let outputs = sess
+            .run(inputs)
+            .map_err(|e| format!("{model} run: {e:?}"))?;
+        let mut out = TOut {
+            f32s: Vec::new(),
+            i64s: Vec::new(),
+        };
+        for (name, is_i64) in out_names {
+            if *is_i64 {
+                if let Ok((sh, d)) = outputs[*name].try_extract_tensor::<i64>() {
+                    out.i64s.push((name, sh.to_vec(), d.to_vec()));
+                }
+            } else if let Ok((sh, d)) = outputs[*name].try_extract_tensor::<f32>() {
+                out.f32s.push((name, sh.to_vec(), d.to_vec()));
+            }
+        }
+        Ok(out)
+    }
+    fn has(&self, model: &str) -> bool {
+        self.sessions.iter().any(|(n, _, _)| *n == model)
+    }
+}
+
+#[cfg(feature = "ocr-rten")]
+struct RtenRunner {
+    models: Vec<(&'static str, rten::Model)>,
+}
+
+#[cfg(feature = "ocr-rten")]
+impl RtenRunner {
+    fn load() -> Result<Self, String> {
+        let dir = std::env::var_os("INDRA_RTEN_MODEL_DIR")
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME").map(|h| {
+                    PathBuf::from(h).join(".cache/office-parser/indra-rten")
+                })
+            })
+            .ok_or("no home dir for rten models")?;
+        let models: &[&'static str] = &[
+            "det", "rec", "order", "orient", "script", "rec_cjk", "rec_world",
+        ];
+        let mut loaded = Vec::new();
+        for name in models {
+            let p = dir.join(format!("{name}.rten"));
+            if !p.exists() {
+                continue;
+            }
+            let model = rten::Model::load_file(&p).map_err(|e| format!("{name}.rten: {e}"))?;
+            loaded.push((*name, model));
+        }
+        if !loaded.iter().any(|e| e.0 == "det") || !loaded.iter().any(|e| e.0 == "rec") {
+            return Err(format!(
+                "rten models missing in {}: need det.rten + rec.rten",
+                dir.display()
+            ));
+        }
+        Ok(RtenRunner { models: loaded })
+    }
+}
+
+#[cfg(feature = "ocr-rten")]
+impl ModelRunner for RtenRunner {
+    fn run(&mut self, model: &str, ins: &[TIn]) -> Result<TOut, String> {
+        use rten::{NodeId, ValueOrView};
+        use rten_tensor::prelude::*;
+        use rten_tensor::Tensor;
+        let idx = self
+            .models
+            .iter()
+            .position(|(n, _)| *n == model)
+            .ok_or_else(|| format!("no model for {model}"))?;
+        let model_name = self.models[idx].0;
+        let model = &mut self.models[idx].1;
+        let node_id = |name: &str| {
+            model
+                .node_id(name)
+                .map_err(|e| format!("{model_name} node {name}: {e:?}"))
+        };
+        let mut inputs: Vec<(NodeId, ValueOrView)> = Vec::new();
+        for t in ins {
+            let (n, shape, as_f32, as_i64, as_bool) = match t {
+                TIn::F32(n, s, d) => (n, s, Some(d), None::<&Vec<i64>>, None::<&Vec<bool>>),
+                TIn::I64(n, s, d) => (n, s, None, Some(d), None),
+                TIn::Bool(n, s, d) => (n, s, None, None, Some(d)),
+            };
+            let sh: Vec<usize> = shape.iter().map(|&v| v as usize).collect();
+            let id: NodeId = node_id(n)?;
+            // rten Values support f32/i32/i8/u8 only: i64 inputs downcast to
+            // i32 (widths/indices never exceed i32 range), bool masks become u8
+            let v: ValueOrView = if let Some(d) = as_f32 {
+                Tensor::from_data(&sh, d.clone()).into()
+            } else if let Some(d) = as_i64 {
+                let d32: Vec<i32> = d.iter().map(|&v| v as i32).collect();
+                Tensor::from_data(&sh, d32).into()
+            } else if let Some(d) = as_bool {
+                // converted models declare bool masks as i32
+                let d32: Vec<i32> = d.iter().map(|&b| b as i32).collect();
+                Tensor::from_data(&sh, d32).into()
+            } else {
+                unreachable!()
+            };
+            inputs.push((id, v));
+        }
+        let out_names = ["out", "p", "a", "cls", "same", "tab", "conf", "ids", "lengths"];
+        let out_ids: Vec<NodeId> = out_names
+            .iter()
+            .filter_map(|n| model.node_id(n).ok())
+            .collect();
+        let results = model
+            .run(inputs, &out_ids, None)
+            .map_err(|e| format!("{model_name} run: {e:?}"))?;
+        let mut out = TOut {
+            f32s: Vec::new(),
+            i64s: Vec::new(),
+        };
+        for (i, id) in out_ids.iter().enumerate() {
+            let v = &results[i];
+            let name = out_names
+                .iter()
+                .find(|n| model.node_id(n).ok() == Some(*id))
+                .copied()
+                .unwrap_or("?");
+            // rten Value: TryFrom<Value> for Tensor<T> (f32/i32/u8; no i64/bool)
+            let t_i32: Option<rten_tensor::Tensor<i32>> = v.clone().try_into().ok();
+            if let Some(t) = t_i32 {
+                let shape: Vec<i64> = t.shape().iter().map(|&v| v as i64).collect();
+                let up: Vec<i64> = t.into_data().to_vec().iter().map(|&v| v as i64).collect();
+                out.i64s.push((name, shape, up));
+            } else if let Ok(t) = v.clone().try_into() {
+                let t: Tensor<f32> = t;
+                let shape: Vec<i64> = t.shape().iter().map(|&v| v as i64).collect();
+                out.f32s.push((name, shape, t.into_data().to_vec()));
+            } else if let Ok(t) = v.clone().try_into() {
+                let t: rten_tensor::Tensor<u8> = t;
+                let shape: Vec<i64> = t.shape().iter().map(|&v| v as i64).collect();
+                let up: Vec<f32> = t.into_data().to_vec().iter().map(|&b| b as f32).collect();
+                out.f32s.push((name, shape, up));
+            }
+        }
+        Ok(out)
+    }
+    fn has(&self, model: &str) -> bool {
+        self.models.iter().any(|(n, _)| *n == model)
+    }
+}
+
 // --- engine --------------------------------------------------------------
 
 pub struct IndraNative {
-    det: ort::session::Session,
-    rec: ort::session::Session,
-    order: Option<ort::session::Session>,
+    runner: Box<dyn ModelRunner>,
     vocab: Vec<String>,
+    vocab_cjk: Vec<String>,
     det_long_side: i64,
     rec_height: usize,
-    orient: Option<ort::session::Session>,
-    script: Option<ort::session::Session>,
-    rec_cjk: Option<ort::session::Session>,
-    vocab_cjk: Vec<String>,
     min_page_confidence: f64,
     last_page_confidence: Option<f64>,
 }
@@ -1115,14 +1418,10 @@ impl IndraNative {
         )
         .map_err(|e| format!("vocab parse: {e}"))?
         .chars;
+        let runner: Box<dyn ModelRunner> = make_runner(&dir)?;
         Ok(Self {
-            det: session(&dir.join("det.onnx"))?,
-            rec: session(&dir.join("rec.onnx"))?,
-            order: session(&dir.join("order.onnx")).ok(),
+            runner,
             vocab,
-            orient: session(&dir.join("orient.onnx")).ok(),
-            script: session(&dir.join("script.onnx")).ok(),
-            rec_cjk: session(&dir.join("rec_cjk.onnx")).ok(),
             vocab_cjk: meta
                 .vocab_cjk
                 .as_deref()
@@ -1140,15 +1439,15 @@ impl IndraNative {
         let mut long_side = self.det_long_side;
         let mut boxes = {
             let (input, ph, pw, _s) = page_to_input(gray, long_side);
-            let x = ort::value::Tensor::from_array(([1i64, 1, ph as i64, pw as i64], input))
-                .map_err(|e| format!("det input: {e:?}"))?;
-            let outputs = self
-                .det
-                .run(ort::inputs!["x" => x])
-                .map_err(|e| format!("det run: {e:?}"))?;
-            let (_, out) = outputs["out"]
-                .try_extract_tensor::<f32>()
-                .map_err(|e| format!("det out: {e:?}"))?;
+            let out = self.runner.run(
+                "det",
+                &[TIn::F32(
+                    "x",
+                    vec![1, 1, ph as i64, pw as i64],
+                    input,
+                )],
+            )?;
+            let (_, out) = out.f32("out").ok_or("det out missing")?;
             let oh = (ph / 2).max(1);
             let ow = (pw / 2).max(1);
             det_decode(&out[..oh * ow * 3], oh, ow, 0.5, 2)
@@ -1164,20 +1463,19 @@ impl IndraNative {
                     * 32;
                 if ls > long_side {
                     long_side = ls;
-                    let (input, ph, pw, s2) = page_to_input(gray, long_side);
-                    let x = ort::value::Tensor::from_array(([1i64, 1, ph as i64, pw as i64], input))
-                        .map_err(|e| format!("det input: {e:?}"))?;
-                    let outputs = self
-                        .det
-                        .run(ort::inputs!["x" => x])
-                        .map_err(|e| format!("det run: {e:?}"))?;
-                    let (_, out) = outputs["out"]
-                        .try_extract_tensor::<f32>()
-                        .map_err(|e| format!("det out: {e:?}"))?;
+                    let (input, ph, pw, _s2) = page_to_input(gray, long_side);
+                    let out = self.runner.run(
+                        "det",
+                        &[TIn::F32(
+                            "x",
+                            vec![1, 1, ph as i64, pw as i64],
+                            input,
+                        )],
+                    )?;
+                    let (_, out) = out.f32("out").ok_or("det out missing")?;
                     let oh = (ph / 2).max(1);
                     let ow = (pw / 2).max(1);
                     boxes = det_decode(&out[..oh * ow * 3], oh, ow, 0.5, 2);
-                    let _ = s2;
                 }
             }
         }
@@ -1219,35 +1517,47 @@ impl IndraNative {
         }
         // script lane (pipeline.py hanzi_lines): lines holding Chinese go to
         // rec_cjk.onnx with the CJK vocab; the rest stay on rec.onnx.
-        let hanzi: Option<Vec<bool>> = match (self.script.as_mut(), self.rec_cjk.is_some()) {
-            (Some(script), true) if !crops.is_empty() => {
+        let hanzi: Option<Vec<bool>> =
+            if self.runner.has("script") && self.runner.has("rec_cjk") && !crops.is_empty() {
                 let mut out = vec![false; crops.len()];
                 for batch in width_batches(&crops) {
                     let chunk: Vec<(usize, Vec<f32>)> =
                         batch.iter().map(|&i| crops[i].clone()).collect();
                     let (data, widths, wm) = pad_batch(&chunk);
                     let b = chunk.len() as i64;
-                    let x = ort::value::Tensor::from_array((
-                        [b, 1, LINE_HEIGHT as i64, wm as i64],
-                        data,
-                    ))
-                    .map_err(|e| format!("script input: {e:?}"))?;
-                    let w = ort::value::Tensor::from_array((vec![b], widths))
-                        .map_err(|e| format!("script widths: {e:?}"))?;
-                    let outputs = script
-                        .run(ort::inputs!["x" => x, "widths" => w])
-                        .map_err(|e| format!("script run: {e:?}"))?;
-                    let (_, p) = outputs["p"]
-                        .try_extract_tensor::<f32>()
-                        .map_err(|e| format!("script p: {e:?}"))?;
+                    let o = self.runner.run(
+                        "script",
+                        &[
+                            TIn::F32("x", vec![b, 1, LINE_HEIGHT as i64, wm as i64], data),
+                            TIn::I64("widths", vec![b], widths),
+                        ],
+                    )?;
+                    // script.onnx emits [B, C] class probabilities — class 1
+                    // is hanzi (verified: CJK lines hit class 1 at >0.85,
+                    // Latin lines class 0 at ~1.0). Older single-class [B]
+                    // output falls back to p > 0.5.
+                    let (p_shape, p) = o.f32("p").ok_or("script p missing")?;
+                    let c = p_shape.get(1).copied().unwrap_or(1).max(1) as usize;
                     for (k, &j) in batch.iter().enumerate() {
-                        out[j] = p[k] > 0.5;
+                        out[j] = if c > 1 {
+                            let row = &p[k * c..(k + 1) * c];
+                            let (mut arg, mut best) = (0usize, f32::MIN);
+                            for (ci, &v) in row.iter().enumerate() {
+                                if v > best {
+                                    best = v;
+                                    arg = ci;
+                                }
+                            }
+                            arg == 1 && best > 0.5
+                        } else {
+                            p.get(k).copied().unwrap_or(0.0) > 0.5
+                        };
                     }
                 }
                 Some(out)
-            }
-            _ => None,
-        };
+            } else {
+                None
+            };
         // width-aware batching (rec_preproc.width_batches port): never let
         // lines x width blow the arena — Python measured 64 x 4096px = 5 GB.
         for batch in width_batches(&crops) {
@@ -1274,30 +1584,28 @@ impl IndraNative {
             let _ = batch[0];
             let (data, widths, wm) = pad_batch(&chunk);
             let b = chunk.len() as i64;
-            let x = ort::value::Tensor::from_array(([b, 1, LINE_HEIGHT as i64, wm as i64], data))
-                .map_err(|e| format!("rec input: {e:?}"))?;
-            let w = ort::value::Tensor::from_array((vec![b], widths))
-                .map_err(|e| format!("rec widths: {e:?}"))?;
-            let rec_sess: Option<&mut ort::session::Session> = if use_cjk { self.rec_cjk.as_mut() } else { None };
-            let outputs = match rec_sess {
-                Some(sess) => sess
-                    .run(ort::inputs!["x" => x, "widths" => w])
-                    .map_err(|e| format!("rec_cjk run: {e:?}"))?,
-                None => self
-                    .rec
-                    .run(ort::inputs!["x" => x, "widths" => w])
-                    .map_err(|e| format!("rec run: {e:?}"))?,
+            let rec_model = if use_cjk && self.runner.has("rec_cjk") {
+                "rec_cjk"
+            } else {
+                "rec"
             };
-            let (ids_shape, ids) = outputs["ids"]
-                .try_extract_tensor::<i64>()
-                .map_err(|e| format!("rec ids: {e:?}"))?;
-            let (_, confs) = outputs["conf"]
-                .try_extract_tensor::<f32>()
-                .map_err(|e| format!("rec conf: {e:?}"))?;
-            let (_, lengths) = outputs["lengths"]
-                .try_extract_tensor::<i64>()
-                .map_err(|e| format!("rec lengths: {e:?}"))?;
+            let outputs = self.runner.run(
+                rec_model,
+                &[
+                    TIn::F32("x", vec![b, 1, LINE_HEIGHT as i64, wm as i64], data),
+                    TIn::I64("widths", vec![b], widths),
+                ],
+            )?;
+            let (ids_shape, ids) = outputs.i64("ids").ok_or("rec ids missing")?;
+            let (_, confs) = outputs.f32("conf").ok_or("rec conf missing")?;
+            let (_, lengths) = outputs.i64("lengths").ok_or("rec lengths missing")?;
             let t = ids_shape.iter().nth(1).copied().unwrap_or(0) as usize;
+            if std::env::var("INDRA_DEBUG").is_ok() {
+                eprintln!(
+                    "[dbg] model={rec_model} b={b} wm={wm} t={t} lengths={lengths:?} ids_head={:?}",
+                    &ids[..(chunk.len() * t).min(ids.len())]
+                );
+            }
             for k in 0..chunk.len() {
                 let orig = batch[k];
                 let n = (lengths[k].max(0) as usize).min(t);
@@ -1346,51 +1654,45 @@ impl IndraNative {
         boxes: &[(f32, f32, f32, f32)],
         texts: &[String],
         wh: (f32, f32),
-    ) -> Result<(Vec<usize>, Option<(Vec<f32>, Vec<f32>)>), String> {
+    ) -> Result<(Vec<usize>, Option<(Vec<f32>, Vec<f32>, Vec<f32>)>), String> {
         let n = boxes.len();
-        if n < 2 {
+        if n < 2 || !self.runner.has("order") {
             return Ok((order_xycut(boxes), None));
         }
-        let Some(order_sess) = &mut self.order else {
-            return Ok((order_xycut(boxes), None));
-        };
         let feats = line_features(boxes, wh, texts);
-        let f = ort::value::Tensor::from_array(([1i64, n as i64, N_FEATS as i64], feats))
-            .map_err(|e| format!("order feats: {e:?}"))?;
-        let mask = ort::value::Tensor::from_array(([1i64, n as i64], vec![true; n]))
-            .map_err(|e| format!("order mask: {e:?}"))?;
-        let outputs = order_sess
-            .run(ort::inputs!["feats" => f, "mask" => mask])
-            .map_err(|e| format!("order run: {e:?}"))?;
-        let (_a_shape, a) = outputs["a"]
-            .try_extract_tensor::<f32>()
-            .map_err(|e| format!("order a: {e:?}"))?;
-        let (_, cls) = outputs["cls"]
-            .try_extract_tensor::<f32>()
-            .map_err(|e| format!("order cls: {e:?}"))?;
-        let (_, same) = outputs["same"]
-            .try_extract_tensor::<f32>()
-            .map_err(|e| format!("order same: {e:?}"))?;
-        let order = decode_blocks_order(&a, &same, boxes, Some(cls), n);
-        Ok((order, Some((cls.to_vec(), same.to_vec()))))
+        let o = self.runner.run(
+            "order",
+            &[
+                TIn::F32("feats", vec![1, n as i64, N_FEATS as i64], feats),
+                TIn::Bool("mask", vec![1, n as i64], vec![true; n]),
+            ],
+        )?;
+        let (_, a) = o.f32("a").ok_or("order a missing")?;
+        let (_, cls) = o.f32("cls").ok_or("order cls missing")?;
+        let (_, same) = o.f32("same").ok_or("order same missing")?;
+        let (_, tab) = o.f32("tab").ok_or("order tab missing")?;
+        let (a, cls, same, tab) = (a.to_vec(), cls.to_vec(), same.to_vec(), tab.to_vec());
+        let order = decode_blocks_order(&a, &same, boxes, Some(&cls), n);
+        Ok((order, Some((cls, same, tab))))
     }
 
     /// OCR one grayscale page → lines (reading order) + layout blocks.
     fn orientation(&mut self, gray: &GrayPage) -> u32 {
-        let Some(orient) = &mut self.orient else {
+        if !self.runner.has("orient") {
             return 0;
-        };
-        let x = match ort::value::Tensor::from_array((
-            [1i64, 1, ORIENT_SIDE as i64, ORIENT_SIDE as i64],
-            orient_input(gray, ORIENT_SIDE),
-        )) {
+        }
+        let x = match self.runner.run(
+            "orient",
+            &[TIn::F32(
+                "x",
+                vec![1, 1, ORIENT_SIDE as i64, ORIENT_SIDE as i64],
+                orient_input(gray, ORIENT_SIDE),
+            )],
+        ) {
             Ok(x) => x,
             Err(_) => return 0,
         };
-        let Ok(outputs) = orient.run(ort::inputs!["x" => x]) else {
-            return 0;
-        };
-        let Ok((_, p)) = outputs["p"].try_extract_tensor::<f32>() else {
+        let Some((_, p)) = x.f32("p") else {
             return 0;
         };
         let k = (0..4usize)
@@ -1437,7 +1739,7 @@ impl IndraNative {
             })
             .collect();
         let mut blocks = Vec::new();
-        if let Some((cls, same)) = layout {
+        if let Some((cls, same, _tab)) = layout {
             // split_blocks: runs of the reading order with same-logit > 0 between neighbours
             let mut runs: Vec<Vec<usize>> = Vec::new();
             for &i in &order {

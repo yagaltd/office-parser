@@ -60,6 +60,8 @@ pdf = ["dep:lopdf"]
 render-pdfium = ["dep:pdfium-render", "dep:image"]
 # In-process Indra engine over ONNX Runtime — the only OCR path (Rust + pdfium).
 ocr-indra-native = ["dep:ort", "dep:image"]
+# rten as alternative runtime for the same models (A/B via INDRA_RUNTIME=rten)
+ocr-rten = ["pdf", "dep:rten", "dep:rten-tensor", "rten/rten_format"]
 
 # RTF
 rtf = []
@@ -86,3 +88,5 @@ lopdf = { version = "0.35", optional = true }
 pdfium-render = { version = "0.9", optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 ort = { version = "=2.0.0-rc.13", optional = true }  # pinned: rc.14 changes the Session API
+rten = { version = "0.27.0", optional = true }
+rten-tensor = { version = "0.27.0", optional = true }

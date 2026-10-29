@@ -48,6 +48,27 @@
 - Earlier stderr feedback: `rendering N page(s) at D dpi` prints before
   the pdfium render pass (the previously silent few seconds).
 
+### Alternative runtime: rten (feature `ocr-rten`)
+
+- The Indra pipeline now runs on **rten** (robertknight's pure-Rust ONNX
+  runtime) as an alternative to ONNX Runtime: no C++ dependency at all.
+  Selected via `INDRA_RUNTIME=rten` (default prefers ort when both are
+  compiled in). Models convert once with the `rten-convert` tool
+  (robertknight/rten, needs torch-cpu) into
+  `~/.cache/office-parser/indra-rten/*.rten`.
+- Dtype bridges: rten Values carry f32/i32/u8 only — i64 inputs/outputs
+  (widths, ids, lengths) downcast/upcast at the boundary; bool masks
+  pass as i32.
+- Script classifier fix: script.onnx emits `[B, 4]` class probabilities
+  (class 1 = hanzi), not `[B]` as the card implies — the lane now reads
+  argmax. This was silently misrouting Latin lines to the CJK
+  recognizer.
+- Revision guard: snapshots with `rec_window` in meta.json (the new
+  windowed-recognition format on HF main) are detected and rejected
+  with a clear error — the port targets the v3.1 layout.
+- Parity: markdown output byte-identical between ort and rten on the
+  fixture corpus; rten ~8% faster per fixture run in release mode.
+
 ### Per-page split fix: every page routed, correct per-page blocks
 
 - Fixed stale block ranges: per-page documents were sliced with the

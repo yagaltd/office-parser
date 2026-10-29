@@ -2522,7 +2522,14 @@ fn parse_with_page_ocr_inner<'e>(
     let trust_reasons: Vec<Option<String>> = if force {
         Vec::new()
     } else {
-        pdfium_text_layer_reasons(bytes).unwrap_or_default()
+        #[cfg(feature = "render-pdfium")]
+        {
+            pdfium_text_layer_reasons(bytes).unwrap_or_default()
+        }
+        #[cfg(not(feature = "render-pdfium"))]
+        {
+            Vec::new()
+        }
     };
     let mut page_reasons: Vec<serde_json::Value> = Vec::new();
     let ocr_pages: Vec<usize> = counts
