@@ -1,3 +1,7 @@
+[workspace]
+members = ["cli"]
+exclude = ["vendor"]
+
 [package]
 name = "office-parser"
 version = "0.2.0"
@@ -58,6 +62,7 @@ mmap = ["dep:zip", "dep:quick-xml"]
 # PDF
 pdf = ["dep:lopdf"]
 render-pdfium = ["dep:pdfium-render", "dep:image"]
+render-hayro = ["pdf", "dep:hayro", "dep:image"]
 # In-process Indra engine over ONNX Runtime — the only OCR path (Rust + pdfium).
 ocr-indra-native = ["dep:ort", "dep:image"]
 # rten as alternative runtime for the same models (A/B via INDRA_RUNTIME=rten)
@@ -90,3 +95,13 @@ image = { version = "0.25", default-features = false, features = ["png"], option
 ort = { version = "=2.0.0-rc.13", optional = true }  # pinned: rc.14 changes the Session API
 rten = { version = "0.27.0", optional = true }
 rten-tensor = { version = "0.27.0", optional = true }
+hayro = { path = "vendor/hayro", optional = true }
+
+# Vendored, patched hayro stack (origin: PdfCraft vendor/, MIT OR Apache-2.0).
+# Each patch carries "PdfCraft patch:" markers + tests; remove once upstream
+# releases the fixes.
+[patch.crates-io]
+hayro = { path = "vendor/hayro" }
+hayro-syntax = { path = "vendor/hayro-syntax" }
+hayro-interpret = { path = "vendor/hayro-interpret" }
+hayro-cmap = { path = "vendor/hayro-cmap" }

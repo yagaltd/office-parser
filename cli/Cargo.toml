@@ -23,6 +23,7 @@ ocr-indra-native = ["office-parser/ocr-indra-native"]
 rten = ["office-parser/ocr-rten"]
 # pdfium rendering for the OCR path (preferred over pdftoppm when installed)
 render-pdfium = ["office-parser/render-pdfium"]
+render-hayro = ["office-parser/render-hayro"]
 
 [dev-dependencies]
 zip = { version = "0.6", default-features = false, features = ["deflate"] }

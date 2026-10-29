@@ -2305,6 +2305,46 @@ pub fn render_pages_png(bytes: &[u8], dpi: u32) -> Result<Vec<Vec<u8>>> {
 /// PaddleOCR-VL's reading window; Indra resizes to a 1024-long-side input
 /// itself and expects ~200 dpi source pixels (its own pipeline renders via
 /// pdfium at dpi/72). Clamping starves it (~64 dpi on A4).
+/// hayro backend (vendored PdfCraft-patched stack): pure Rust, no system
+/// dependency. Renders RGBA at scale = dpi/72, then converts to PNG.
+#[cfg(feature = "render-hayro")]
+fn render_pages_png_hayro(bytes: &[u8], dpi: u32) -> Result<Vec<Vec<u8>>> {
+    use hayro::hayro_syntax::Pdf;
+    use hayro::{RenderCache, RenderSettings, render_into, render_size};
+    use std::io::Cursor;
+
+    let pdf = Pdf::new(bytes.to_vec())
+        .map_err(|e| anyhow::anyhow!("hayro load: {e:?}"))?;
+    let mut out = Vec::new();
+    for page in pdf.pages().iter() {
+        let (w_pt, h_pt) = page.render_dimensions();
+        let scale = dpi as f32 / 72.0;
+        let rs = RenderSettings {
+            x_scale: scale,
+            y_scale: scale,
+            ..Default::default()
+        };
+        let (w, h) = render_size(page, &rs);
+        let mut buf = vec![255u8; w as usize * h as usize * 4];
+        let cache = RenderCache::new();
+        render_into(
+            &page,
+            &cache,
+            &hayro::hayro_interpret::InterpreterSettings::default(),
+            &rs,
+            &mut buf,
+        );
+        let img = image::RgbaImage::from_raw(w as u32, h as u32, buf)
+            .ok_or_else(|| anyhow::anyhow!("hayro render: bad buffer size"))?;
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+            .map_err(|e| anyhow::anyhow!("hayro png: {e}"))?;
+        out.push(png);
+    }
+    Ok(out)
+}
+
 pub fn render_pages_png_opts(bytes: &[u8], dpi: u32, clamp_budget: bool) -> Result<Vec<Vec<u8>>> {
     use std::process::Command;
     if dpi == 0 || dpi > 600 {
@@ -2313,12 +2353,23 @@ pub fn render_pages_png_opts(bytes: &[u8], dpi: u32, clamp_budget: bool) -> Resu
     // backend selection: the pdfium library first when installed (engine-
     // faithful pixels — Indra's own pipeline renders via pdfium), then
     // poppler (pdftoppm), then an actionable error naming every fix.
+    let pref = std::env::var("OFFICE_PARSER_RENDERER").unwrap_or_default();
+    // Default order: pdfium first (Indra's training distribution — measured
+    // 5-10% more content on dense scans), hayro as pure-Rust fallback,
+    // poppler last.
     #[cfg(feature = "render-pdfium")]
-    if pdfium_lib_path().is_some() {
+    if pdfium_lib_path().is_some() && pref != "hayro" && pref != "pdftoppm" {
         if let Ok(pages) = render_pages_png_pdfium(bytes, dpi, clamp_budget) {
             return Ok(pages);
         }
-        // pdfium unavailable/failed: fall through to poppler
+        // pdfium unavailable/failed: fall through
+    }
+    #[cfg(feature = "render-hayro")]
+    if pref != "pdfium" && pref != "pdftoppm" {
+        if let Ok(pages) = render_pages_png_hayro(bytes, dpi) {
+            return Ok(pages);
+        }
+        // hayro failed: fall through to poppler
     }
     if !pdftoppm_available() {
         anyhow::bail!(

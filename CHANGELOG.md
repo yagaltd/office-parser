@@ -28,6 +28,23 @@
   + pdfium. `--ocr` now errors with instructions when the models are
   missing instead of falling back to a subprocess.
 
+### Hayro renderer (option C: vendored PdfCraft-patched stack, opt-in)
+
+- `render-hayro` feature: pure-Rust PDF rendering via the **vendored,
+  PdfCraft-hardened hayro stack** (`vendor/`: hayro, hayro-syntax,
+  hayro-interpret, hayro-cmap — MIT OR Apache-2.0, patches marked
+  `PdfCraft patch:` with tests; not yet upstream at pdfcraft 0.15.0).
+  Selected with `OFFICE_PARSER_RENDERER=hayro`; pdfium stays the
+  default (Indra's training distribution).
+- Measured on the real mixed bundles (IKT 9p, Bridging 17p): hayro
+  recovers 5-10% less content than pdfium on dense scans (90 vs 100
+  table-lines; 6271 vs 6648 words) — consistent with the pdfium
+  training distribution. Scanned-fixture output is byte-identical.
+  Verdict: hayro = zero-native-dependency fallback; pdfium = quality
+  default.
+- Build note: the rten + ort + hayro combined build OOMs at cargo's
+  default parallelism on 14 GB machines — use `CARGO_BUILD_JOBS=4`.
+
 ### JSONL default for PDF JSON output
 
 - `--format json` on a PDF now always writes `<stem>.jsonl` (one
