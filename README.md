@@ -117,8 +117,10 @@ and `tests/docx_marks.rs`.
   broken font maps — or fall under the char threshold are routed to
   [Indra OCR](https://huggingface.co/datalab-to/indra-ocr), running
   **in-process** over ONNX Runtime (feature `ocr-indra-native`, models
-  from `INDRA_OCR_MODEL_DIR` or the HF cache — Rust + pdfium only, no
-  Python). Pages are rendered, orientation-corrected, deskewed,
+  from `INDRA_OCR_MODEL_DIR` or the HF cache; pin: Indra `v3.1.1`).
+  Rust + pdfium only, no Python; optional pure-Rust backends: rten
+  runtime (`ocr-rten` + `INDRA_RUNTIME=rten`) and hayro renderer
+  (`render-hayro` + `OFFICE_PARSER_RENDERER=hayro`). Pages are rendered, orientation-corrected, deskewed,
   OCR'd and layout-mapped (headings/paragraphs/lists/tables; page
   furniture dropped); trust verdicts, provenance and low-confidence
   pages are reported in `metadata.extra["ocr"]` for vision-LLM
