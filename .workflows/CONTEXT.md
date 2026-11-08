@@ -58,3 +58,38 @@ Verbatim human decisions for this feature. Specs touching these quote them.
 - Does the existing content interpreter's font metrics survive XY-Cut reordering unchanged?
   Owner: TASK 1p/TASK 6 evidence. Why it matters: heading-level inference depends on it.
 - Should `layout_complexity` ever gate OCR? Current ruling: no.
+
+
+## Open Questions — resolved by TASK 1 scout (2026-11-08, plan 20261108-001)
+
+- **Interpreter state at emit points** (Tj:993/TJ:1017/'/"/BDC:1098): tm+ctm full affine,
+  effective_font_size (rotation-safe), current_position (pen origin), leading, font_alias,
+  in_text. NOT tracked: render mode, font name (alias only), TJ kerning advances, Tc/Tw, /Rotate,
+  MediaBox/CropBox. TextAtom stores only {seq,x,y,font_size,text} — matrices dropped at push.
+- **Line assembly drops x** (Line {y,font_size,text}); paragraph split is y-gap-only → column
+  separation must live between atoms and line clustering (TASK 4/6 design constraint).
+- **Heading inference is order-insensitive** (median/ratio) — survives XY-Cut reordering.
+- **Trust checks degrade silently without render-pdfium** (Vec::new() at :2573-2586) → TASK 9.
+- **pdf_cjk_scan p1 = 16-char latin-1 mojibake layer** — passes char checks as valid Latin-1;
+  defeats threshold intent + bad-char trust check → note for TASK 8/9.
+- **Combined-doc page_block_ranges stale after OCR merge** (split-pages uses pages_from_merge,
+  unaffected) → defect-class, fold into TASK 8.
+- **render.rs JSON + CLI frontmatter omit pdf_text_quality** → TASK 5 must include per-page
+  quality in the JSON shape.
+- **Routing on all 5 fixtures is fully determined by char counts** (trust deltas nil) — the new
+  signals change nothing here; calibration needs richer pages.
+- **Registry deviation**: deepseek/deepseek-flash not spawnable this session; runtime assigned
+  zai/glm-5.3-flash thinking high for wave 1. Re-probe deepseek before relying on max-thinking.
+
+### Fixture baseline (TASK 1)
+
+| fixture | pages | doc quality | per-page body alnum | trust delta |
+|---|---|---|---|---|
+| pdf_scanned | 2 | ImageOnly | 0 / 0 | none |
+| pdf_table_scan | 1 | ImageOnly | 0 | none |
+| pdf_rot90_scan | 1 | ImageOnly | 0 | none |
+| pdf_cjk_scan | 1 | ImageOnly (16<50, mojibake) | 16 | none |
+| pdf_mixed | 2 | TextSparse | 305 / 0 | none (pages_ocr=1 both builds) |
+
+Raw: `.workflows/spikes/scout/baseline/` (counts.txt, body-counts.txt, test-results.txt,
+per-fixture md, mixed-*-ocr json).

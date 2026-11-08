@@ -1,0 +1,14 @@
+# TASK 2 spike — throwaway, never merged (spec: .workflows/specs/task-2.spec).
+# Empty [workspace] detaches this crate from the office-parser workspace above.
+# Deps: lopdf 0.35 (workspace lock: 0.35.0) + anyhow. No pdfium, no hayro, no OCR.
+[package]
+name = "pdf-geometry-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+lopdf = "0.35"
+anyhow = "1"
