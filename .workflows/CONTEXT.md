@@ -1,0 +1,60 @@
+# Context
+
+Shared domain language for office-parser. Keep this file meaningful to domain experts;
+avoid implementation trivia.
+
+## Glossary
+
+| Term | Meaning | Notes |
+|---|---|---|
+| Text layer | The glyphs a PDF carries natively, as opposed to pixels | Present in born-digital PDFs; absent or junk in scans |
+| Born-digital page | A page whose text layer is trustworthy | Routed to text extraction, never to OCR |
+| Scanned page | Image-only page, or a page whose text layer is untrusted | Routed to OCR |
+| `pdf_text_quality` | Document-level classification of extracted text: `TextRich` (>500 alnum), `TextSparse` (50–500), `ImageOnly` (<50) | `src/formats/pdf.rs:2099`, `src/document.rs:62` |
+| `page_quality` | **Proposed** per-page quality detail: richness, geometry confidence, layout complexity, verdict | New; see `.workflows/proposals/` for the design |
+| Verdict | Per-page routing outcome: `Trust { geometry }`, `Ocr { reason }`, or `Escalate { complexity }` | `Ocr` and `Escalate` are distinct |
+| `Escalate` | Page parsed cleanly but is structurally wrong → vision-LLM fallback | **Never** an OCR trigger: OCR cannot fix reading order |
+| `layout_complexity` | Deterministic 0.0–1.0 score from columns, table gutters, span overlap, rotation | Heuristic, calibrated on fixtures — not a calibrated probability |
+| XY-Cut | Recursive horizontal/vertical cut ordering multi-column text into reading order | Pure geometry, no model |
+| Ink coverage | Glyph box area ÷ page area | Distinguishes a scan from a white page without pdfium |
+| Trust check | Heuristic that untrusts a text layer (invisible render-mode-3 text, replacement/private-use chars, broken font maps) | Must work with and without `render-pdfium` |
+| Geometry confidence | Confidence in extracted box geometry: box coverage, junk-glyph ratio, font sanity | Feeds the verdict |
+| Coordinate system | `source` (unrotated page space) or `viewer_oriented` (rotation applied) | Must be reported with any box; crop origin subtracted |
+| Page furniture | Headers, footers, page numbers, rules — dropped from output | Distinguish from real content |
+| Render budget | `clamp_budget` in `render_pages_png_opts`; OCR needs full-resolution source pixels | `false` for OCR |
+| PageOcrEngine | Trait turning one rendered page PNG into blocks + confidence | `src/formats/pdf.rs:2449` |
+
+## Domain Rules
+
+- **Structure vs characters are different failures.** OCR fixes missing characters; it never fixes
+  interleaved columns. A page can be `TextRich` and still worthless. Complexity is an `Escalate`
+  signal, never an `Ocr` signal.
+- **Quality is per page; the document enum is a rollup.** Mixed documents (digital compilation with
+  scanned inserts) are the normal case, not the exception.
+- **Geometry comes from the text layer, not the raster.** Quality signals must not add a pdfium
+  dependency; `render-pdfium`-absent builds are first-class.
+- **`None` outside PDF.** Format-specific metadata never leaks into other formats (four-format
+  parity discipline, `tests/docx_odt_parity.rs`).
+- **Silent default changes are forbidden.** `--ocr-min-chars 50` stays; new signals add `Escalate`,
+  they never re-tune `Ocr`.
+- **Every box carries its coordinate system and rotation.** A box without provenance is not citable.
+- **Heuristic constants are named as heuristics.** A threshold validated on five fixtures is a
+  hypothesis; docs must say so.
+
+## Rulings
+
+Verbatim human decisions for this feature. Specs touching these quote them.
+
+- **2026-11-08 — dependencies:** *"i agree with your recommendation for both"*, resolving:
+  1. **AGPL-3.0-or-later is not acceptable** for a dependency of this MIT crate. Take `rasgapdf`'s
+     *design* only (coordinate contract, XY-Cut reading order, 0.45-style escalation threshold,
+     multi-rect chunk citations) and implement it in our own words. Zero dependency.
+  2. **`rusto-core` is accepted, later, behind an off-by-default `ocr-rusto-core` feature, scoped to
+     tables only.** Never the `rusto-rs` facade crate (`default = ["ffi", "rten"]`). Indra keeps the
+     text path; `rusto-core` supplies layout regions, word boxes, and table structure.
+
+## Open Questions
+
+- Does the existing content interpreter's font metrics survive XY-Cut reordering unchanged?
+  Owner: TASK 1p/TASK 6 evidence. Why it matters: heading-level inference depends on it.
+- Should `layout_complexity` ever gate OCR? Current ruling: no.
