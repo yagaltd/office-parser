@@ -1,5 +1,32 @@
 ## Unreleased
 
+### Plan 20261108-001: per-page PDF quality, XY-Cut reading order, OcrPage rich fields
+
+- Per-page `PageTextQuality` in `metadata.page_quality` (JSON mirror
+  `metadata.extra["pdf_quality"]`): page, `text_richness`, `columns`,
+  `rotated`, and a verdict — `trust`, `ocr { reason }`, or
+  `escalate { complexity }`. Routing is verdict-driven (worst page wins):
+  exactly the `ocr` pages go through the engine; `escalate` NEVER does —
+  it is a vision-LLM signal for readable-text/bad-layout pages. The
+  document-level `pdf_text_quality` stays the plain char-count summary;
+  both it and `page_quality` remain `None` for every non-PDF format.
+- pdfium-free `no-ink` trust check: a text layer claiming rich text its
+  own span boxes cannot hold routes to OCR even with `render-pdfium`
+  off; pdfium's invisible-text / broken-font-map reasons fold into the
+  page verdicts where present.
+- XY-Cut reading order: born-digital pages are ordered by recursive
+  XY-Cut over span boxes, so multi-column pages stop interleaving
+  columns; single-column output is byte-identical.
+- `OcrPage { blocks, confidence, layout_regions, word_boxes, table_html }`
+  with a defaulted `PageOcrEngine::ocr_page()` (legacy `ocr_page_png`
+  implementors keep working); rich fields surface per OCR'd page under
+  `metadata.extra["ocr"]` — absent, never null, when no page supplied
+  them.
+- `ocr-rusto-core` table enrichment (opt-in): model resolution
+  `OFFICE_PARSER_LAYOUT_MODEL` → `models/DocOCR/layout.onnx`, no-op when
+  absent — see the session entry below.
+- Shapes, reasons, and routing semantics: docs/quality.md.
+
 ### Session: rusto-core table-region enrichment (ocr-rusto-core, off by default)
 
 - New opt-in feature `ocr-rusto-core`: for OCR'd pages, rusto-core's
@@ -266,13 +293,7 @@
 - New fixtures + integration tests: run marks (DOCX/ODT/PPTX/ODP),
   speaker notes, column sections, table widths.
 
-# Changelog
-
-## 0.2.0
-
-- **Fixed:** Panic on malformed RTF input when a HYPERLINK/INCLUDEPICTURE field with an empty or data-image URL occurs at a group nesting depth that empties the internal `group_stack`. The replenishment check now runs before field processing, preventing a subsequent `unwrap()` panic on an empty stack.
-
-## Unreleased
+### Mind map formats (`xmind`, `mmap`)
 
 - Added input parsing support for mind map formats: `xmind` and `mmap`.
 - Added new `Format` variants and hint detection for `.xmind`, `.mmap`, and `application/vnd.xmind.workbook`.
@@ -283,7 +304,14 @@
 - Improved XMind XML parsing to preserve entity-referenced punctuation and spacing in topic titles.
 - Added parser/unit/integration coverage for XMind JSON/XML, MMAP XML, and format hint detection.
 
+# Changelog
+
+## 0.2.0
+
+- **Fixed:** Panic on malformed RTF input when a HYPERLINK/INCLUDEPICTURE field with an empty or data-image URL occurs at a group nesting depth that empties the internal `group_stack`. The replenishment check now runs before field processing, preventing a subsequent `unwrap()` panic on an empty stack.
+
 ## 0.1.0
+
 
 - Initial public release.
 - Supports Office formats (`docx`, `odt`, `pptx`, `odp`), spreadsheets (`xlsx`, `ods`, `csv`, `tsv`), `pdf`, `rtf`, `epub`, and config/data formats (`json`, `yaml`, `toml`, `xml`).

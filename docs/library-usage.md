@@ -90,3 +90,26 @@ let (combined, pages) =
 `pages` is `Vec<(u32, Document)>` with the page number in
 `metadata.extra["page"]`. Provenance (engine, trust verdicts,
 `low_confidence_pages`) lands in `metadata.extra["ocr"]`.
+
+Custom engines implement `PageOcrEngine`: `ocr_page_png` is required;
+`ocr_page` (defaulted to wrap it) may additionally return layout
+regions, word boxes, or table HTML — they surface per page under
+`metadata.extra["ocr"]` as `layout_regions` / `word_boxes` /
+`table_html`.
+
+## PDF per-page quality
+
+```rust
+let doc = office_parser::parse(&bytes, "report.pdf")?;
+if let Some(pages) = &doc.metadata.page_quality {
+    for q in pages {
+        // q.page / q.text_richness / q.columns / q.rotated
+        // q.verdict: Trust | Ocr { reason } | Escalate { complexity }
+    }
+}
+```
+
+`page_quality` is `Some` for PDF documents only and is mirrored to
+`metadata.extra["pdf_quality"]` in JSON. Verdict kinds, reason strings,
+routing/force semantics, and the full `extra["ocr"]` payload shapes are
+documented in [quality.md](quality.md).

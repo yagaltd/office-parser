@@ -283,7 +283,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   and is a heuristic. `docs/v3-ingestion.md` is deliberately **not** touched: it is gitignored.
 - **Verify**: `git diff --name-only` lists every declared Docs-impact path, and
   `grep -c '20261108-001' CHANGELOG.md` returns 1.
-- **Status**: ⬜ PENDING
+- **Status**: ✅ DONE (gate: spec verify PASS — Plan ID in CHANGELOG + docs/quality.md; duplicate Unreleased merged; formats/library-usage/README swept)
 
 (No verify/quality tasks — `/next` verdict-gates every task automatically; `/review` is the final
 gate at SHIP.)

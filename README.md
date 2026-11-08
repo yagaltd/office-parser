@@ -78,6 +78,7 @@ See [cli/README.md](cli/README.md) for details.
 - [Library usage](docs/library-usage.md)
 - [CLI usage](cli/README.md)
 - [Formats and behavior](docs/formats.md)
+- [PDF quality and page verdicts](docs/quality.md)
 - [Spreadsheets](docs/spreadsheets.md)
 - [Charts and diagrams](docs/charts-diagrams.md)
 - [Release guide](docs/release.md)
@@ -128,7 +129,13 @@ and `tests/docx_marks.rs`.
   furniture dropped); trust verdicts, provenance and low-confidence
   pages are reported in `metadata.extra["ocr"]` for vision-LLM
   fallback. Handwriting and complex tables exceed Indra's envelope —
-  route them to a stronger model using that signal. Indra's weights are
+  route them to a stronger model using that signal. Per-page routing
+  decisions are reported as `page_quality` /
+  `metadata.extra["pdf_quality"]` (verdicts `trust`/`ocr`/`escalate`;
+  `escalate` pages are never OCR'd — vision-LLM signal); born-digital
+  pages are read in recursive XY-Cut order so multi-column text stops
+  interleaving columns. See [docs/quality.md](docs/quality.md).
+  Indra's weights are
   OpenRAIL-M licensed (free < $20M revenue/funding; not usable
   competitively with Datalab's API) — review before commercial use.
 - **Presentations**: slide **transitions** are not auto-detected (an
