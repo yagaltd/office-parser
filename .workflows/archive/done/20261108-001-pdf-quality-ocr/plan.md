@@ -2,7 +2,7 @@
 
 > Plan ID: 20261108-001
 > Created: 2026-11-08
-> Status: APPROVED (human approval 2026-11-08 — session A: build authorized)
+> Status: DONE (shipped 2026-11-08 — 13/13 tasks ok:true; review PASS; archive 20261108-001-pdf-quality-ocr)
 > Proposal: `.workflows/proposals/2026-11-08-pdf-path-upgrade.md`
 > Domain memory: `.workflows/CONTEXT.md` (§Rulings carries both locked decisions)
 
@@ -96,6 +96,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   fixtures with non-empty rows; `cargo test --features pdf` still green (baseline is green).
 - **Status**: ✅ DONE (verdict + baseline persisted to CONTEXT.md)
 - context: updated
+- ok:true
 - verdict: ok:true (.workflows/reviews/task-1.md)
 ### TASK 2 (🟡): per-span boxes + ink coverage without pdfium
 - **Agent**: worker (prototype)
@@ -114,6 +115,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   table; production paths (`src/**`) untouched (`git diff --stat src/` empty).
 - **Status**: ✅ DONE (GO measured (coverage 0.0522 > 0.005 rule))
 - context: no changes
+- ok:true
 - verdict: ok:true (.workflows/reviews/task-2.md)
 ### TASK 3 (🟡): complexity score calibration on the five fixtures
 - **Agent**: worker (prototype)
@@ -132,6 +134,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   threshold recommendation with its justification; `git diff --stat src/` empty.
 - **Status**: ✅ DONE — measured: gutters=0 on all text-layer pages; score/columns agree
 - context: updated
+- ok:true
   everywhere → TASK 7 scope shrinks to columns + pdf_text_quality routing + standalone
   rotation flag (deletion test branch 1). See spikes/pdf-complexity/README.md §Measured verdict.
 - verdict: ok:true (.workflows/reviews/task-3.md)
@@ -153,6 +156,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   on a fixture with a non-zero CropBox and that `git diff` on existing block output is empty.
 - **Status**: ✅ DONE (gate: 5/5 geometry tests, byte-identical CLI proof, /Rotate spec premise corrected via synthesized pages)
 - context: no changes
+- ok:true
 - verdict: ok:true (.workflows/reviews/task-4.md)
 ### TASK 5 (🟡): `PageTextQuality` types
 - **Agent**: worker
@@ -173,6 +177,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   that JSON round-trips through `render::to_json_value`.
 - **Status**: ✅ DONE (gate green: 4 new tests + full matrix; JSON emits pdf_text_quality + page_quality)
 - context: no changes
+- ok:true
 - verdict: ok:true (.workflows/reviews/task-5.md)
 ### TASK 6 (🔴): XY-Cut reading order
 - **Agent**: worker
@@ -191,6 +196,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   sentence, not on a snapshot hash).
 - **Status**: ✅ DONE (gate: 9/9 reading-order tests incl. synthetic two-column end-to-end; per-region clustering root-cause fix accepted; byte-guard structural)
 - context: no changes
+- ok:true
 - verdict: ok:true (.workflows/reviews/task-6.md)
 ### TASK 7 (🟡): Complexity scoring
 - **Agent**: worker
@@ -209,6 +215,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   fixtures, monotonicity when a column gutter is added, and the threshold decision from TASK_3.
 - **Status**: ✅ DONE (gate: 7/7 routing tests; count_columns gate-fixed to span-level union; stale-ranges defect closed)
 - context: no changes
+- ok:true
 - verdict: ok:true (.workflows/reviews/task-7.md)
 ### TASK 8 (🔴): Per-page verdicts + document rollup
 - **Agent**: worker
@@ -228,6 +235,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   reports the same per-page verdicts.
 - **Status**: ✅ DONE (gate: 6/6 verdict-routing tests incl. Escalate-never-OCRs negative + split/opts parity; router consumes verdicts, worst-page-wins rollup, extra[pdf_quality] mirror; full matrix 75/0)
 - context: no changes
+- ok:true
 - verdict: ok:true (.workflows/reviews/task-8.md)
 ### TASK 9 (🟡): pdfium-free no-ink trust check
 - **Agent**: worker
@@ -244,6 +252,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   pdf`; `tests/pdf_no_ink.rs` asserts a scan is untrusted with pdfium disabled.
 - **Status**: ✅ DONE (gate: 10/10 no-ink tests on pdf AND no-default-features; trust verdicts never silently empty; full matrix 89/0)
 - context: no changes
+- ok:true
 - verdict: ok:true (.workflows/reviews/task-9.md)
 ### TASK 10 (🟡): `OcrPage` + defaulted `ocr_page()`
 - **Agent**: worker
@@ -260,6 +269,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   unchanged and green; a test asserts a legacy `ocr_page_png`-only implementor still compiles and runs.
 - **Status**: ✅ DONE (gate: 3/3 contract tests; OcrPage + defaulted ocr_page(); behavior lock untouched — pdf_ocr.rs diff empty; 98/0 matrix)
 - context: no changes
+- ok:true
 - verdict: ok:true (.workflows/reviews/task-10.md)
 ### TASK 11 (🟡): `ocr-rusto-core` feature, tables only
 - **Agent**: worker
@@ -277,6 +287,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   on and off, and that `table_html` is populated for `pdf_table_scan.pdf`.
 - **Status**: ✅ DONE — un-blocked by the human (local rusto-core @991fedf3); amendments: rusto-nn companion + vendored crates (git+rev measured >1.2 GB via submodules). Gate: 5/5 unit + 4/4 integration; tree-proof 0; transcripts identical; 98/0 matrix
 - context: no changes
+- ok:true
 - verdict: ok:true (.workflows/reviews/task-11.md)
 ### TASK 12 (⚪): Docs + CHANGELOG
 - **Agent**: worker (cheap dispatch per registry)
@@ -295,6 +306,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   `grep -c '20261108-001' CHANGELOG.md` returns 1.
 - **Status**: ✅ DONE (gate: spec verify PASS — Plan ID in CHANGELOG + docs/quality.md; duplicate Unreleased merged; formats/library-usage/README swept)
 - context: no changes
+- ok:true
 
 (No verify/quality tasks — `/next` verdict-gates every task automatically; `/review` is the final
 gate at SHIP.)
@@ -339,6 +351,7 @@ Filled in as tasks complete — cost, duration, and learnings per task.
   PaddleOCR logic ports — "keeps the Rust core lean").
 - **Status**: DONE (gate: unit 14/14, integration 5/5 incl. real SLANet-plus
 - context: no changes
+- ok:true
   inference on pdf_table_scan; vocabulary corrected from the model's own ONNX
   metadata; default matrix 98/0; vendor/rusto-* + the rusto dep deleted;
   verdict .workflows/reviews/task-13.md)

@@ -1,0 +1,1 @@
+2026-11-08 SHIP 20261108-001 pdf-quality-ocr — geometry-aware per-page PDF quality + verdict-driven OCR routing + own SLANet table pipeline (13/13 ok:true; review PASS, 4 findings fixed; vendored rusto removed)
