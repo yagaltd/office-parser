@@ -95,8 +95,8 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
 - **Verify**: findings section present in `.workflows/CONTEXT.md`; baseline table lists all five
   fixtures with non-empty rows; `cargo test --features pdf` still green (baseline is green).
 - **Status**: ✅ DONE (verdict + baseline persisted to CONTEXT.md)
-- **context**: updated
-
+- context: updated
+- verdict: ok:true (.workflows/reviews/task-1.md)
 ### TASK 2 (🟡): per-span boxes + ink coverage without pdfium
 - **Agent**: worker (prototype)
 - **Depends on**: TASK_1
@@ -113,8 +113,8 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
 - **Verify**: `.workflows/spikes/pdf-geometry/README.md` states GO/NO-GO with the measured coverage
   table; production paths (`src/**`) untouched (`git diff --stat src/` empty).
 - **Status**: ✅ DONE (GO measured (coverage 0.0522 > 0.005 rule))
-- **context**: no changes
-
+- context: no changes
+- verdict: ok:true (.workflows/reviews/task-2.md)
 ### TASK 3 (🟡): complexity score calibration on the five fixtures
 - **Agent**: worker (prototype)
 - **Depends on**: TASK_2
@@ -131,10 +131,10 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
 - **Verify**: `.workflows/spikes/pdf-complexity/README.md` holds the five-fixture score table plus a
   threshold recommendation with its justification; `git diff --stat src/` empty.
 - **Status**: ✅ DONE — measured: gutters=0 on all text-layer pages; score/columns agree
-- **context**: updated
+- context: updated
   everywhere → TASK 7 scope shrinks to columns + pdf_text_quality routing + standalone
   rotation flag (deletion test branch 1). See spikes/pdf-complexity/README.md §Measured verdict.
-
+- verdict: ok:true (.workflows/reviews/task-3.md)
 ### TASK 4 (🔴): `PageGeometry` emission
 - **Agent**: worker
 - **Depends on**: TASK_2
@@ -152,8 +152,8 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
 - **Verify**: `cargo test --features pdf`; new `tests/pdf_geometry.rs` asserts crop-origin subtraction
   on a fixture with a non-zero CropBox and that `git diff` on existing block output is empty.
 - **Status**: ✅ DONE (gate: 5/5 geometry tests, byte-identical CLI proof, /Rotate spec premise corrected via synthesized pages)
-- **context**: no changes
-
+- context: no changes
+- verdict: ok:true (.workflows/reviews/task-4.md)
 ### TASK 5 (🟡): `PageTextQuality` types
 - **Agent**: worker
 - **Depends on**: TASK_1
@@ -172,8 +172,8 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
 - **Verify**: `cargo test`; new `tests/quality_types.rs` asserts `page_quality` is `None` for DOCX and
   that JSON round-trips through `render::to_json_value`.
 - **Status**: ✅ DONE (gate green: 4 new tests + full matrix; JSON emits pdf_text_quality + page_quality)
-- **context**: no changes
-
+- context: no changes
+- verdict: ok:true (.workflows/reviews/task-5.md)
 ### TASK 6 (🔴): XY-Cut reading order
 - **Agent**: worker
 - **Depends on**: TASK_4
@@ -190,8 +190,8 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   output unchanged and that `pdf_mixed.pdf` no longer interleaves columns (asserted on a known
   sentence, not on a snapshot hash).
 - **Status**: ✅ DONE (gate: 9/9 reading-order tests incl. synthetic two-column end-to-end; per-region clustering root-cause fix accepted; byte-guard structural)
-- **context**: no changes
-
+- context: no changes
+- verdict: ok:true (.workflows/reviews/task-6.md)
 ### TASK 7 (🟡): Complexity scoring
 - **Agent**: worker
 - **Depends on**: TASK_3, TASK_5
@@ -208,8 +208,8 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
 - **Verify**: `cargo test`; `tests/quality_complexity.rs` asserts the range `[0,1]` over all five
   fixtures, monotonicity when a column gutter is added, and the threshold decision from TASK_3.
 - **Status**: ✅ DONE (gate: 7/7 routing tests; count_columns gate-fixed to span-level union; stale-ranges defect closed)
-- **context**: no changes
-
+- context: no changes
+- verdict: ok:true (.workflows/reviews/task-7.md)
 ### TASK 8 (🔴): Per-page verdicts + document rollup
 - **Agent**: worker
 - **Depends on**: TASK_5, TASK_6, TASK_7
@@ -227,8 +227,8 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   high complexity gets `Escalate` and is **absent** from `pages_ocr`, and that `--split-pages` mode
   reports the same per-page verdicts.
 - **Status**: ✅ DONE (gate: 6/6 verdict-routing tests incl. Escalate-never-OCRs negative + split/opts parity; router consumes verdicts, worst-page-wins rollup, extra[pdf_quality] mirror; full matrix 75/0)
-- **context**: no changes
-
+- context: no changes
+- verdict: ok:true (.workflows/reviews/task-8.md)
 ### TASK 9 (🟡): pdfium-free no-ink trust check
 - **Agent**: worker
 - **Depends on**: TASK_8
@@ -243,8 +243,8 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
 - **Verify**: `cargo test --features pdf` **and** `cargo test --no-default-features --features
   pdf`; `tests/pdf_no_ink.rs` asserts a scan is untrusted with pdfium disabled.
 - **Status**: ✅ DONE (gate: 10/10 no-ink tests on pdf AND no-default-features; trust verdicts never silently empty; full matrix 89/0)
-- **context**: no changes
-
+- context: no changes
+- verdict: ok:true (.workflows/reviews/task-9.md)
 ### TASK 10 (🟡): `OcrPage` + defaulted `ocr_page()`
 - **Agent**: worker
 - **Depends on**: TASK_8
@@ -259,8 +259,8 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
 - **Verify**: `cargo test --features pdf,ocr-indra-native`; `tests/pdf_ocr.rs` (6 existing tests)
   unchanged and green; a test asserts a legacy `ocr_page_png`-only implementor still compiles and runs.
 - **Status**: ✅ DONE (gate: 3/3 contract tests; OcrPage + defaulted ocr_page(); behavior lock untouched — pdf_ocr.rs diff empty; 98/0 matrix)
-- **context**: no changes
-
+- context: no changes
+- verdict: ok:true (.workflows/reviews/task-10.md)
 ### TASK 11 (🟡): `ocr-rusto-core` feature, tables only
 - **Agent**: worker
 - **Depends on**: TASK_10
@@ -276,9 +276,8 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   pdf,ocr-indra-native,ocr-rusto-core`; a test asserts transcripts are identical with the feature
   on and off, and that `table_html` is populated for `pdf_table_scan.pdf`.
 - **Status**: ✅ DONE — un-blocked by the human (local rusto-core @991fedf3); amendments: rusto-nn companion + vendored crates (git+rev measured >1.2 GB via submodules). Gate: 5/5 unit + 4/4 integration; tree-proof 0; transcripts identical; 98/0 matrix
-- **context**: no changes
-
-
+- context: no changes
+- verdict: ok:true (.workflows/reviews/task-11.md)
 ### TASK 12 (⚪): Docs + CHANGELOG
 - **Agent**: worker (cheap dispatch per registry)
 - **Depends on**: TASK_4-11
@@ -295,7 +294,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
 - **Verify**: `git diff --name-only` lists every declared Docs-impact path, and
   `grep -c '20261108-001' CHANGELOG.md` returns 1.
 - **Status**: ✅ DONE (gate: spec verify PASS — Plan ID in CHANGELOG + docs/quality.md; duplicate Unreleased merged; formats/library-usage/README swept)
-- **context**: no changes
+- context: no changes
 
 (No verify/quality tasks — `/next` verdict-gates every task automatically; `/review` is the final
 gate at SHIP.)
@@ -333,14 +332,14 @@ Filled in as tasks complete — cost, duration, and learnings per task.
   `src/formats/pdf.rs` (TASK_4); `PageTextQuality`/`PageVerdict` live in `src/quality.rs` (TASK_5).
   This split is what makes parallel group A and B legal — TASK_5 must not define geometry types and
   TASK_7 imports them read-only.
-
-
+- verdict: ok:true (.workflows/reviews/task-12.md)
 ### TASK 13 (AMENDMENT, human-ruled 2026-11-08): own-table-structure
 
 - **Contract**: `.workflows/specs/task-13.spec` (rusto-core removed once the
   PaddleOCR logic ports — "keeps the Rust core lean").
 - **Status**: DONE (gate: unit 14/14, integration 5/5 incl. real SLANet-plus
-- **context**: no changes
+- context: no changes
   inference on pdf_table_scan; vocabulary corrected from the model's own ONNX
   metadata; default matrix 98/0; vendor/rusto-* + the rusto dep deleted;
   verdict .workflows/reviews/task-13.md)
+- verdict: ok:true (.workflows/reviews/task-13.md)

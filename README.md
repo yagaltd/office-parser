@@ -125,7 +125,9 @@ and `tests/docx_marks.rs`.
   recognition (`<table>` markup + cell geometry on OCR'd pages, own
   PaddleOCR SLANet port over the rten runtime) is an opt-in
   (`ocr-table-structure` + `OFFICE_PARSER_TABLE_MODEL`, model
-  `models/slanet-plus.onnx`; no-op when the model is absent). Pages are rendered, orientation-corrected, deskewed,
+  `models/slanet-plus.onnx`; no-op when the model is absent, and skipped
+  on orientation-rotated/deskewed pages — their table geometry lives in
+  straightened-page space, so markup is withheld rather than wrong). Pages are rendered, orientation-corrected, deskewed,
   OCR'd and layout-mapped (headings/paragraphs/lists/tables; page
   furniture dropped); trust verdicts, provenance and low-confidence
   pages are reported in `metadata.extra["ocr"]` for vision-LLM

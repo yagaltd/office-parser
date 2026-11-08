@@ -153,6 +153,9 @@ Model: SLANet-plus ONNX, RapidAI/RapidTable v2.0.0 pin
 SHA256 `d57a942af6a2f57d6a4a0372573c696a2379bf5857c45e2ac69993f3b334514b`).
 Resolution: `OFFICE_PARSER_TABLE_MODEL` (exact file path) wins, else
 `models/slanet-plus.onnx` relative to the process working directory.
+Pages that were orientation-rotated or deskewed emit no table geometry at
+all — their geometry lives in straightened-page space while the pipeline
+crops the raw rendered PNG, so markup is withheld rather than wrong.
 Without a model file the enrichment is a documented no-op: one warning and
 `table_html` stays absent — the engine's geometry keys still surface (they
 are Indra's own, model-independent); on table-free pages the payload is
