@@ -198,6 +198,38 @@ pub struct ParsedPdfDocument {
     pub pages_geometry: Vec<PageGeometry>,
 }
 
+impl ParsedPdfDocument {
+    /// Recompute [`PdfPageBlockRange`] after the OCR merge rewrote the page
+    /// block vectors: `per_page_counts[i]` is page i's merged block count, in
+    /// page order. Also rewrites the `page_block_ranges` copy inside
+    /// `metadata_json` — the two must never disagree.
+    ///
+    /// TASK 7 scout defect: the merge moves block indices, so the COMBINED
+    /// document's ranges went stale (the split path re-derived its pages from
+    /// the merge itself via `pages_from_merge` and was already correct).
+    pub fn recompute_page_block_ranges(&mut self, per_page_counts: &[usize]) {
+        let mut start = 0usize;
+        for (pos, r) in self.page_block_ranges.iter_mut().enumerate() {
+            let end = start + per_page_counts.get(pos).copied().unwrap_or(0);
+            r.block_start = start;
+            r.block_end = end;
+            start = end;
+        }
+        self.metadata_json["page_block_ranges"] = serde_json::Value::Array(
+            self.page_block_ranges
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "page_number": r.page_number,
+                        "block_start": r.block_start,
+                        "block_end": r.block_end,
+                    })
+                })
+                .collect(),
+        );
+    }
+}
+
 /// Coordinate-system provenance for [`PageGeometry`] boxes. Domain rule: every box
 /// carries its coordinate system and rotation (.workflows/CONTEXT.md).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2618,6 +2650,7 @@ pub fn parse(bytes: &[u8]) -> crate::Result<crate::Document> {
     let parsed =
         parse_pdf_full(bytes).map_err(|e| crate::Error::from_parse(crate::Format::Pdf, e))?;
     let quality = classify_pdf_text_quality(&parsed.blocks);
+    let page_quality = build_page_quality(&parsed, PAGE_TEXT_THRESHOLD);
     let office = super::ParsedOfficeDocument {
         blocks: parsed.blocks,
         images: parsed.images,
@@ -2625,6 +2658,7 @@ pub fn parse(bytes: &[u8]) -> crate::Result<crate::Document> {
     };
     let mut doc = super::finalize(crate::Format::Pdf, office);
     doc.metadata.pdf_text_quality = Some(quality);
+    doc.metadata.page_quality = Some(page_quality);
     Ok(doc)
 }
 
@@ -2640,6 +2674,34 @@ pub trait PageOcrEngine {
 }
 
 /// Router with default thresholds (50 chars, no force).
+/// Per-page [`crate::quality::PageTextQuality`] (TASK 7): text-layer char
+/// count + span-box geometry + routing verdict, one record per page in page
+/// order. `min_chars` is the same gate the per-page OCR router applies.
+/// `counts[i]` and `pages_geometry[i]` are index-aligned by construction
+/// (pushed in the same per-page loop of `parse_pdf_full`).
+fn build_page_quality(
+    parsed: &ParsedPdfDocument,
+    min_chars: usize,
+) -> Vec<crate::quality::PageTextQuality> {
+    let counts = page_char_counts(parsed);
+    parsed
+        .pages_geometry
+        .iter()
+        .enumerate()
+        .map(|(i, geo)| {
+            let richness = counts.get(i).copied().unwrap_or(0) as u32;
+            let rotated = geo.initial_rotation != 0;
+            crate::quality::PageTextQuality {
+                page: geo.page_number,
+                text_richness: richness,
+                columns: crate::quality::count_columns(&geo.spans),
+                rotated,
+                verdict: crate::quality::page_verdict(richness, min_chars, rotated),
+            }
+        })
+        .collect()
+}
+
 pub fn parse_with_page_ocr(
     bytes: &[u8],
     engine: &mut dyn PageOcrEngine,
@@ -2753,6 +2815,9 @@ fn parse_with_page_ocr_inner<'e>(
         parse_pdf_full(bytes).map_err(|e| crate::Error::from_parse(crate::Format::Pdf, e))?;
     let quality = classify_pdf_text_quality(&parsed.blocks);
     let counts = page_char_counts(&parsed);
+    // Verdicts describe the TEXT LAYER the router decided on — computed
+    // before the merge replaces OCR'd pages' blocks.
+    let page_quality = build_page_quality(&parsed, min_chars);
     // Text-layer trust checks (port of indra_ocr textlayer.py): invisible
     // render-mode-3 text = OCR layer over a scan; replacement/private-use/
     // control chars = broken font map. Either verdict sends the page to OCR
@@ -2854,6 +2919,11 @@ fn parse_with_page_ocr_inner<'e>(
             pages_from_merge.push(local);
         }
         parsed.blocks = merged;
+        // TASK 7 scout defect: the merge rewrote the page block vectors —
+        // the combined document's page_block_ranges (struct + metadata_json
+        // copy) must be recomputed over the merged layout or they go stale.
+        let merged_counts: Vec<usize> = pages_from_merge.iter().map(Vec::len).collect();
+        parsed.recompute_page_block_ranges(&merged_counts);
         ocr_meta["low_confidence_pages"] = serde_json::Value::Array(low_conf);
 
         if !page_reasons.is_empty() {
@@ -2870,6 +2940,7 @@ fn parse_with_page_ocr_inner<'e>(
     };
     let mut doc = super::finalize(crate::Format::Pdf, office);
     doc.metadata.pdf_text_quality = Some(quality);
+    doc.metadata.page_quality = Some(page_quality.clone());
     if ocr_meta["pages_ocr"].as_u64().unwrap_or(0) > 0 {
         doc.metadata.extra["ocr"] = ocr_meta;
     }
@@ -2889,6 +2960,7 @@ fn parse_with_page_ocr_inner<'e>(
         };
         let mut page_doc = super::finalize(crate::Format::Pdf, office);
         page_doc.metadata.pdf_text_quality = Some(quality);
+        page_doc.metadata.page_quality = page_quality.get(pos).map(|q| vec![q.clone()]);
         page_doc.metadata.extra["page"] = serde_json::json!(r.page_number);
         if doc.metadata.extra.get("ocr").is_some() {
             page_doc.metadata.extra["ocr"] = doc.metadata.extra["ocr"].clone();

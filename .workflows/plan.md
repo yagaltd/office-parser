@@ -201,7 +201,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   recommended dropping the score, implement `columns` only and record why in the spec.
 - **Verify**: `cargo test`; `tests/quality_complexity.rs` asserts the range `[0,1]` over all five
   fixtures, monotonicity when a column gutter is added, and the threshold decision from TASK_3.
-- **Status**: ⬜ PENDING
+- **Status**: ✅ DONE (gate: 7/7 routing tests; count_columns gate-fixed to span-level union; stale-ranges defect closed)
 
 ### TASK 8 (🔴): Per-page verdicts + document rollup
 - **Agent**: worker
