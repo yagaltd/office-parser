@@ -12,7 +12,7 @@ using the ink coverage that TASK 4 geometry makes available, so a page whose tex
 is untrusted **without requiring pdfium**. Today the trust verdicts silently degrade to an empty
 vector when `render-pdfium` is off; after this task they are non-empty on geometry alone.
 
-## Diagrams
+### Diagrams
 
 ```mermaid
 flowchart TD
@@ -56,7 +56,7 @@ flowchart TD
 - Do not touch `PageOcrEngine` (TASK 10) or `parse_pdf_split` behaviour
 - Do not add a dependency
 
-## Completion Criteria
+## Acceptance Criteria
 
 Scenario: a scan is untrusted with pdfium disabled
   Test: test_scanned_page_untrusted_without_pdfium

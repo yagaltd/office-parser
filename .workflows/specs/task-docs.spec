@@ -41,7 +41,7 @@ updated, or a CHANGELOG without the Plan ID, refuses the archive.
 - Do not restructure unrelated sections of any doc
 - Do not change the version number in `Cargo.toml` (release is a separate step)
 
-## Completion Criteria
+## Acceptance Criteria
 
 Scenario: every declared doc path is updated
   Test: `git diff --name-only` lists each of docs/formats.md, docs/library-usage.md, README.md, cli/README.md, CHANGELOG.md

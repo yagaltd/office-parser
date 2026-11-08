@@ -12,7 +12,7 @@ size, plus the page's MediaBox, CropBox (origin subtracted), native rotation and
 so that reading order, ink coverage and citation all have a substrate. Strictly additive: no
 existing block, field, or output byte changes.
 
-## Diagrams
+### Diagrams
 
 ```mermaid
 flowchart LR
@@ -52,7 +52,7 @@ flowchart LR
 - Do not add a dependency
 - Do not add pdfium or hayro rendering
 
-## Completion Criteria
+## Acceptance Criteria
 
 Scenario: every span carries a box, font name and font size
   Test: test_spans_carry_bbox_font_name_and_size

@@ -11,7 +11,7 @@ Order born-digital PDF content by recursive XY-Cut over the TASK 4 span boxes, s
 stop interleaving their columns into a single stream. Single-column pages must produce byte-identical
 output — the fix must be invisible where the current behaviour is already correct.
 
-## Diagrams
+### Diagrams
 
 ```mermaid
 flowchart TD
@@ -55,7 +55,7 @@ flowchart TD
 - Do not reorder pages — only content within a page
 - Do not add a dependency
 
-## Completion Criteria
+## Acceptance Criteria
 
 Scenario: single-column output is byte-identical
   Test: test_single_column_output_unchanged

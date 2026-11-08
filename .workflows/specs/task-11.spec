@@ -11,7 +11,7 @@ Add an **off-by-default** `ocr-rusto-core` feature that fills the new `OcrPage` 
 `rusto-core` — layout regions, word boxes and table structure — for `LayoutType::Table` regions only.
 Indra keeps the text path, so transcripts must be identical with the feature on and off.
 
-## Diagrams
+### Diagrams
 
 ```mermaid
 flowchart TD
@@ -63,7 +63,7 @@ flowchart TD
 - Do not replace or re-tune Indra detection, recognition, or ordering
 - Do not add pdfium or hayro
 
-## Completion Criteria
+## Acceptance Criteria
 
 Scenario: the feature is off by default and pulls nothing
   Test: `! cargo tree --no-default-features --features pdf -e normal | grep -q rusto-core`

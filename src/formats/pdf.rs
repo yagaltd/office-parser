@@ -3213,13 +3213,14 @@ fn parse_with_page_ocr_inner<'e>(
                                 let page = engine_ref
                     .ocr_page(png)
                     .map_err(|e| crate::Error::from_parse(crate::Format::Pdf, anyhow::anyhow!(e)))?;
-                // TASK 11 (`ocr-rusto-core`): enrich the engine's OcrPage AFTER
-                // Indra built blocks + confidence. The enrichment only fills the
-                // optional rich fields (layout_regions/table_html); blocks and
-                // confidence pass through untouched — transcripts are identical
-                // with the feature on or off.
-                #[cfg(feature = "ocr-rusto-core")]
-                let page = crate::formats::rusto_tables::enrich_ocr_page(page, png);
+                // TASK 13 (`ocr-table-structure`): enrich the engine's OcrPage
+                // AFTER Indra built blocks + confidence (the engine's geometry
+                // — layout_regions/word_boxes — is already on the payload).
+                // The SLANet pipeline fills `table_html` only; blocks and
+                // confidence pass through untouched — transcripts are
+                // identical with the feature on or off.
+                #[cfg(feature = "ocr-table-structure")]
+                let page = crate::formats::table_structure::enrich_ocr_page(page, png);
                 let OcrPage {
                     mut blocks,
                     confidence,

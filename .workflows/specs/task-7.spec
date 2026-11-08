@@ -1,4 +1,3 @@
----
 spec: task
 name: "pdf-columns-routing"
 tags: [worker, pdf, quality, rescope]
@@ -22,7 +21,7 @@ Implement instead:
 3. Standalone rotated-page flag read directly off the Tm matrix (dominant tilt > 5° when tilted
    atoms carry ≥50% of chars) — escalates rotation without span geometry.
 
-## Completion Criteria
+## Acceptance Criteria
 
 - `PageTextQuality` carries `columns` + `rotated` (per TASK 5's types); verdict logic:
   ImageOnly → Ocr; rotated → Escalate; else Trust.
@@ -31,7 +30,7 @@ Implement instead:
   text-layer pages → Trust; rotated fixture is image-only so Ocr wins).
 - `cargo test` green.
 
-## Allowed Changes
+## Constraints (Allowed Changes)
 
 - `src/quality.rs`, `src/document.rs` (verdict fn), `tests/quality_routing.rs`
 

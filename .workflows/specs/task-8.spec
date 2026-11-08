@@ -12,7 +12,7 @@ document-level rollup, and a JSON mirror in `metadata.extra`. The critical invar
 `Escalate` never routes a page to OCR — it is a vision-LLM signal, because OCR cannot repair reading
 order.
 
-## Diagrams
+### Diagrams
 
 ```mermaid
 flowchart TD
@@ -62,7 +62,7 @@ flowchart TD
 - Do not add pdfium, a model, or any dependency
 - Do not remove or reword the existing `metadata.extra["ocr"]` keys
 
-## Completion Criteria
+## Acceptance Criteria
 
 Scenario: one quality entry per page
   Test: test_page_quality_len_matches_page_count

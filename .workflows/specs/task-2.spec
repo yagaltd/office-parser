@@ -14,7 +14,7 @@ born-digital one without `render-pdfium`?** A GO turns Track 1 of the proposal i
 a NO-GO re-tiers TASK 4 as `refactor-first` and stops the plan. Throwaway code only — production
 paths are forbidden by construction.
 
-## Diagrams
+### Diagrams
 
 ```mermaid
 flowchart LR
@@ -51,7 +51,7 @@ flowchart LR
 - Do not modify or "fix" the interpreter; report what it already provides
 - Do not enable `render-pdfium`, `render-hayro`, or any OCR feature
 
-## Completion Criteria
+## Acceptance Criteria
 
 Scenario: per-span geometry is derivable from existing interpreter state
   Test: `.workflows/spikes/pdf-geometry/README.md` — section "Box dump" with a go/no-go on the seam

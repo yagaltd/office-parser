@@ -121,10 +121,11 @@ and `tests/docx_marks.rs`.
   from `INDRA_OCR_MODEL_DIR` or the HF cache; pin: Indra `v3.1.1`).
   Rust + pdfium only, no Python; optional pure-Rust backends: rten
   runtime (`ocr-rten` + `INDRA_RUNTIME=rten`) and hayro renderer
-  (`render-hayro` + `OFFICE_PARSER_RENDERER=hayro`); table-region
-  enrichment (layout regions + `<table>` markup on OCR'd pages) is an
-  opt-in (`ocr-rusto-core` + `OFFICE_PARSER_LAYOUT_MODEL`; no-op when
-  the model is absent). Pages are rendered, orientation-corrected, deskewed,
+  (`render-hayro` + `OFFICE_PARSER_RENDERER=hayro`); table-structure
+  recognition (`<table>` markup + cell geometry on OCR'd pages, own
+  PaddleOCR SLANet port over the rten runtime) is an opt-in
+  (`ocr-table-structure` + `OFFICE_PARSER_TABLE_MODEL`, model
+  `models/slanet-plus.onnx`; no-op when the model is absent). Pages are rendered, orientation-corrected, deskewed,
   OCR'd and layout-mapped (headings/paragraphs/lists/tables; page
   furniture dropped); trust verdicts, provenance and low-confidence
   pages are reported in `metadata.extra["ocr"]` for vision-LLM

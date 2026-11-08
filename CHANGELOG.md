@@ -44,6 +44,28 @@
   third-party submodules: >1.2 GB per consumer). Feature off = absent
   from `cargo tree` (proved).
 
+### Session: own table-structure pipeline (ocr-table-structure replaces ocr-rusto-core)
+
+- `ocr-rusto-core` renamed to `ocr-table-structure` and re-implemented
+  without vendored crates: `vendor/rusto-core` + `vendor/rusto-nn` are
+  deleted; the SLANet-plus ONNX (RapidAI/RapidTable v2.0.0, SHA256
+  d57a942af6a2f57d6a4a0372573c696a2379bf5857c45e2ac69993f3b334514b) runs
+  through the rten runtime already shipped by `ocr-rten`, with the
+  PaddleOCR post-processing ported in-tree
+  (`src/formats/table_structure.rs`: embedded 28-token vocabulary,
+  488×488 preprocess, `TableLabelDecode` + `TableMatch` ports, own HTML
+  rendering with escapes). Model resolution:
+  `OFFICE_PARSER_TABLE_MODEL` → `models/slanet-plus.onnx`; absent =
+  documented no-op (one warning, `table_html` absent).
+- Under this feature Indra now also exposes the geometry it already
+  computes for `Table` blocks: grid bbox → `layout_regions` (label
+  `"Table"`), cell rects → `word_boxes`. Transcripts (blocks +
+  confidence) are byte-identical with the feature off (exposure is
+  feature-gated; `tests/pdf_ocr.rs` + `tests/ocr_page_contract.rs`
+  stay green untouched).
+- No dependency beyond the existing optional `image` + `rten`; with the
+  feature off `cargo tree` shows neither rusto crate (proved).
+
 ### Session C: script/CJK lane (pipeline.py hanzi_lines port)
 
 - script.onnx classifies each line crop (p > 0.5 = holds Chinese);

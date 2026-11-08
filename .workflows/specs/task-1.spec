@@ -1,4 +1,3 @@
----
 spec: task
 name: "pdf-scout-interpreter-seams"
 tags: [scout, pdf, baseline]
@@ -13,7 +12,7 @@ point each text block is emitted, and produce a per-fixture baseline table: page
 `pdf_text_quality`, per-page `page_char_counts`, whether `render-pdfium` changes the trust
 verdict, and current reading-order output for `pdf_mixed.pdf` (the multi-column case).
 
-## Completion Criteria
+## Acceptance Criteria
 
 - Findings appended to `.workflows/CONTEXT.md` §Open Questions where they resolve or
   sharpen a question.
@@ -21,7 +20,7 @@ verdict, and current reading-order output for `pdf_mixed.pdf` (the multi-column 
   `pdf_cjk_scan`, `pdf_mixed`) with non-empty rows.
 - `cargo test --features pdf` still green (baseline is green).
 
-## Allowed Changes
+## Constraints (Allowed Changes)
 
 - `.workflows/CONTEXT.md`
 - `.workflows/spikes/scout/**` (scratch notes)

@@ -11,7 +11,7 @@ Define the additive public surface that replaces a single document-wide enum wit
 `PageTextQuality` and `PageVerdict`, plus `DocumentMetadata.page_quality`. Types only — no wiring
 into the PDF parser, no behaviour change. This is the shape the rest of the plan fills in.
 
-## Diagrams
+### Diagrams
 
 ```mermaid
 flowchart LR
@@ -56,7 +56,7 @@ flowchart LR
 - Do not populate `page_quality` anywhere in this task — it stays `None` everywhere
 - Do not add a dependency
 
-## Completion Criteria
+## Acceptance Criteria
 
 Scenario: non-PDF formats report no page quality
   Test: test_page_quality_is_none_for_docx

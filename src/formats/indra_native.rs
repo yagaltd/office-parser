@@ -1360,6 +1360,13 @@ pub struct IndraNative {
     rec_height: usize,
     min_page_confidence: f64,
     last_page_confidence: Option<f64>,
+    /// TASK 13 (`ocr-table-structure`): per-page table geometry captured by
+    /// the inherent `ocr_page` — (grid bboxes, cell rects + texts) for every
+    /// emitted Table block. Consumed by the `ocr_page` trait override;
+    /// feature-gated so the default matrix keeps the task-10 payload shape.
+    #[cfg(feature = "ocr-table-structure")]
+    table_geometry:
+        Option<(Vec<super::pdf::OcrLayoutRegion>, Vec<super::pdf::OcrWordBox>)>,
 }
 
 pub struct NativeLine {
@@ -1432,6 +1439,8 @@ impl IndraNative {
             rec_height: meta.rec_height as usize,
             min_page_confidence: super::pdf_ocr::DEFAULT_MIN_PAGE_CONFIDENCE,
             last_page_confidence: None,
+            #[cfg(feature = "ocr-table-structure")]
+            table_geometry: None,
         })
     }
 
@@ -1738,6 +1747,10 @@ impl IndraNative {
                 conf: recs[i].conf,
             })
             .collect();
+        #[cfg(feature = "ocr-table-structure")]
+        let mut table_regions: Vec<super::pdf::OcrLayoutRegion> = Vec::new();
+        #[cfg(feature = "ocr-table-structure")]
+        let mut table_cells: Vec<super::pdf::OcrWordBox> = Vec::new();
         let mut blocks = Vec::new();
         if let Some((cls, same, _tab)) = layout {
             // split_blocks: runs of the reading order with same-logit > 0 between neighbours
@@ -1802,6 +1815,31 @@ impl IndraNative {
                                 .map(|(bx, txt)| (bx.0, bx.1, bx.2, bx.3, txt))
                         })
                         .collect();
+                    #[cfg(feature = "ocr-table-structure")]
+                    {
+                        // Geometry-only exposure (task-13): grid bbox + cell
+                        // rects recorded beside the emitted Table block. The
+                        // block/confidence build below is untouched — transcripts
+                        // are identical with the feature off (exposure is
+                        // feature-gated, so the default matrix keeps the task-10
+                        // payload shape locked by ocr_page_contract.rs).
+                        table_regions.push(super::pdf::OcrLayoutRegion {
+                            label: "Table".to_string(),
+                            x0: bx0,
+                            y0: by0,
+                            x1: bx1,
+                            y1: by1,
+                        });
+                        table_cells.extend(cells.iter().map(
+                            |(x0, y0, x1, y1, text)| super::pdf::OcrWordBox {
+                                text: text.clone(),
+                                x0: *x0,
+                                y0: *y0,
+                                x1: *x1,
+                                y1: *y1,
+                            },
+                        ));
+                    }
                     build_table_grid(&cells)
                 } else {
                     None
@@ -1813,6 +1851,11 @@ impl IndraNative {
                     table,
                 });
             }
+        }
+        #[cfg(feature = "ocr-table-structure")]
+        {
+            self.table_geometry = (!table_regions.is_empty())
+                .then_some((table_regions, table_cells));
         }
         Ok(NativePage { lines, blocks })
     }
@@ -1897,6 +1940,23 @@ impl super::pdf::PageOcrEngine for IndraNative {
         }
         self.last_page_confidence = conf;
         Ok((blocks, conf))
+    }
+
+    /// TASK 13 (`ocr-table-structure`): the widened seam — attach the table
+    /// geometry captured during `ocr_page_png`. Blocks/confidence are the
+    /// same values `ocr_page_png` returned, byte-identical to the feature-off
+    /// engine; only the optional rich fields change.
+    #[cfg(feature = "ocr-table-structure")]
+    fn ocr_page(&mut self, page_png: &[u8]) -> Result<super::pdf::OcrPage, String> {
+        let (blocks, confidence) = self.ocr_page_png(page_png)?;
+        let (layout_regions, word_boxes) = self.table_geometry.take().unwrap_or_default();
+        Ok(super::pdf::OcrPage {
+            blocks,
+            confidence,
+            layout_regions: (!layout_regions.is_empty()).then_some(layout_regions),
+            word_boxes: (!word_boxes.is_empty()).then_some(word_boxes),
+            table_html: None,
+        })
     }
 
     fn name(&self) -> &'static str {

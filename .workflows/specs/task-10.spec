@@ -12,7 +12,7 @@ text — **without breaking a single existing implementor**. `OcrPage` plus a de
 `PageOcrEngine::ocr_page()` does that: the new fields are `None` for any engine that only implements
 today's `ocr_page_png()`.
 
-## Diagrams
+### Diagrams
 
 ```mermaid
 flowchart TD
@@ -55,7 +55,7 @@ flowchart TD
 - Do not add a generic parameter to the trait or to `ocr_page`
 - Do not add a dependency (the rusto-core path is TASK 11)
 
-## Completion Criteria
+## Acceptance Criteria
 
 Scenario: a legacy engine still compiles and runs
   Test: test_legacy_engine_implementing_only_ocr_page_png_still_works

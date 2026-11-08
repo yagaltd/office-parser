@@ -133,17 +133,30 @@ Region and word coordinates are pixels in the rendered page PNG
 (top-left origin, y down), rasterized at the requested dpi with no
 megapixel clamp (OCR wants full-resolution source pixels).
 
-## Table enrichment (`ocr-rusto-core`, opt-in)
+## Table structure recognition (`ocr-table-structure`, opt-in)
 
-Off by default. When enabled, OCR'd pages are enriched after the engine
-ran: rusto-core's `LayoutDetector` detects `LayoutType::Table` regions
-(surfaced via `layout_regions`, label `"Table"`) and the engine's own
-table blocks render as `<table>` markup into `table_html` (gated on a
-detected table region). Blocks and confidence pass through untouched —
-transcripts are identical with the feature on or off. `word_boxes` are
-never populated.
+Off by default (implies `ocr-rten`). When enabled, the Indra engine exposes
+the geometry it already computes for `Table` blocks — the grid bbox surfaces
+via `layout_regions` (label `"Table"`) and the cell rects via `word_boxes`
+(raster-pixel coordinates) — and each table region runs through the
+SLANet-plus ONNX model with the rten runtime: crop → 488×488 preprocess
+(PaddleOCR `predict_structure.py` op order: keep-ratio resize → normalize →
+zero-pad → CHW) → `TableLabelDecode` port (argmax tokens, end-token stop,
+`<td` bbox decode) → `TableMatch` port (IoU + L1 against the Indra cell
+rects) → own `<table>` rendering (`thead`/`tbody`/`tr`, colspan/rowspan
+attributes, HTML-escaped cell text) into `table_html`. Blocks and confidence
+pass through untouched — transcripts are identical with the feature on or
+off.
 
-Model resolution: `OFFICE_PARSER_LAYOUT_MODEL` (exact file path) wins,
-else `models/DocOCR/layout.onnx` relative to the process working
-directory. Without a model file the enrichment is a documented no-op:
-one warning, rich keys stay absent (the feature-off payload shape).
+Model: SLANet-plus ONNX, RapidAI/RapidTable v2.0.0 pin
+(https://www.modelscope.cn/models/RapidAI/RapidTable/resolve/v2.0.0/slanet-plus.onnx,
+SHA256 `d57a942af6a2f57d6a4a0372573c696a2379bf5857c45e2ac69993f3b334514b`).
+Resolution: `OFFICE_PARSER_TABLE_MODEL` (exact file path) wins, else
+`models/slanet-plus.onnx` relative to the process working directory.
+Without a model file the enrichment is a documented no-op: one warning and
+`table_html` stays absent — the engine's geometry keys still surface (they
+are Indra's own, model-independent); on table-free pages the payload is
+exactly the feature-off shape. The 28-token structure vocabulary is embedded
+in the binary — no external dictionary file. No dependencies beyond the
+optional `image` + `rten` the OCR stack already uses; the vendored
+rusto-core/rusto-nn crates are gone.

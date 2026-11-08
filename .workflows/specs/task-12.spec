@@ -1,4 +1,3 @@
----
 spec: task
 name: "pdf-plan-docs"
 tags: [docs, pdf]
@@ -12,13 +11,13 @@ Document the shipped plan surface: per-page `PageTextQuality` + verdicts in meta
 reading order, `OcrPage` contract, the no-ink trust check, complexity scoring, and the
 `ocr-rusto-core` tables feature. Record the Plan ID in CHANGELOG.
 
-## Completion Criteria
+## Acceptance Criteria
 
 - README.md + docs/ updated for every user-visible surface above.
 - CHANGELOG entry carries the Plan ID `20261108-001`.
 - `scripts/check-archive.sh` passes (SHIP gate dry run).
 
-## Allowed Changes
+## Constraints (Allowed Changes)
 
 - `README.md`, `docs/**`, `CHANGELOG.md`
 

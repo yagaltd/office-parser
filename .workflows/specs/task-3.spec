@@ -13,7 +13,7 @@ low for a single-column text page, and correctly ambiguous for the scans? The ca
 threshold recommendation produced here are the evidence the TASK 7 impl spec is drafted from. If the
 score cannot beat `column count` alone, say so — that is a deletion, not a failure.
 
-## Diagrams
+### Diagrams
 
 ```mermaid
 flowchart LR
@@ -55,7 +55,7 @@ flowchart LR
 - `.workflows/spikes/pdf-geometry/**` — read-only
 - Do not tune the score against a fixture's expected label; record disagreement instead
 
-## Completion Criteria
+## Acceptance Criteria
 
 Scenario: all five fixtures scored
   Test: `.workflows/spikes/pdf-complexity/README.md` — section "Score table"
