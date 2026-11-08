@@ -92,8 +92,9 @@ office-parser-cli bundle.pdf --out ./output --format json
   `--ocr-force` overrides the checks entirely.
 - Engine: in-process ONNX Runtime (`--features ocr-indra-native`);
   rendering via pdfium (`--features render-pdfium`, preferred),
-  hayro (`--features render-hayro`, pure-Rust fallback; select with
-  `OFFICE_PARSER_RENDERER=hayro`) or `pdftoppm`. Sideways scans are
+  hayro (`--features render-hayro`, pure-Rust fallback) or
+  `pdftoppm`. Backend order pdfium → hayro → pdftoppm; pin with
+  `OFFICE_PARSER_RENDERER=pdfium|hayro|pdftoppm`. Sideways scans are
   turned upright and deskewed;
 - Runtime A/B: `--features ocr-rten` +
   `INDRA_RUNTIME=rten` switches the model runner to rten (pure Rust);

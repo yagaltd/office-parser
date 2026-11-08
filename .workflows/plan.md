@@ -94,7 +94,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   `.workflows/CONTEXT.md` §Open Questions where they resolve or sharpen a question.
 - **Verify**: findings section present in `.workflows/CONTEXT.md`; baseline table lists all five
   fixtures with non-empty rows; `cargo test --features pdf` still green (baseline is green).
-- **Status**: ⬜ PENDING
+- **Status**: ✅ DONE (verdict + baseline persisted to CONTEXT.md)
 
 ### TASK 2 (🟡): per-span boxes + ink coverage without pdfium
 - **Agent**: worker (prototype)
@@ -111,7 +111,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   re-tiers TASK_4 as `refactor-first` and stops the plan for human review.
 - **Verify**: `.workflows/spikes/pdf-geometry/README.md` states GO/NO-GO with the measured coverage
   table; production paths (`src/**`) untouched (`git diff --stat src/` empty).
-- **Status**: ⬜ PENDING
+- **Status**: ✅ DONE (GO measured (coverage 0.0522 > 0.005 rule))
 
 ### TASK 3 (🟡): complexity score calibration on the five fixtures
 - **Agent**: worker (prototype)
@@ -148,7 +148,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   TASK_2 spike's proven approach, not from its throwaway code.
 - **Verify**: `cargo test --features pdf`; new `tests/pdf_geometry.rs` asserts crop-origin subtraction
   on a fixture with a non-zero CropBox and that `git diff` on existing block output is empty.
-- **Status**: ⬜ PENDING
+- **Status**: ✅ DONE (deletion-test branch 1 -> TASK 7 rescope)
 
 ### TASK 5 (🟡): `PageTextQuality` types
 - **Agent**: worker
