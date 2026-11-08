@@ -194,7 +194,8 @@ pub struct ParsedPdfDocument {
     pub metadata_json: serde_json::Value,
     pub page_block_ranges: Vec<PdfPageBlockRange>,
     /// TASK 4: per-page geometric truth (one [`PageGeometry`] per page, page order).
-    /// Strictly additive parallel output — block assembly never reads it.
+    /// TASK 6: read by block assembly — the XY-Cut orders atoms from these spans
+    /// before line clustering; the emitted `spans` stay in content-stream order.
     pub pages_geometry: Vec<PageGeometry>,
 }
 
@@ -278,7 +279,8 @@ pub struct SpanBox {
 
 /// Per-page geometric truth (task-4): one record per parsed page, in page order — an
 /// empty `spans` is meaningful (the page emits no text operators), pages are never
-/// omitted. Strictly additive parallel output: the block path never reads it.
+/// omitted. TASK 6 note: the block path now READS `spans` (reading order) but
+/// never mutates them — emitted order stays content-stream order.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PageGeometry {
     pub page_number: u32,
@@ -1494,6 +1496,156 @@ fn build_page_geometry(
     }
 }
 
+// ---------------------------------------------------------------------------
+// TASK 6 — recursive XY-Cut reading order (task-6 spec, plan 20261108-001).
+//
+// Pure geometry over one page's normalized `SpanBox`es; no model, no pdfium,
+// no new dependency. A vertical cut (column gutter) is preferred, then a
+// horizontal cut (band), exactly the task-6 spec diagram. Our fixture corpus is
+// single-column everywhere (TASK 3: gutters=0, columns=1 on every text-layer
+// page), so on the corpus this is a NO-OP guard: one region means the caller
+// keeps the original stream order and the output stays byte-identical. The
+// multi-column path cannot be exercised by the fixture corpus — it is verified
+// by synthetic geometry in `tests/pdf_reading_order.rs`.
+// ---------------------------------------------------------------------------
+
+/// Recursion depth cap: a pathological page of staircase-separated boxes can
+/// otherwise drive one split per span (1-vs-n-1) to full span depth.
+const XY_CUT_MAX_DEPTH: u32 = 32;
+
+/// Which projection axis [`xy_split_at_widest_gap`] works on.
+#[derive(Clone, Copy)]
+enum XyAxis {
+    /// Columns: project onto x, split left/right at the widest gutter.
+    X,
+    /// Bands: project onto y, split top/bottom at the widest gap.
+    Y,
+}
+
+/// TASK 6: order one page's spans by recursive XY-Cut. Input: the page's
+/// normalized spans ([`PageGeometry`].spans — visible-page coords, y down,
+/// origin top-left) in content-stream order; they are only read, never
+/// reordered. Returns one entry per emitted region, each a list of span `seq`
+/// values in reading order (top-to-bottom, then left-to-right).
+///
+/// `regions.len() <= 1` means no gutter was found anywhere, so the caller keeps
+/// the original stream order — the byte-identity contract for single-column
+/// pages. Empty input gives empty output (an empty page produces no regions,
+/// no panic).
+pub fn xy_cut_reading_regions(spans: &[SpanBox]) -> Vec<Vec<u32>> {
+    if spans.is_empty() {
+        return Vec::new();
+    }
+    let all: Vec<usize> = (0..spans.len()).collect();
+    let regions = xy_cut_partition(spans, &all, 0);
+    regions
+        .into_iter()
+        .map(|region| region.into_iter().map(|i| spans[i].seq).collect())
+        .collect()
+}
+
+/// Recursive split: widest vertical gutter first, else widest horizontal band
+/// gap, else leaf. Sides are never empty (a gap sits between merged clusters),
+/// so every recursion strictly shrinks the set.
+fn xy_cut_partition(spans: &[SpanBox], idxs: &[usize], depth: u32) -> Vec<Vec<usize>> {
+    if idxs.len() <= 1 || depth >= XY_CUT_MAX_DEPTH {
+        return vec![xy_cut_leaf(spans, idxs)];
+    }
+    let med_fs = median_f32(idxs.iter().map(|&i| spans[i].font_size).collect(), 12.0);
+    // Column gutter: ~2x the body font. A real gutter dwarfs every in-column
+    // x-gap; the corpus never crosses this (gutters=0, measured).
+    let v_thr = (2.0 * med_fs).max(12.0);
+    if let Some((left, right)) = xy_split_at_widest_gap(spans, idxs, XyAxis::X, v_thr) {
+        let mut out = xy_cut_partition(spans, &left, depth + 1);
+        out.extend(xy_cut_partition(spans, &right, depth + 1));
+        return out;
+    }
+    // Band gap: stricter than the column threshold. Paragraph and section
+    // spacing must NOT trigger bands — a y-cut between stacked blocks cannot
+    // improve reading order (top-to-bottom is already correct). Its one real
+    // job is peeling a full-width row (header, figure caption) that BRIDGES
+    // the column gutter and would otherwise block the vertical cut.
+    let h_thr = (2.5 * med_fs).max(28.0);
+    if let Some((top, bottom)) = xy_split_at_widest_gap(spans, idxs, XyAxis::Y, h_thr) {
+        let mut out = xy_cut_partition(spans, &top, depth + 1);
+        out.extend(xy_cut_partition(spans, &bottom, depth + 1));
+        return out;
+    }
+    vec![xy_cut_leaf(spans, idxs)]
+}
+
+/// Leaf region: reading order = top-to-bottom, then left-to-right (y is
+/// normalized top-left/down, so ascending y0 is downwards).
+fn xy_cut_leaf(spans: &[SpanBox], idxs: &[usize]) -> Vec<usize> {
+    let mut leaf = idxs.to_vec();
+    leaf.sort_by(|&a, &b| {
+        let by_y = spans[a]
+            .y0
+            .partial_cmp(&spans[b].y0)
+            .unwrap_or(std::cmp::Ordering::Equal);
+        if by_y != std::cmp::Ordering::Equal {
+            return by_y;
+        }
+        let by_x = spans[a]
+            .x0
+            .partial_cmp(&spans[b].x0)
+            .unwrap_or(std::cmp::Ordering::Equal);
+        if by_x != std::cmp::Ordering::Equal {
+            return by_x;
+        }
+        spans[a].seq.cmp(&spans[b].seq)
+    });
+    leaf
+}
+
+/// Project the region's boxes onto `axis`, merge overlapping intervals, and
+/// split at the WIDEST gap between consecutive merged clusters when it clears
+/// `threshold`. Returns (before, after) index groups, both non-empty; `None`
+/// when everything merges into one cluster (no gutter — the single-column
+/// case). A cut can never slice a visual line: any box crossing the gap
+/// bridges the two clusters and merges them.
+fn xy_split_at_widest_gap(
+    spans: &[SpanBox],
+    idxs: &[usize],
+    axis: XyAxis,
+    threshold: f32,
+) -> Option<(Vec<usize>, Vec<usize>)> {
+    if !(threshold.is_finite() && threshold > 0.0) || idxs.is_empty() {
+        return None;
+    }
+    let (lo_of, hi_of): (fn(&SpanBox) -> f32, fn(&SpanBox) -> f32) = match axis {
+        XyAxis::X => (|s: &SpanBox| s.x0, |s: &SpanBox| s.x1),
+        XyAxis::Y => (|s: &SpanBox| s.y0, |s: &SpanBox| s.y1),
+    };
+    let mut order: Vec<usize> = idxs.to_vec();
+    order.sort_by(|&a, &b| {
+        lo_of(&spans[a])
+            .partial_cmp(&lo_of(&spans[b]))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Sweep lo-ascending, merging overlapping intervals; remember the widest
+    // inter-cluster gap (strictly greater than the threshold) and where it sits.
+    let mut best_split: Option<usize> = None; // split `order` after this index
+    let mut best_gap = threshold;
+    let mut cluster_hi = hi_of(&spans[order[0]]);
+    for k in 1..order.len() {
+        let (lo, hi) = (lo_of(&spans[order[k]]), hi_of(&spans[order[k]]));
+        if lo > cluster_hi {
+            // `order[k]` starts a new cluster: the sweep found a real gap.
+            if lo - cluster_hi > best_gap {
+                best_gap = lo - cluster_hi;
+                best_split = Some(k);
+            }
+            cluster_hi = hi;
+        } else if hi > cluster_hi {
+            cluster_hi = hi;
+        }
+    }
+    let k = best_split?;
+    Some((order[..k].to_vec(), order[k..].to_vec()))
+}
+
 #[derive(Clone, Debug)]
 struct Line {
     y: f32,
@@ -1930,9 +2082,40 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
 
         pages_geometry.push(build_page_geometry(&doc, page_id, page_number, raw_spans));
 
-        let lines = cluster_atoms_to_lines(&atoms);
-
-        let paragraphs = cluster_lines_to_paragraphs(&lines);
+        // TASK 6 (xy-cut reading order): order the page's content by recursive
+        // XY-Cut over its span boxes before line clustering. `regions.len() <= 1`
+        // means no gutter was found — the exact pre-TASK-6 calls run unchanged
+        // (byte-guard: single-column pages, tests/pdf_reading_order.rs). With a
+        // gutter, lines AND paragraphs are clustered per region and concatenated
+        // in XY-Cut order: `cluster_lines_to_paragraphs` re-sorts lines by y
+        // globally, which would re-interleave the columns the cut just separated —
+        // so per-region clustering at both stages is required, not just atom
+        // reordering. `--split-pages` and the combined path share this code (both
+        // go through `parse_pdf_full`), so both observe the same order.
+        let regions = xy_cut_reading_regions(
+            &pages_geometry
+                .last()
+                .expect("PageGeometry pushed for every page, in order")
+                .spans,
+        );
+        let mut paragraphs: Vec<Paragraph> = Vec::new();
+        let lines: Vec<Line> = if regions.len() <= 1 {
+            let lines = cluster_atoms_to_lines(&atoms);
+            paragraphs = cluster_lines_to_paragraphs(&lines);
+            lines
+        } else {
+            let mut lines = Vec::new();
+            for region in &regions {
+                let region_atoms: Vec<TextAtom> = region
+                    .iter()
+                    .map(|&seq| atoms[seq as usize].clone())
+                    .collect();
+                let region_lines = cluster_atoms_to_lines(&region_atoms);
+                paragraphs.extend(cluster_lines_to_paragraphs(&region_lines));
+                lines.extend(region_lines);
+            }
+            lines
+        };
 
         let y_min = lines
             .iter()

@@ -184,7 +184,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
 - **Verify**: `cargo test --features pdf`; `tests/pdf_reading_order.rs` asserts single-column fixture
   output unchanged and that `pdf_mixed.pdf` no longer interleaves columns (asserted on a known
   sentence, not on a snapshot hash).
-- **Status**: ⬜ PENDING
+- **Status**: ✅ DONE (gate: 9/9 reading-order tests incl. synthetic two-column end-to-end; per-region clustering root-cause fix accepted; byte-guard structural)
 
 ### TASK 7 (🟡): Complexity scoring
 - **Agent**: worker
