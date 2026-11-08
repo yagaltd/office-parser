@@ -382,6 +382,11 @@ pub mod pdf_ocr;
 #[cfg(all(feature = "pdf", feature = "ocr-indra-native"))]
 pub mod indra_native;
 
+/// rusto-core table-region enrichment for OCR'd pages (layout regions +
+/// table markup); pure add-on — never touches Indra's transcript.
+#[cfg(feature = "ocr-rusto-core")]
+pub mod rusto_tables;
+
 #[cfg(feature = "json")]
 pub mod json;
 #[cfg(not(feature = "json"))]

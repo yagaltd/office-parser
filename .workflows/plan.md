@@ -265,7 +265,8 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
 - **Verify**: `cargo build` (feature off — zero new deps in `Cargo.lock`) and `cargo test --features
   pdf,ocr-indra-native,ocr-rusto-core`; a test asserts transcripts are identical with the feature
   on and off, and that `table_html` is populated for `pdf_table_scan.pdf`.
-- **Status**: ❌ ESCALATED — rusto-core does not exist on crates.io (spec stop-clause); human review: drop / re-point in-house / name a real crate (see .workflows/reviews/task-11.md)
+- **Status**: ✅ DONE — un-blocked by the human (local rusto-core @991fedf3); amendments: rusto-nn companion + vendored crates (git+rev measured >1.2 GB via submodules). Gate: 5/5 unit + 4/4 integration; tree-proof 0; transcripts identical; 98/0 matrix
+
 
 ### TASK 12 (⚪): Docs + CHANGELOG
 - **Agent**: worker (cheap dispatch per registry)

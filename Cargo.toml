@@ -67,6 +67,12 @@ render-hayro = ["pdf", "dep:hayro", "dep:image"]
 ocr-indra-native = ["dep:ort", "dep:image"]
 # rten as alternative runtime for the same models (A/B via INDRA_RUNTIME=rten)
 ocr-rten = ["pdf", "dep:rten", "dep:rten-tensor", "rten/rten_format"]
+# rusto-core enrichment of OCR'd pages (TASK 11): LayoutType::Table regions +
+# table markup via rusto-core's LayoutDetector/TableStructure. Off by default
+# - with the feature off, `cargo tree` shows no rusto-core. Dependency is the
+# pinned git rev (repo deploys from GitHub; a machine-local path would not
+# resolve for consumers/CI).
+ocr-rusto-core = ["pdf", "dep:image", "dep:rusto-core"]
 
 # RTF
 rtf = []
@@ -96,6 +102,13 @@ ort = { version = "=2.0.0-rc.13", optional = true }  # pinned: rc.14 changes the
 rten = { version = "0.27.0", optional = true }
 rten-tensor = { version = "0.27.0", optional = true }
 hayro = { path = "vendor/hayro", optional = true }
+# Vendored from byrizki/rusto-rs @ 991fedf3 (MIT / MIT OR Apache-2.0). The
+# git+rev dependency was tried first and is infeasible: cargo clones the whole
+# rusto-rs tree recursively INCLUDING its third-party submodules (RapidDoc,
+# alibaba/MNN, PaddlePaddle/PaddleX) — >1.2 GB per consumer/CI run. Only the
+# two crates are vendored (hayro precedent); their relative path layout
+# (../rusto-nn) is preserved, licenses included.
+rusto-core = { path = "vendor/rusto-core", optional = true }
 
 # Vendored, patched hayro stack (origin: PdfCraft vendor/, MIT OR Apache-2.0).
 # Each patch carries "PdfCraft patch:" markers + tests; remove once upstream

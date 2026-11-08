@@ -1,5 +1,22 @@
 ## Unreleased
 
+### Session: rusto-core table-region enrichment (ocr-rusto-core, off by default)
+
+- New opt-in feature `ocr-rusto-core`: for OCR'd pages, rusto-core's
+  LayoutDetector gates `LayoutType::Table` regions and the engine's own
+  Block::Table grids render as `<table>` markup into
+  `metadata.extra["ocr"]["table_html"]` (+ `layout_regions`); blocks and
+  confidence pass through untouched, so transcripts are identical with
+  the feature on or off. `word_boxes` deliberately never populated.
+- Model resolution: `OFFICE_PARSER_LAYOUT_MODEL` (exact file) else
+  `models/DocOCR/layout.onnx`; without a model the enrichment is a
+  documented no-op (one warning, rich keys stay absent).
+- Vendored `rusto-core` 0.4.0 + `rusto-nn` 0.4.0 (MIT / MIT OR
+  Apache-2.0) from byrizki/rusto-rs @ 991fedf3 under `vendor/` — the
+  git+rev dependency was infeasible (cargo clones that repo's
+  third-party submodules: >1.2 GB per consumer). Feature off = absent
+  from `cargo tree` (proved).
+
 ### Session C: script/CJK lane (pipeline.py hanzi_lines port)
 
 - script.onnx classifies each line crop (p > 0.5 = holds Chinese);
