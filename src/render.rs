@@ -335,6 +335,8 @@ pub fn to_json_value_with_options(doc: &Document, opts: JsonRenderOptions) -> se
             "title": doc.metadata.title,
             "page_count": doc.metadata.page_count,
             "slide_count": doc.metadata.slide_count,
+            "pdf_text_quality": doc.metadata.pdf_text_quality,
+            "page_quality": doc.metadata.page_quality,
             "extra": doc.metadata.extra,
         },
         "blocks": blocks,
@@ -366,6 +368,7 @@ mod tests {
                 page_count: None,
                 slide_count: Some(1),
                 pdf_text_quality: None,
+                page_quality: None,
                 extra: serde_json::json!({}),
             },
         };
@@ -392,6 +395,7 @@ mod tests {
                 page_count: None,
                 slide_count: Some(1),
                 pdf_text_quality: None,
+                page_quality: None,
                 extra: serde_json::json!({}),
             },
         };

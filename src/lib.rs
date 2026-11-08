@@ -1,10 +1,12 @@
 mod document;
 pub mod document_ast;
 pub mod formats;
+pub mod quality;
 pub mod render;
 pub mod spreadsheet;
 
 pub use document::{Document, DocumentMetadata, ExtractedImage, Format, PdfTextQuality};
+pub use quality::{PageTextQuality, PageVerdict};
 #[cfg(feature = "ocr-indra-native")]
 pub use formats::indra_native::IndraNative;
 

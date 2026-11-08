@@ -298,6 +298,7 @@ fn finalize(format: Format, parsed: ParsedOfficeDocument) -> Document {
             page_count,
             slide_count,
             pdf_text_quality: None,
+            page_quality: None,
             extra: parsed.metadata_json,
         },
     }

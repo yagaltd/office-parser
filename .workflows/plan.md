@@ -167,7 +167,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   TASK_4 in `src/formats/pdf.rs`.
 - **Verify**: `cargo test`; new `tests/quality_types.rs` asserts `page_quality` is `None` for DOCX and
   that JSON round-trips through `render::to_json_value`.
-- **Status**: ⬜ PENDING
+- **Status**: ✅ DONE (gate green: 4 new tests + full matrix; JSON emits pdf_text_quality + page_quality)
 
 ### TASK 6 (🔴): XY-Cut reading order
 - **Agent**: worker
