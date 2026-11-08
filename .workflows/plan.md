@@ -234,7 +234,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   instead of silently `Vec::new()`.
 - **Verify**: `cargo test --features pdf` **and** `cargo test --no-default-features --features
   pdf`; `tests/pdf_no_ink.rs` asserts a scan is untrusted with pdfium disabled.
-- **Status**: ⬜ PENDING
+- **Status**: ✅ DONE (gate: 10/10 no-ink tests on pdf AND no-default-features; trust verdicts never silently empty; full matrix 89/0)
 
 ### TASK 10 (🟡): `OcrPage` + defaulted `ocr_page()`
 - **Agent**: worker

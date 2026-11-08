@@ -2833,7 +2833,7 @@ pub fn parse(bytes: &[u8]) -> crate::Result<crate::Document> {
     let parsed =
         parse_pdf_full(bytes).map_err(|e| crate::Error::from_parse(crate::Format::Pdf, e))?;
     let quality = classify_pdf_text_quality(&parsed.blocks);
-    let page_quality = build_page_quality(&parsed, PAGE_TEXT_THRESHOLD);
+    let page_quality = build_page_quality(&parsed, PAGE_TEXT_THRESHOLD, true);
     let office = super::ParsedOfficeDocument {
         blocks: parsed.blocks,
         images: parsed.images,
@@ -2863,9 +2863,13 @@ pub trait PageOcrEngine {
 /// order. `min_chars` is the same gate the per-page OCR router applies.
 /// `counts[i]` and `pages_geometry[i]` are index-aligned by construction
 /// (pushed in the same per-page loop of `parse_pdf_full`).
+/// `trust_checks = false` (force) bypasses every trust check — TASK 9's
+/// geometry no-ink check included; the image-only / sparse char gates and
+/// rotation escalation are not trust checks and still apply.
 fn build_page_quality(
     parsed: &ParsedPdfDocument,
     min_chars: usize,
+    trust_checks: bool,
 ) -> Vec<crate::quality::PageTextQuality> {
     let counts = page_char_counts(parsed);
     parsed
@@ -2875,15 +2879,43 @@ fn build_page_quality(
         .map(|(i, geo)| {
             let richness = counts.get(i).copied().unwrap_or(0) as u32;
             let rotated = geo.initial_rotation != 0;
+            let mut verdict = crate::quality::page_verdict(richness, min_chars, rotated);
+            // TASK 9: pdfium-free no-ink check — the text layer claims rich
+            // text its own span boxes cannot hold. Geometry alone, no feature
+            // precondition; pdfium's invisible/bad-char checks are folded in
+            // afterwards (parse_with_page_ocr_inner) as the additional signal
+            // where render-pdfium is on.
+            if trust_checks {
+                if let Some(reason) = crate::quality::no_ink_reason(
+                    richness,
+                    min_chars,
+                    &geo.spans,
+                    visible_page_area_pt2(geo),
+                ) {
+                    verdict = crate::quality::PageVerdict::Ocr { reason };
+                }
+            }
             crate::quality::PageTextQuality {
                 page: geo.page_number,
                 text_richness: richness,
                 columns: crate::quality::count_columns(&geo.spans),
                 rotated,
-                verdict: crate::quality::page_verdict(richness, min_chars, rotated),
+                verdict,
             }
         })
         .collect()
+}
+
+/// Visible-page area in pt² for [`crate::quality::no_ink_reason`]: the
+/// /CropBox when declared, else the /MediaBox. Raw (un-normalized) box
+/// coordinates are fine — area is origin-independent; corner order is
+/// normalized with `abs`. `0.0` when the /Parent chain declares neither box
+/// (degenerate file): the check derives no verdict from an undefined page.
+fn visible_page_area_pt2(geo: &PageGeometry) -> f32 {
+    let Some([x0, y0, x1, y1]) = geo.crop_box.or(geo.media_box) else {
+        return 0.0;
+    };
+    (x1 - x0).abs() * (y1 - y0).abs()
 }
 
 /// Routing rollup over the per-page verdicts — worst page wins. Returns the
@@ -3025,12 +3057,13 @@ fn parse_with_page_ocr_inner<'e>(
     let quality = classify_pdf_text_quality(&parsed.blocks);
     // Verdicts describe the TEXT LAYER the router decided on — computed
     // before the merge replaces OCR'd pages' blocks.
-    let mut page_quality = build_page_quality(&parsed, min_chars);
+    let mut page_quality = build_page_quality(&parsed, min_chars, !force);
     // Text-layer trust checks (port of indra_ocr textlayer.py): invisible
     // render-mode-3 text = OCR layer over a scan; replacement/private-use/
     // control chars = broken font map. Either verdict sends the page to OCR
     // even when the char count looks rich. (no-ink check pending: needs
     // char-box geometry.)
+
     let trust_reasons: Vec<Option<String>> = if force {
         Vec::new()
     } else {
@@ -3233,5 +3266,104 @@ mod tests {
         assert!(out.contains("2030 70"));
         assert!(out.contains("2023-12"));
         assert!(out.contains("2025-01-31"));
+    }
+    // ------------------------------------------------------------------
+    // TASK 9 — build_page_quality wiring of the geometry no-ink check.
+    // The rich-char-count-with-implausible-boxes contradiction cannot be
+    // produced by the fixture corpus (spans track extracted chars 1:1), so
+    // the wiring is exercised with a hand-built ParsedPdfDocument; the
+    // checker math itself is unit-tested in tests/pdf_no_ink.rs.
+
+    use super::{
+        build_page_quality, visible_page_area_pt2, Block, CoordinateSystem, PageGeometry,
+        ParsedPdfDocument, PdfPageBlockRange, SourceSpan, SpanBox, PAGE_TEXT_THRESHOLD,
+    };
+
+    fn parsed_one_page(spans: Vec<SpanBox>, text: &str) -> ParsedPdfDocument {
+        ParsedPdfDocument {
+            blocks: vec![Block::Paragraph {
+                block_index: 0,
+                text: text.to_string(),
+                marks: Vec::new(),
+                source: SourceSpan::default(),
+            }],
+            images: Vec::new(),
+            metadata_json: serde_json::json!({}),
+            page_block_ranges: vec![PdfPageBlockRange {
+                page_number: 1,
+                block_start: 0,
+                block_end: 1,
+            }],
+            pages_geometry: vec![PageGeometry {
+                page_number: 1,
+                spans,
+                media_box: Some([0.0, 0.0, 612.0, 792.0]),
+                crop_box: None,
+                initial_rotation: 0,
+                coordinate_system: CoordinateSystem::Source,
+            }],
+        }
+    }
+
+    #[test]
+    fn no_ink_wiring_overrides_a_rich_page_with_boxless_text() {
+        let parsed = parsed_one_page(Vec::new(), &"alpha".repeat(80)); // 400 alnum chars
+        let q = build_page_quality(&parsed, PAGE_TEXT_THRESHOLD, true);
+        assert_eq!(q.len(), 1);
+        assert_eq!(q[0].text_richness, 400);
+        assert_eq!(
+            q[0].verdict,
+            crate::quality::PageVerdict::Ocr {
+                reason: "no-ink".to_string()
+            },
+            "rich char count with zero span boxes is untrusted without pdfium"
+        );
+    }
+
+    #[test]
+    fn force_bypasses_the_no_ink_wiring() {
+        let parsed = parsed_one_page(Vec::new(), &"alpha".repeat(80));
+        let q = build_page_quality(&parsed, PAGE_TEXT_THRESHOLD, false);
+        assert_eq!(q[0].verdict, crate::quality::PageVerdict::Trust);
+    }
+
+    #[test]
+    fn plausible_span_boxes_keep_the_trust_verdict() {
+        // pdf_mixed p1's measured shape: a box sized the way
+        // estimate_text_advance records it (0.55 × fs per char) — measured
+        // ≈ 120% of the alphanumeric expectation.
+        let parsed = parsed_one_page(
+            vec![SpanBox {
+                seq: 0,
+                x0: 72.0,
+                y0: 60.0,
+                x1: 72.0 + 0.55 * 11.0 * 378.0,
+                y1: 71.0,
+                font_name: "R8".to_string(),
+                font_size: 11.0,
+                text: String::new(),
+                char_count: 378,
+            }],
+            &"alpha ".repeat(63), // 378 chars, 315 alphanumeric
+        );
+        let q = build_page_quality(&parsed, PAGE_TEXT_THRESHOLD, true);
+        assert_eq!(q[0].verdict, crate::quality::PageVerdict::Trust);
+    }
+
+    #[test]
+    fn visible_page_area_prefers_the_cropbox_and_needs_a_box() {
+        let mut geo = PageGeometry {
+            page_number: 1,
+            spans: Vec::new(),
+            media_box: Some([0.0, 0.0, 612.0, 792.0]),
+            crop_box: Some([36.0, 36.0, 576.0, 756.0]),
+            initial_rotation: 0,
+            coordinate_system: CoordinateSystem::Source,
+        };
+        assert_eq!(visible_page_area_pt2(&geo), 540.0 * 720.0);
+        geo.crop_box = None;
+        assert_eq!(visible_page_area_pt2(&geo), 612.0 * 792.0);
+        geo.media_box = None;
+        assert_eq!(visible_page_area_pt2(&geo), 0.0, "no declared box: undefined area");
     }
 }
