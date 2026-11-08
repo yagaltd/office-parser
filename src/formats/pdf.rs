@@ -2841,7 +2841,8 @@ pub fn parse(bytes: &[u8]) -> crate::Result<crate::Document> {
     };
     let mut doc = super::finalize(crate::Format::Pdf, office);
     doc.metadata.pdf_text_quality = Some(quality);
-    doc.metadata.page_quality = Some(page_quality);
+    doc.metadata.page_quality = Some(page_quality.clone());
+    doc.metadata.extra["pdf_quality"] = pdf_quality_json(&page_quality);
     Ok(doc)
 }
 
@@ -2883,6 +2884,31 @@ fn build_page_quality(
             }
         })
         .collect()
+}
+
+/// Routing rollup over the per-page verdicts — worst page wins. Returns the
+/// 0-based indices of exactly the pages whose verdict is [`Ocr`]: the pages
+/// the router sends to OCR. [`Escalate`](crate::quality::PageVerdict::Escalate)
+/// NEVER contributes a page — OCR cannot repair a reading order the text
+/// layer mangled, so escalation is a vision-LLM signal only. The
+/// document-level `PdfTextQuality` enum is unchanged: it stays the plain
+/// char-count summary of the text layer; this rollup drives per-page routing.
+pub fn routing_rollup(pages: &[crate::quality::PageTextQuality]) -> Vec<usize> {
+    pages
+        .iter()
+        .enumerate()
+        .filter(|(_, q)| matches!(q.verdict, crate::quality::PageVerdict::Ocr { .. }))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// JSON mirror of the per-page quality records for
+/// `metadata.extra["pdf_quality"]` — the same values as
+/// [`crate::DocumentMetadata::page_quality`], so JSON consumers get the
+/// per-page detail without a struct change. Sits alongside the existing
+/// `metadata.extra["ocr"]` keys (untouched).
+fn pdf_quality_json(pages: &[crate::quality::PageTextQuality]) -> serde_json::Value {
+    serde_json::to_value(pages).unwrap_or_else(|_| serde_json::Value::Array(Vec::new()))
 }
 
 pub fn parse_with_page_ocr(
@@ -2997,10 +3023,9 @@ fn parse_with_page_ocr_inner<'e>(
     let mut parsed =
         parse_pdf_full(bytes).map_err(|e| crate::Error::from_parse(crate::Format::Pdf, e))?;
     let quality = classify_pdf_text_quality(&parsed.blocks);
-    let counts = page_char_counts(&parsed);
     // Verdicts describe the TEXT LAYER the router decided on — computed
     // before the merge replaces OCR'd pages' blocks.
-    let page_quality = build_page_quality(&parsed, min_chars);
+    let mut page_quality = build_page_quality(&parsed, min_chars);
     // Text-layer trust checks (port of indra_ocr textlayer.py): invisible
     // render-mode-3 text = OCR layer over a scan; replacement/private-use/
     // control chars = broken font map. Either verdict sends the page to OCR
@@ -3018,24 +3043,28 @@ fn parse_with_page_ocr_inner<'e>(
             Vec::new()
         }
     };
+    // Fold the trust verdicts into the page verdicts: a page that fails the
+    // trust checks is an `Ocr` page regardless of richness or rotation, and
+    // the verdict itself then carries the reason (previously the reason lived
+    // only in `ocr_meta["page_reasons"]`).
     let mut page_reasons: Vec<serde_json::Value> = Vec::new();
-    let ocr_pages: Vec<usize> = counts
-        .iter()
-        .enumerate()
-        .filter(|(i, c)| {
-            if force || **c < min_chars {
-                return true;
-            }
-            match trust_reasons.get(*i).and_then(|r| r.as_ref()) {
-                Some(reason) => {
-                    page_reasons.push(serde_json::json!({"page": i + 1, "reason": reason}));
-                    true
-                }
-                None => false,
-            }
-        })
-        .map(|(i, _)| i)
-        .collect();
+    for (i, reason) in trust_reasons.iter().enumerate() {
+        let Some(reason) = reason else { continue };
+        page_reasons.push(serde_json::json!({"page": i + 1, "reason": reason}));
+        if let Some(q) = page_quality.get_mut(i) {
+            q.verdict = crate::quality::PageVerdict::Ocr {
+                reason: reason.clone(),
+            };
+        }
+    }
+    // Router: a page is OCR'd iff forced or its own verdict is `Ocr` (the
+    // worst-page-wins rollup). `Escalate` NEVER adds a page to `ocr_pages` —
+    // OCR cannot repair reading order; escalation is a vision-LLM signal.
+    let ocr_pages: Vec<usize> = if force {
+        (0..page_quality.len()).collect()
+    } else {
+        routing_rollup(&page_quality)
+    };
 
     
         #[allow(unused_assignments)]
@@ -3049,7 +3078,7 @@ fn parse_with_page_ocr_inner<'e>(
         // Indra wants full-resolution source pixels (see render_pages_png_opts)
         eprintln!(
             "office-parser: rendering {} page(s) at {} dpi...",
-            counts.len(),
+            page_quality.len(),
             dpi
         );
         let rendered = render_pages_png_opts(bytes, dpi, false)?;
@@ -3057,7 +3086,7 @@ fn parse_with_page_ocr_inner<'e>(
         eprintln!(
             "office-parser: OCR routing {} page(s) of {} through {}",
             ocr_pages.len(),
-            counts.len(),
+            page_quality.len(),
             engine_name
         );
         let mut merged: Vec<Block> = Vec::new();
@@ -3074,7 +3103,7 @@ fn parse_with_page_ocr_inner<'e>(
                 eprintln!(
                     "office-parser: ocr page {}/{}",
                     page_pos + 1,
-                    counts.len()
+                    page_quality.len()
                 );
                 let Some(engine_ref) = engine.as_deref_mut() else {
                     unreachable!("engine present when ocr_pages non-empty")
@@ -3124,6 +3153,7 @@ fn parse_with_page_ocr_inner<'e>(
     let mut doc = super::finalize(crate::Format::Pdf, office);
     doc.metadata.pdf_text_quality = Some(quality);
     doc.metadata.page_quality = Some(page_quality.clone());
+    doc.metadata.extra["pdf_quality"] = pdf_quality_json(&page_quality);
     if ocr_meta["pages_ocr"].as_u64().unwrap_or(0) > 0 {
         doc.metadata.extra["ocr"] = ocr_meta;
     }
@@ -3144,6 +3174,9 @@ fn parse_with_page_ocr_inner<'e>(
         let mut page_doc = super::finalize(crate::Format::Pdf, office);
         page_doc.metadata.pdf_text_quality = Some(quality);
         page_doc.metadata.page_quality = page_quality.get(pos).map(|q| vec![q.clone()]);
+        if let Some(q) = page_quality.get(pos) {
+            page_doc.metadata.extra["pdf_quality"] = pdf_quality_json(std::slice::from_ref(q));
+        }
         page_doc.metadata.extra["page"] = serde_json::json!(r.page_number);
         if doc.metadata.extra.get("ocr").is_some() {
             page_doc.metadata.extra["ocr"] = doc.metadata.extra["ocr"].clone();

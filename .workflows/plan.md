@@ -219,7 +219,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   `pdf_mixed.pdf` yields a richer per-page array than the document enum implies, that a page with
   high complexity gets `Escalate` and is **absent** from `pages_ocr`, and that `--split-pages` mode
   reports the same per-page verdicts.
-- **Status**: ⬜ PENDING
+- **Status**: ✅ DONE (gate: 6/6 verdict-routing tests incl. Escalate-never-OCRs negative + split/opts parity; router consumes verdicts, worst-page-wins rollup, extra[pdf_quality] mirror; full matrix 75/0)
 
 ### TASK 9 (🟡): pdfium-free no-ink trust check
 - **Agent**: worker
