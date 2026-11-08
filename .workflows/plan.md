@@ -101,7 +101,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
 - **Depends on**: TASK_1
 - **Wave**: 1
 - **Bottleneck**: 🟡 RISKY
-- **Contract**: `.workflows/specs/task-2p-geometry-spike.spec`
+- **Contract**: `.workflows/specs/task-2.spec`
 - **Testing strategy**: evidence criteria (artifact on disk, measurements, not feature behavior)
 - **What**: One bounded question — *does the existing content interpreter already hold enough state to
   emit per-span `[x0,y0,x1,y1]` boxes with `font_name`/`font_size`, and does glyph-area ÷ page-area
@@ -118,7 +118,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
 - **Depends on**: TASK_2
 - **Wave**: 1
 - **Bottleneck**: 🟡 RISKY
-- **Contract**: `.workflows/specs/task-3p-complexity-spike.spec`
+- **Contract**: `.workflows/specs/task-3.spec`
 - **Testing strategy**: evidence criteria
 - **What**: One bounded question — *does a deterministic `layout_complexity` built from span boxes
   (horizontal gutter count, table gutter density, span-overlap ratio, rotation ≠ 0, char density)
@@ -137,7 +137,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
 - **Depends on**: TASK_2
 - **Wave**: 2
 - **Parallel group**: [PARALLEL-GROUP: A] — boundary `src/formats/pdf.rs`, disjoint from TASK_5
-- **Contract**: `.workflows/specs/task-page-geometry.spec`
+- **Contract**: `.workflows/specs/task-4.spec`
 - **Bottleneck**: 🔴 BLOCKING
 - **Testing strategy**: example-based
 - **What**: Emit per-page geometry from the interpreter: one record per span with bbox, `font_name`,
@@ -148,7 +148,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   TASK_2 spike's proven approach, not from its throwaway code.
 - **Verify**: `cargo test --features pdf`; new `tests/pdf_geometry.rs` asserts crop-origin subtraction
   on a fixture with a non-zero CropBox and that `git diff` on existing block output is empty.
-- **Status**: ✅ DONE (deletion-test branch 1 -> TASK 7 rescope)
+- **Status**: ⬜ PENDING
 
 ### TASK 5 (🟡): `PageTextQuality` types
 - **Agent**: worker
@@ -156,7 +156,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
 - **Wave**: 2
 - **Parallel group**: [PARALLEL-GROUP: A] — boundary `src/quality.rs` + `src/document.rs`, disjoint
   from TASK_4
-- **Contract**: `.workflows/specs/task-quality-types.spec`
+- **Contract**: `.workflows/specs/task-5.spec`
 - **Bottleneck**: 🟡 RISKY
 - **Testing strategy**: example-based
 - **What**: Define `PageTextQuality { page, text_richness, geometry_confidence, layout_complexity,
@@ -174,7 +174,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
 - **Depends on**: TASK_4
 - **Wave**: 3
 - **Parallel group**: [PARALLEL-GROUP: B] — boundary `src/formats/pdf.rs`, disjoint from TASK_7
-- **Contract**: `.workflows/specs/task-xy-cut.spec`
+- **Contract**: `.workflows/specs/task-6.spec`
 - **Bottleneck**: 🔴 BLOCKING
 - **Testing strategy**: example-based
 - **What**: Order born-digital page content by recursive XY-Cut over the TASK_4 boxes, replacing the
@@ -191,7 +191,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
 - **Depends on**: TASK_3, TASK_5
 - **Wave**: 3
 - **Parallel group**: [PARALLEL-GROUP: B] — boundary `src/quality.rs`, disjoint from TASK_6
-- **Contract**: `.workflows/specs/task-complexity-score.spec`
+- **Contract**: `.workflows/specs/task-7.spec`
 - **Bottleneck**: 🟡 RISKY
 - **Testing strategy**: example-based (bounds + monotonicity invariants, no new dev-dep)
 - **What**: Implement the pure scoring function from the TASK_3 recommendation:
@@ -207,7 +207,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
 - **Agent**: worker
 - **Depends on**: TASK_5, TASK_6, TASK_7
 - **Wave**: 4
-- **Contract**: `.workflows/specs/task-page-verdicts.spec`
+- **Contract**: `.workflows/specs/task-8.spec`
 - **Bottleneck**: 🔴 BLOCKING
 - **Testing strategy**: example-based
 - **What**: Wire `page_quality` into `parse_pdf_full` / `parse_with_page_ocr_inner`: one
@@ -225,7 +225,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
 - **Agent**: worker
 - **Depends on**: TASK_8
 - **Wave**: 5
-- **Contract**: `.workflows/specs/task-no-ink-check.spec`
+- **Contract**: `.workflows/specs/task-9.spec`
 - **Bottleneck**: 🟡 RISKY
 - **Testing strategy**: example-based, run under both cfgs
 - **What**: Close `pdf.rs:2571`. Use TASK_4 ink coverage to untrust a text layer whose glyph area is
@@ -240,7 +240,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
 - **Agent**: worker
 - **Depends on**: TASK_8
 - **Wave**: 6
-- **Contract**: `.workflows/specs/task-ocr-page-contract.spec`
+- **Contract**: `.workflows/specs/task-10.spec`
 - **Bottleneck**: 🟡 RISKY
 - **Testing strategy**: example-based
 - **What**: Add `OcrPage { blocks, confidence, layout_regions, word_boxes, table_html }` and a
@@ -255,7 +255,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
 - **Agent**: worker
 - **Depends on**: TASK_10
 - **Wave**: 7
-- **Contract**: `.workflows/specs/task-rusto-core-tables.spec`
+- **Contract**: `.workflows/specs/task-11.spec`
 - **Bottleneck**: 🟡 RISKY
 - **Testing strategy**: example-based
 - **What**: Add an **off-by-default** `ocr-rusto-core` feature depending on `rusto-core` only — never
@@ -291,16 +291,16 @@ gate at SHIP.)
 
 | Task | Contract File | Scenarios |
 |------|--------------|-----------|
-| TASK_2 | `.workflows/specs/task-2p-geometry-spike.spec` | 2 evidence scenarios + NO-GO scenario |
-| TASK_3 | `.workflows/specs/task-3p-complexity-spike.spec` | 2 evidence scenarios + deletion-test scenario |
-| TASK_4 | `.workflows/specs/task-page-geometry.spec` | 4 (incl. crop-offset negative) |
-| TASK_5 | `.workflows/specs/task-quality-types.spec` | 3 (incl. `None` for DOCX) |
-| TASK_6 | `.workflows/specs/task-xy-cut.spec` | 4 (incl. single-column byte-identical) |
-| TASK_7 | `.workflows/specs/task-complexity-score.spec` | 3 (bounds, monotonicity, deletion) |
-| TASK_8 | `.workflows/specs/task-page-verdicts.spec` | 5 (incl. `Escalate` ≠ `Ocr`, split-pages parity) |
-| TASK_9 | `.workflows/specs/task-no-ink-check.spec` | 3 (both cfgs) |
-| TASK_10 | `.workflows/specs/task-ocr-page-contract.spec` | 3 (incl. legacy implementor) |
-| TASK_11 | `.workflows/specs/task-rusto-core-tables.spec` | 3 (identical transcripts, table HTML) |
+| TASK_2 | `.workflows/specs/task-2.spec` | 2 evidence scenarios + NO-GO scenario |
+| TASK_3 | `.workflows/specs/task-3.spec` | 2 evidence scenarios + deletion-test scenario |
+| TASK_4 | `.workflows/specs/task-4.spec` | 4 (incl. crop-offset negative) |
+| TASK_5 | `.workflows/specs/task-5.spec` | 3 (incl. `None` for DOCX) |
+| TASK_6 | `.workflows/specs/task-6.spec` | 4 (incl. single-column byte-identical) |
+| TASK_7 | `.workflows/specs/task-7.spec` | 3 (bounds, monotonicity, deletion) |
+| TASK_8 | `.workflows/specs/task-8.spec` | 5 (incl. `Escalate` ≠ `Ocr`, split-pages parity) |
+| TASK_9 | `.workflows/specs/task-9.spec` | 3 (both cfgs) |
+| TASK_10 | `.workflows/specs/task-10.spec` | 3 (incl. legacy implementor) |
+| TASK_11 | `.workflows/specs/task-11.spec` | 3 (identical transcripts, table HTML) |
 | TASK_12 | `.workflows/specs/task-docs.spec` | 2 (paths touched, Plan ID present) |
 
 ## Execution Notes
