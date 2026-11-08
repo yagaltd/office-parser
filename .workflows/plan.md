@@ -148,7 +148,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   TASK_2 spike's proven approach, not from its throwaway code.
 - **Verify**: `cargo test --features pdf`; new `tests/pdf_geometry.rs` asserts crop-origin subtraction
   on a fixture with a non-zero CropBox and that `git diff` on existing block output is empty.
-- **Status**: ⬜ PENDING
+- **Status**: ✅ DONE (gate: 5/5 geometry tests, byte-identical CLI proof, /Rotate spec premise corrected via synthesized pages)
 
 ### TASK 5 (🟡): `PageTextQuality` types
 - **Agent**: worker

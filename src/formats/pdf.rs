@@ -193,6 +193,75 @@ pub struct ParsedPdfDocument {
     pub images: Vec<ParsedImage>,
     pub metadata_json: serde_json::Value,
     pub page_block_ranges: Vec<PdfPageBlockRange>,
+    /// TASK 4: per-page geometric truth (one [`PageGeometry`] per page, page order).
+    /// Strictly additive parallel output — block assembly never reads it.
+    pub pages_geometry: Vec<PageGeometry>,
+}
+
+/// Coordinate-system provenance for [`PageGeometry`] boxes. Domain rule: every box
+/// carries its coordinate system and rotation (.workflows/CONTEXT.md).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoordinateSystem {
+    /// Unrotated page space, visible-page origin subtracted: x right, y DOWN, origin
+    /// top-left of the CropBox (else MediaBox). The only system produced today.
+    Source,
+    /// Native /Rotate applied. Reserved — viewer-oriented normalisation is not in
+    /// this task's scope (task-4 spec).
+    ViewerOriented,
+}
+
+impl CoordinateSystem {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CoordinateSystem::Source => "source",
+            CoordinateSystem::ViewerOriented => "viewer_oriented",
+        }
+    }
+}
+
+/// One text span with its typographic box (task-4). Boxes are in PDF points with the
+/// visible-page origin subtracted and y flipped to top-left/down; see
+/// [`PageGeometry`]. Geometry is carried in this NEW record, never bolted onto
+/// `TextAtom` (matrices are dropped at atom push — TASK 1 scout finding).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpanBox {
+    /// Content-stream order within the page (same numbering as `TextAtom.seq`).
+    pub seq: u32,
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+    /// Resource name of the font active at the show op (e.g. "F1"); "(none)" when the
+    /// content stream never selected one. Alias only — real font names are not
+    /// resolved (TASK 1 scout finding).
+    pub font_name: String,
+    /// Rotation-safe effective size in points (tm scale applied) — the same value the
+    /// text path carries.
+    pub font_size: f32,
+    /// Decoded, normalized span text (identical string to the `TextAtom`'s).
+    pub text: String,
+    /// `text.chars().count()`.
+    pub char_count: usize,
+}
+
+/// Per-page geometric truth (task-4): one record per parsed page, in page order — an
+/// empty `spans` is meaningful (the page emits no text operators), pages are never
+/// omitted. Strictly additive parallel output: the block path never reads it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PageGeometry {
+    pub page_number: u32,
+    pub spans: Vec<SpanBox>,
+    /// Native /MediaBox [x0 y0 x1 y1], first found walking /Parent. `None` = the page
+    /// chain declares no MediaBox (degenerate file); spans then stay in raw PDF space.
+    pub media_box: Option<[f32; 4]>,
+    /// Native /CropBox as DECLARED (raw coordinates, NOT normalized) so the
+    /// crop-origin subtraction of `spans` is reversible. `None` = no /CropBox (the
+    /// visible page is the MediaBox).
+    pub crop_box: Option<[f32; 4]>,
+    /// Page's native /Rotate (normalized 0/90/180/270 for multiples of 90), preserved
+    /// even though `Source` boxes are not rotated.
+    pub initial_rotation: u16,
+    pub coordinate_system: CoordinateSystem,
 }
 
 #[derive(Clone, Debug)]
@@ -883,6 +952,65 @@ fn parse_pdf_outline(
     out
 }
 
+/// Emit one text atom at a show op (`Tj`/`TJ`/`'`/`"`/BDC ActualText) and, additively
+/// (task-4), its geometric box into the page's geometry sink. `t` is the normalized,
+/// non-empty span text. The atom values (seq, position, effective size) are computed
+/// exactly as before the extraction; the box arithmetic is the TASK 2 spike's proven
+/// `push_span` approach: pen origin = `current_position()`, advance from
+/// `estimate_text_advance()`, direction + up vector from the combined ctm∘tm linear
+/// part, box = axis-aligned bbox of the 4 corners, in RAW page space — the caller
+/// normalizes to visible-page coordinates in [`build_page_geometry`].
+fn push_text_atom(
+    state: &PdfTextState,
+    atoms: &mut Vec<TextAtom>,
+    geometry: &mut Vec<SpanBox>,
+    t: String,
+) {
+    let seq = atoms.len() as u32;
+    let fs = state.effective_font_size();
+    let (x, y) = state.current_position();
+    atoms.push(TextAtom {
+        seq,
+        x,
+        y,
+        font_size: fs,
+        text: t.clone(),
+    });
+
+    let adv = estimate_text_advance(&t, fs);
+    let m = state.ctm.multiply(&state.tm);
+    let len = (m.a * m.a + m.b * m.b).sqrt();
+    let (ux, uy) = if len > 1e-6 { (m.a / len, m.b / len) } else { (1.0, 0.0) };
+    let (ex, ey) = (x + adv * ux, y + adv * uy);
+    let (upx, upy) = (-uy, ux);
+    let corners = [
+        (x, y),
+        (ex, ey),
+        (x + fs * upx, y + fs * upy),
+        (ex + fs * upx, ey + fs * upy),
+    ];
+    let x0 = corners.iter().map(|c| c.0).fold(f32::INFINITY, f32::min);
+    let y0 = corners.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
+    let x1 = corners.iter().map(|c| c.0).fold(f32::NEG_INFINITY, f32::max);
+    let y1 = corners.iter().map(|c| c.1).fold(f32::NEG_INFINITY, f32::max);
+    let font_name = state
+        .font_alias
+        .as_deref()
+        .map(|a| String::from_utf8_lossy(a).to_string())
+        .unwrap_or_else(|| "(none)".to_string());
+    geometry.push(SpanBox {
+        seq,
+        x0,
+        y0,
+        x1,
+        y1,
+        font_name,
+        font_size: fs,
+        char_count: t.chars().count(),
+        text: t,
+    });
+}
+
 fn handle_content_ops(
     doc: &lopdf::Document,
     ops: &[lopdf::content::Operation],
@@ -893,6 +1021,7 @@ fn handle_content_ops(
     state: &mut PdfTextState,
     state_stack: &mut Vec<PdfTextState>,
     atoms: &mut Vec<TextAtom>,
+    geometry: &mut Vec<SpanBox>,
     images: &mut Vec<ParsedImage>,
     image_by_hash: &mut HashMap<String, usize>,
     image_blocks: &mut Vec<(u32, String, String)>,
@@ -1001,16 +1130,7 @@ fn handle_content_ops(
                 {
                     let t = normalize_atom_text(&s);
                     if !t.is_empty() {
-                        let seq = atoms.len() as u32;
-                        let fs = state.effective_font_size();
-                        let (x, y) = state.current_position();
-                        atoms.push(TextAtom {
-                            seq,
-                            x,
-                            y,
-                            font_size: fs,
-                            text: t,
-                        });
+                        push_text_atom(state, atoms, geometry, t);
                     }
                 }
             }
@@ -1021,7 +1141,6 @@ fn handle_content_ops(
                 if let Some(Object::Array(arr)) = operands.get(0) {
                     let mut s = String::new();
                     let alias = state.font_alias.as_deref();
-                    let fs = state.effective_font_size();
                     for o in arr {
                         if let Some(t) = decode_text_object(encodings, alias, o) {
                             s.push_str(&t);
@@ -1029,15 +1148,7 @@ fn handle_content_ops(
                     }
                     let t = normalize_atom_text(&s);
                     if !t.is_empty() {
-                        let seq = atoms.len() as u32;
-                        let (x, y) = state.current_position();
-                        atoms.push(TextAtom {
-                            seq,
-                            x,
-                            y,
-                            font_size: fs,
-                            text: t,
-                        });
+                        push_text_atom(state, atoms, geometry, t);
                     }
                 }
             }
@@ -1055,16 +1166,7 @@ fn handle_content_ops(
                 {
                     let t = normalize_atom_text(&s);
                     if !t.is_empty() {
-                        let seq = atoms.len() as u32;
-                        let fs = state.effective_font_size();
-                        let (x, y) = state.current_position();
-                        atoms.push(TextAtom {
-                            seq,
-                            x,
-                            y,
-                            font_size: fs,
-                            text: t,
-                        });
+                        push_text_atom(state, atoms, geometry, t);
                     }
                 }
             }
@@ -1082,16 +1184,7 @@ fn handle_content_ops(
                 {
                     let t = normalize_atom_text(&s);
                     if !t.is_empty() {
-                        let seq = atoms.len() as u32;
-                        let fs = state.effective_font_size();
-                        let (x, y) = state.current_position();
-                        atoms.push(TextAtom {
-                            seq,
-                            x,
-                            y,
-                            font_size: fs,
-                            text: t,
-                        });
+                        push_text_atom(state, atoms, geometry, t);
                     }
                 }
             }
@@ -1117,16 +1210,7 @@ fn handle_content_ops(
                         if let Ok(Object::String(b, _)) = d.get(b"ActualText") {
                             let t = normalize_atom_text(&decode_pdf_string(b));
                             if !t.is_empty() {
-                                let seq = atoms.len() as u32;
-                                let fs = state.effective_font_size();
-                                let (x, y) = state.current_position();
-                                atoms.push(TextAtom {
-                                    seq,
-                                    x,
-                                    y,
-                                    font_size: fs,
-                                    text: t,
-                                });
+                                push_text_atom(state, atoms, geometry, t);
                             }
                         }
                     }
@@ -1182,6 +1266,7 @@ fn handle_content_ops(
                             state,
                             state_stack,
                             atoms,
+                            geometry,
                             images,
                             image_by_hash,
                             image_blocks,
@@ -1279,6 +1364,102 @@ fn build_page_resources(
         merge_resources_into(doc, &mut out, d);
     }
     Ok(out)
+}
+
+/// Page-inheritable attributes (PDF 32000-1 §7.7.3.3): /MediaBox, /CropBox and
+/// /Rotate are read from the page node, else the nearest ancestor declaring them
+/// (bounded /Parent walk, same discipline as [`build_page_resources`]). /Rotate is
+/// normalized into 0..=359 via rem_euclid (-90 -> 270).
+fn page_inherited_boxes(
+    doc: &lopdf::Document,
+    page_id: lopdf::ObjectId,
+) -> (Option<[f32; 4]>, Option<[f32; 4]>, u16) {
+    fn box_array(doc: &lopdf::Document, o: &Object) -> Option<[f32; 4]> {
+        let arr = match o {
+            Object::Array(a) => a.clone(),
+            Object::Reference(r) => match doc.get_object(*r).ok()? {
+                Object::Array(a) => a.clone(),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let n: Vec<f32> = arr
+            .iter()
+            .filter_map(|o| match o {
+                Object::Integer(i) => Some(*i as f32),
+                Object::Real(f) => Some(*f),
+                _ => None,
+            })
+            .collect();
+        if n.len() != 4 {
+            return None;
+        }
+        Some([n[0], n[1], n[2], n[3]])
+    }
+
+    let mut media: Option<[f32; 4]> = None;
+    let mut crop: Option<[f32; 4]> = None;
+    let mut rotate: Option<u16> = None;
+    let mut id = page_id;
+    for _ in 0..16 {
+        let Ok(Object::Dictionary(dict)) = doc.get_object(id) else {
+            break;
+        };
+        if media.is_none() {
+            if let Ok(o) = dict.get(b"MediaBox") {
+                media = box_array(doc, o);
+            }
+        }
+        if crop.is_none() {
+            if let Ok(o) = dict.get(b"CropBox") {
+                crop = box_array(doc, o);
+            }
+        }
+        if rotate.is_none() {
+            if let Some(r) = dict.get(b"Rotate").ok().and_then(obj_to_f32) {
+                rotate = Some((r as i64).rem_euclid(360) as u16);
+            }
+        }
+        match dict.get(b"Parent") {
+            Ok(Object::Reference(pid)) => id = *pid,
+            _ => break,
+        }
+    }
+    (media, crop, rotate.unwrap_or(0))
+}
+
+/// Assemble one page's [`PageGeometry`]: normalize the raw span boxes into
+/// visible-page coordinates (origin top-left of the CropBox when present, else the
+/// MediaBox; `norm_x = x - origin_x`, `norm_y = max_y - y` — task-4 decision). Pages
+/// whose chain declares no box at all keep their spans in raw PDF space and report
+/// `media_box: None`.
+fn build_page_geometry(
+    doc: &lopdf::Document,
+    page_id: lopdf::ObjectId,
+    page_number: u32,
+    mut spans: Vec<SpanBox>,
+) -> PageGeometry {
+    let (media_box, crop_box, initial_rotation) = page_inherited_boxes(doc, page_id);
+    if let Some([origin_x, _, _, max_y]) = crop_box.or(media_box) {
+        for s in spans.iter_mut() {
+            let nx0 = s.x0 - origin_x;
+            let nx1 = s.x1 - origin_x;
+            let ny0 = max_y - s.y1; // raw top edge -> smaller normalized y (y flips down)
+            let ny1 = max_y - s.y0;
+            s.x0 = nx0;
+            s.x1 = nx1;
+            s.y0 = ny0;
+            s.y1 = ny1;
+        }
+    }
+    PageGeometry {
+        page_number,
+        spans,
+        media_box,
+        crop_box,
+        initial_rotation,
+        coordinate_system: CoordinateSystem::Source,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1666,6 +1847,7 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
 
     let mut blocks: Vec<Block> = Vec::new();
     let mut page_block_ranges: Vec<PdfPageBlockRange> = Vec::new();
+    let mut pages_geometry: Vec<PageGeometry> = Vec::new();
     let mut next_block_index: usize = 0;
 
     for (page_number, page_id) in pages {
@@ -1685,6 +1867,7 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
         fonts.extend(collect_fonts_from_resources(&doc, &resources));
 
         let mut atoms: Vec<TextAtom> = Vec::new();
+        let mut raw_spans: Vec<SpanBox> = Vec::new();
         let mut image_blocks: Vec<(u32, String, String)> = Vec::new();
         let mut state = PdfTextState::default();
         let mut state_stack: Vec<PdfTextState> = Vec::new();
@@ -1707,12 +1890,16 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
             &mut state,
             &mut state_stack,
             &mut atoms,
+            &mut raw_spans,
             &mut images,
             &mut image_by_hash,
             &mut image_blocks,
         )?;
 
+        pages_geometry.push(build_page_geometry(&doc, page_id, page_number, raw_spans));
+
         let lines = cluster_atoms_to_lines(&atoms);
+
         let paragraphs = cluster_lines_to_paragraphs(&lines);
 
         let y_min = lines
@@ -2063,6 +2250,7 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
         images,
         metadata_json,
         page_block_ranges,
+        pages_geometry,
     })
 }
 
