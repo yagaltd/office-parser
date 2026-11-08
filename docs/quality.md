@@ -156,7 +156,8 @@ Resolution: `OFFICE_PARSER_TABLE_MODEL` (exact file path) wins, else
 Without a model file the enrichment is a documented no-op: one warning and
 `table_html` stays absent — the engine's geometry keys still surface (they
 are Indra's own, model-independent); on table-free pages the payload is
-exactly the feature-off shape. The 28-token structure vocabulary is embedded
+exactly the feature-off shape. The model's own 48-token structure
+vocabulary is embedded
 in the binary — no external dictionary file. No dependencies beyond the
 optional `image` + `rten` the OCR stack already uses; the vendored
 rusto-core/rusto-nn crates are gone.

@@ -1727,6 +1727,7 @@ impl IndraNative {
             gray
         };
         let skew = estimate_skew(&gray);
+        let straightened = k != 0 || skew.abs() >= DESKEW_MIN;
         let gray = if skew.abs() >= DESKEW_MIN {
             rotate_gray(&gray, skew)
         } else {
@@ -1854,7 +1855,14 @@ impl IndraNative {
         }
         #[cfg(feature = "ocr-table-structure")]
         {
-            self.table_geometry = (!table_regions.is_empty())
+            // Task-13 review F-1: the geometry above is in STRAIGHTENED-page
+            // space, but the table-structure pipeline crops the RAW rendered
+            // PNG. On orientation/deskewed pages the spaces diverge (quarter
+            // turns swap dimensions; deskew pads the canvas) — wrong-space
+            // markup is worse than absent markup, so transformed pages emit
+            // no table geometry at all (table_html stays absent; blocks and
+            // text are unaffected — they are space-independent).
+            self.table_geometry = (!straightened && !table_regions.is_empty())
                 .then_some((table_regions, table_cells));
         }
         Ok(NativePage { lines, blocks })

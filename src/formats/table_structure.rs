@@ -40,9 +40,9 @@
 //! - Model: SLANet-plus ONNX, RapidAI/RapidTable v2.0.0 pin
 //!   https://www.modelscope.cn/models/RapidAI/RapidTable/resolve/v2.0.0/slanet-plus.onnx
 //!   SHA256 d57a942af6a2f57d6a4a0372573c696a2379bf5857c45e2ac69993f3b334514b.
-//!   The 28-token structure vocabulary
-//!   (`ppocr/utils/dict/table_structure_dict.txt`) is EMBEDDED below — no
-//!   external dictionary file.
+//!   The 48-token structure vocabulary is EMBEDDED below — extracted from
+//!   the model's own ONNX `character` metadata prop (the shipped model is
+//!   CH-dict; the EN-dict assumption was wrong), no external file.
 //!
 //! Transcript safety: enrichment runs AFTER the engine produced
 //! blocks + confidence and only fills `table_html` (via struct-update
@@ -499,9 +499,8 @@ fn escape_html(s: &str) -> String {
         .replace('\'', "&#x27;")
 }
 
-/// matcher.py::get_pred_html port. The `<td></td>` branch of upstream is
-/// unreachable with the embedded vocabulary (the token is not in the dict and
-/// we do not run merge_no_span_structure) and is therefore not ported.
+/// matcher.py::get_pred_html port (the `<td></td>` dict token — reachable
+/// in the CH vocabulary — emits the empty cell itself, upstream-faithful).
 /// Wrapping: predict_structure.py adds `<html><body><table>` around the model
 /// stream; we keep only the `<table>` element — the documented
 /// `table_html` shape (`docs/quality.md`) and what consumers embed.
@@ -529,12 +528,14 @@ fn render_table_html(
                         if content.starts_with(' ') {
                             content = content[1..].to_string();
                         }
-                        if content.contains("<b>") {
-                            content = content.get(3..).unwrap_or("").to_string();
+                        // Task-13 review F-2: boundary-safe strips (upstream
+                        // slices code points; byte offsets would panic on
+                        // multi-byte neighbours).
+                        if let Some(stripped) = content.strip_prefix("<b>") {
+                            content = stripped.to_string();
                         }
-                        if content.contains("</b>") {
-                            let keep = content.len().saturating_sub(4);
-                            content.truncate(keep);
+                        if let Some(stripped) = content.strip_suffix("</b>") {
+                            content = stripped.to_string();
                         }
                         if content.is_empty() {
                             continue;
@@ -549,7 +550,13 @@ fn render_table_html(
                     html.push_str("</b>");
                 }
             }
-            html.push_str(tag);
+            if tag == "<td></td>" {
+                // The CH structure dict carries this token (index 48);
+                // upstream emits the empty cell itself — one td per token.
+                html.push_str("<td></td>");
+            } else {
+                html.push_str(tag);
+            }
             td_index += 1;
         } else {
             html.push_str(tag);

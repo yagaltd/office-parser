@@ -3121,11 +3121,11 @@ fn parse_with_page_ocr_inner<'e>(
     // Verdicts describe the TEXT LAYER the router decided on — computed
     // before the merge replaces OCR'd pages' blocks.
     let mut page_quality = build_page_quality(&parsed, min_chars, !force);
-    // Text-layer trust checks (port of indra_ocr textlayer.py): invisible
-    // render-mode-3 text = OCR layer over a scan; replacement/private-use/
-    // control chars = broken font map. Either verdict sends the page to OCR
-    // even when the char count looks rich. (no-ink check pending: needs
-    // char-box geometry.)
+    // Text-layer trust checks (pdfium, additional signal where the feature
+    // exists): invisible render-mode-3 text = OCR layer over a scan;
+    // replacement/private-use/control chars = broken font map. Either
+    // verdict sends the page to OCR even when the char count looks rich.
+    // (The pdfium-free no-ink check already ran inside build_page_quality.)
 
     let trust_reasons: Vec<Option<String>> = if force {
         Vec::new()
@@ -3146,6 +3146,13 @@ fn parse_with_page_ocr_inner<'e>(
     let mut page_reasons: Vec<serde_json::Value> = Vec::new();
     for (i, reason) in trust_reasons.iter().enumerate() {
         let Some(reason) = reason else { continue };
+        // Length guard (task-13 review F-4): a damaged PDF can make pdfium
+        // report more pages than the parser produced — never emit phantom
+        // page_reasons beyond the verdict list (index-aligned stamping below
+        // is otherwise exact).
+        if i >= page_quality.len() {
+            break;
+        }
         page_reasons.push(serde_json::json!({"page": i + 1, "reason": reason}));
         if let Some(q) = page_quality.get_mut(i) {
             q.verdict = crate::quality::PageVerdict::Ocr {
