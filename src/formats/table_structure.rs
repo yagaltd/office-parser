@@ -512,6 +512,21 @@ fn render_table_html(
     let mut html = String::from("<table>");
     let mut td_index = 0usize;
     for tag in tokens {
+        if tag == "<td></td>" {
+            // The CH structure dict carries this token (index 48). Upstream
+            // checks it FIRST and wraps the matched content inside the cell
+            // ('<td>' + content + '</td>'); the general </td> branch below
+            // would double-push it (caught e2e on pdf_table_scan).
+            html.push_str("<td>");
+            if let Some(det_idxs) = matched.get(&td_index) {
+                for &di in det_idxs.iter() {
+                    html.push_str(&escape_html(&contents[di]));
+                }
+            }
+            html.push_str("</td>");
+            td_index += 1;
+            continue;
+        }
         if tag.contains("</td>") {
             if let Some(det_idxs) = matched.get(&td_index) {
                 let b_with =
@@ -550,13 +565,7 @@ fn render_table_html(
                     html.push_str("</b>");
                 }
             }
-            if tag == "<td></td>" {
-                // The CH structure dict carries this token (index 48);
-                // upstream emits the empty cell itself — one td per token.
-                html.push_str("<td></td>");
-            } else {
-                html.push_str(tag);
-            }
+            html.push_str(tag);
             td_index += 1;
         } else {
             html.push_str(tag);
