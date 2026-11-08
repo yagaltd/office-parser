@@ -2851,11 +2851,74 @@ pub fn parse(bytes: &[u8]) -> crate::Result<crate::Document> {
 /// per page).
 pub const PAGE_TEXT_THRESHOLD: usize = 50;
 
+/// A word-level detection from an OCR engine. Coordinates are pixels in the
+/// rendered page PNG the engine received (top-left origin, y down — raster
+/// space, not PDF point space); provenance is the router's render call at
+/// the requested dpi with `clamp_budget = false`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OcrWordBox {
+    pub text: String,
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+}
+
+/// A labelled layout region from an OCR engine (e.g. "Table", "Title"),
+/// same raster-pixel coordinates as [`OcrWordBox`].
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OcrLayoutRegion {
+    pub label: String,
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+}
+
+/// One OCR'd page: the legacy `ocr_page_png` payload plus optional rich
+/// fields. Engines that only implement [`PageOcrEngine::ocr_page_png`]
+/// produce `None` for all three optional fields via the defaulted
+/// [`PageOcrEngine::ocr_page`]; supplying them is opt-in. Serializes for
+/// the `metadata.extra["ocr"]` mirror — optional fields absent (never
+/// null) when `None`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OcrPage {
+    pub blocks: Vec<Block>,
+    pub confidence: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layout_regions: Option<Vec<OcrLayoutRegion>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub word_boxes: Option<Vec<OcrWordBox>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub table_html: Option<String>,
+}
+
 /// Per-page OCR: an engine that turns one rendered page PNG into blocks.
+///
+/// The trait stays object-safe — the router holds engines as
+/// `&mut dyn PageOcrEngine`, so neither method may gain a generic
+/// parameter or a `where Self: Sized` bound.
 pub trait PageOcrEngine {
     fn ocr_page_png(&mut self, page_png: &[u8]) -> Result<(Vec<Block>, Option<f64>), String>;
+
+    /// The widened seam: one rendered page PNG → [`OcrPage`]. Defaulted to
+    /// wrap [`PageOcrEngine::ocr_page_png`] so every existing implementor
+    /// compiles and runs unchanged; engines able to supply layout regions,
+    /// word boxes or table markup override this instead.
+    fn ocr_page(&mut self, page_png: &[u8]) -> Result<OcrPage, String> {
+        let (blocks, confidence) = self.ocr_page_png(page_png)?;
+        Ok(OcrPage {
+            blocks,
+            confidence,
+            layout_regions: None,
+            word_boxes: None,
+            table_html: None,
+        })
+    }
+
     fn name(&self) -> &'static str;
 }
+
 
 /// Router with default thresholds (50 chars, no force).
 /// Per-page [`crate::quality::PageTextQuality`] (TASK 7): text-layer char
@@ -3124,6 +3187,12 @@ fn parse_with_page_ocr_inner<'e>(
         );
         let mut merged: Vec<Block> = Vec::new();
         let mut low_conf = Vec::new();
+        // TASK 10: rich per-page payloads — one record per OCR'd page that
+        // supplied the field; a key stays absent when no page did (never
+        // null).
+        let mut layout_regions_meta: Vec<serde_json::Value> = Vec::new();
+        let mut word_boxes_meta: Vec<serde_json::Value> = Vec::new();
+        let mut table_html_meta: Vec<serde_json::Value> = Vec::new();
         for (page_pos, range) in parsed.page_block_ranges.iter().enumerate() {
             let mut page_vec: Vec<Block> = Vec::new();
             if ocr_pages.contains(&page_pos) {
@@ -3141,15 +3210,41 @@ fn parse_with_page_ocr_inner<'e>(
                 let Some(engine_ref) = engine.as_deref_mut() else {
                     unreachable!("engine present when ocr_pages non-empty")
                 };
-                let (mut blocks, conf) = engine_ref
-                    .ocr_page_png(png)
+                                let page = engine_ref
+                    .ocr_page(png)
                     .map_err(|e| crate::Error::from_parse(crate::Format::Pdf, anyhow::anyhow!(e)))?;
-                if let Some(conf) = conf {
+                let OcrPage {
+                    mut blocks,
+                    confidence,
+                    layout_regions,
+                    word_boxes,
+                    table_html,
+                } = page;
+                if let Some(conf) = confidence {
                     if conf < 0.60 {
                         low_conf.push(serde_json::json!(page_pos));
                     }
                 }
                 page_vec.append(&mut blocks);
+                if let Some(regions) = layout_regions {
+                    layout_regions_meta.push(serde_json::json!({
+                        "page": range.page_number,
+                        "regions": regions,
+                    }));
+                }
+                if let Some(words) = word_boxes {
+                    word_boxes_meta.push(serde_json::json!({
+                        "page": range.page_number,
+                        "words": words,
+                    }));
+                }
+                if let Some(html) = table_html {
+                    table_html_meta.push(serde_json::json!({
+                        "page": range.page_number,
+                        "html": html,
+                    }));
+                }
+
                 ocr_meta["pages_ocr"] = serde_json::json!(ocr_meta["pages_ocr"].as_u64().unwrap_or(0) + 1);
             } else {
                 page_vec.extend(parsed.blocks[range.block_start..range.block_end].iter().cloned());
@@ -3173,6 +3268,17 @@ fn parse_with_page_ocr_inner<'e>(
 
         if !page_reasons.is_empty() {
             ocr_meta["page_reasons"] = serde_json::Value::Array(page_reasons);
+        }
+        // TASK 10: absent rather than null when no OCR'd page supplied a
+        // field; the existing ocr keys are untouched.
+        if !layout_regions_meta.is_empty() {
+            ocr_meta["layout_regions"] = serde_json::Value::Array(layout_regions_meta);
+        }
+        if !word_boxes_meta.is_empty() {
+            ocr_meta["word_boxes"] = serde_json::Value::Array(word_boxes_meta);
+        }
+        if !table_html_meta.is_empty() {
+            ocr_meta["table_html"] = serde_json::Value::Array(table_html_meta);
         }
     }
 

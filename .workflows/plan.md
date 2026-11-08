@@ -249,7 +249,7 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   method and threads the new fields into `metadata.extra["ocr"]` where present.
 - **Verify**: `cargo test --features pdf,ocr-indra-native`; `tests/pdf_ocr.rs` (6 existing tests)
   unchanged and green; a test asserts a legacy `ocr_page_png`-only implementor still compiles and runs.
-- **Status**: ⬜ PENDING
+- **Status**: ✅ DONE (gate: 3/3 contract tests; OcrPage + defaulted ocr_page(); behavior lock untouched — pdf_ocr.rs diff empty; 98/0 matrix)
 
 ### TASK 11 (🟡): `ocr-rusto-core` feature, tables only
 - **Agent**: worker
