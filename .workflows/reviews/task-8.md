@@ -1,6 +1,6 @@
 # Verdict — TASK 8 (worker): per-page verdicts + document rollup
 
-ok: true
+ok:true
 
 Reviewer: orchestrator (gate), 2026-11-08.
 

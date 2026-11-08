@@ -1,6 +1,6 @@
 # Verdict — TASK 13 (worker): own-table-structure (rusto-core removed)
 
-ok: true
+ok:true
 
 Reviewer: orchestrator (gate), 2026-11-08.
 

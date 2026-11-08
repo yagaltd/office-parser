@@ -1,6 +1,6 @@
 # Verdict — TASK 1 (scout): interpreter seams + fixture baseline
 
-ok: true
+ok:true
 
 Reviewer: orchestrator (gate), 2026-11-08.
 

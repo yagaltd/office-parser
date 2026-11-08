@@ -1,6 +1,6 @@
 # Verdict — TASK 7 (worker, RE-SCOPED): per-page quality + routing
 
-ok: true
+ok:true
 
 Reviewer: orchestrator (gate), 2026-11-08.
 

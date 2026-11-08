@@ -1,6 +1,6 @@
 # Verdict — TASK 10 (worker): OcrPage + defaulted ocr_page()
 
-ok: true
+ok:true
 
 Reviewer: orchestrator (gate), 2026-11-08.
 

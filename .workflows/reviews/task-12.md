@@ -1,6 +1,6 @@
 # Verdict — TASK 12 (worker): docs + CHANGELOG sweep with the Plan ID
 
-ok: true
+ok:true
 
 Reviewer: orchestrator (gate), 2026-11-08.
 

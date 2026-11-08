@@ -53,6 +53,30 @@ Verbatim human decisions for this feature. Specs touching these quote them.
      tables only.** Never the `rusto-rs` facade crate (`default = ["ffi", "rten"]`). Indra keeps the
      text path; `rusto-core` supplies layout regions, word boxes, and table structure.
 
+## Plan 20261108-001 — durable learnings (sweep 2026-11-08)
+
+- Trust checks never silently degrade: a feature-off build must yield
+  either a working signal or a loud no-op — an empty verdict vector is a
+  defect class (TASK 9: the no-ink check runs from geometry alone; pdfium
+  reasons fold in only where the feature exists).
+- Escalate pages are NEVER OCR'd: OCR cannot repair a reading order the
+  text layer mangled; escalation is a vision-LLM signal (TASKS 7/8).
+- Routing rollup is worst-page-wins: exactly the Ocr-verdict pages go
+  through the engine; the document-level quality enum stays a summary.
+- OcrPage optional fields are absent — never null — when no OCR'd page
+  supplied them (TASK 10).
+- Table ownership: Indra produces the text (cells) and the geometry
+  (grid bbox, cell rects); the structure model only organizes. A
+  structure model that cannot read cells (rusto SLANet stub) is a
+  gate, not a source (TASKS 11/13).
+- The runtime for OCR-adjacent models is rten (pure Rust); ONNX loads
+  through rten's onnx_format. Model vocabularies live in the model's
+  own ONNX metadata — extract, never assume (TASK 13 gate: the EN/CH
+  dict mismatch).
+- Vendoring is the last resort, measured first: the rusto git dep cost
+  >1.2 GB via transitive submodules; two MIT crates (452K + 1.4M) were
+  vendored, then removed entirely once the logic was ported (TASK 13).
+
 ## Open Questions
 
 - Does the existing content interpreter's font metrics survive XY-Cut reordering unchanged?

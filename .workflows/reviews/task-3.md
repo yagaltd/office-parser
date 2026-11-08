@@ -1,6 +1,6 @@
 # Verdict — TASK 3 (prototype): complexity score calibration
 
-ok: true
+ok:true
 
 Reviewer: orchestrator (gate), 2026-11-08.
 

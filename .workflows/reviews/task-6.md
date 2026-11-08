@@ -1,6 +1,6 @@
 # Verdict — TASK 6 (worker): XY-Cut reading order
 
-ok: true
+ok:true
 
 Reviewer: orchestrator (gate), 2026-11-08.
 

@@ -1,6 +1,6 @@
 # Verdict — TASK 2 (prototype): per-span boxes + ink coverage without pdfium
 
-ok: true
+ok:true
 
 Reviewer: orchestrator (gate), 2026-11-08.
 

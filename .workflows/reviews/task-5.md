@@ -1,6 +1,6 @@
 # Verdict — TASK 5 (worker): PageTextQuality types
 
-ok: true
+ok:true
 
 Reviewer: orchestrator (gate), 2026-11-08.
 

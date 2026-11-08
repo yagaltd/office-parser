@@ -1,6 +1,6 @@
 # Verdict — TASK 9 (worker): pdfium-free no-ink trust check
 
-ok: true
+ok:true
 
 Reviewer: orchestrator (gate), 2026-11-08.
 

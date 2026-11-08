@@ -1,6 +1,6 @@
 # Verdict — TASK 4 (worker): PageGeometry emission
 
-ok: true
+ok:true
 
 Reviewer: orchestrator (gate), 2026-11-08.
 

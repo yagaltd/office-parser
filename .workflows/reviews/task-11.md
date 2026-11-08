@@ -1,6 +1,6 @@
 # Verdict — TASK 11 (worker): ocr-rusto-core table-region enrichment
 
-ok: true
+ok:true
 
 Reviewer: orchestrator (gate), 2026-11-08.
 
