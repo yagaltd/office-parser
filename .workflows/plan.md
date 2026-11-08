@@ -321,3 +321,13 @@ Filled in as tasks complete — cost, duration, and learnings per task.
   `src/formats/pdf.rs` (TASK_4); `PageTextQuality`/`PageVerdict` live in `src/quality.rs` (TASK_5).
   This split is what makes parallel group A and B legal — TASK_5 must not define geometry types and
   TASK_7 imports them read-only.
+
+
+### TASK 13 (AMENDMENT, human-ruled 2026-11-08): own-table-structure
+
+- **Contract**: `.workflows/specs/task-13.spec` (rusto-core removed once the
+  PaddleOCR logic ports — "keeps the Rust core lean").
+- **Status**: DONE (gate: unit 14/14, integration 5/5 incl. real SLANet-plus
+  inference on pdf_table_scan; vocabulary corrected from the model's own ONNX
+  metadata; default matrix 98/0; vendor/rusto-* + the rusto dep deleted;
+  verdict .workflows/reviews/task-13.md)
