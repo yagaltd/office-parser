@@ -1,0 +1,14 @@
+{
+  "weights": "score = clamp01(0.30*rot + 0.25*gutters_norm + 0.20*table_density + 0.10*overlap_norm + 0.15*density_norm); escalate at >= 0.30",
+  "escalate_at": 0.3,
+  "generated_unix": 1794126275,
+  "pages": [
+    {"fixture": "pdf_scanned.pdf", "page": 1, "text_layer": false, "score": null, "signals": null},
+    {"fixture": "pdf_scanned.pdf", "page": 2, "text_layer": false, "score": null, "signals": null},
+    {"fixture": "pdf_table_scan.pdf", "page": 1, "text_layer": false, "score": null, "signals": null},
+    {"fixture": "pdf_rot90_scan.pdf", "page": 1, "text_layer": false, "score": null, "signals": null},
+    {"fixture": "pdf_cjk_scan.pdf", "page": 1, "text_layer": true, "score": 0.0947, "signals": {"chars": 21, "rot_deg": 0.0, "lines": 1, "gutters": 0, "gutters_norm": 0.000, "aligned_cuts": 0, "strong_cuts": 0, "table_density": 0.000, "overlap_ratio": 0.0000, "overlap_norm": 0.000, "char_density": 0.01263, "density_norm": 0.631, "columns": 1}},
+    {"fixture": "pdf_mixed.pdf", "page": 1, "text_layer": true, "score": 0.0394, "signals": {"chars": 310, "rot_deg": 0.0, "lines": 8, "gutters": 0, "gutters_norm": 0.000, "aligned_cuts": 0, "strong_cuts": 0, "table_density": 0.000, "overlap_ratio": 0.0000, "overlap_norm": 0.000, "char_density": 0.00525, "density_norm": 0.262, "columns": 1}},
+    {"fixture": "pdf_mixed.pdf", "page": 2, "text_layer": false, "score": null, "signals": null}
+  ]
+}

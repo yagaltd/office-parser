@@ -1,0 +1,12 @@
+.workflows/spikes/scout/baseline/pdf_cjk_scan/pdf_cjk_scan-p001.md 82
+.workflows/spikes/scout/baseline/pdf_cjk_scan/pdf_cjk_scan.md 77
+.workflows/spikes/scout/baseline/pdf_mixed/pdf_mixed-p001.md 492
+.workflows/spikes/scout/baseline/pdf_mixed/pdf_mixed-p002.md 66
+.workflows/spikes/scout/baseline/pdf_mixed/pdf_mixed.md 516
+.workflows/spikes/scout/baseline/pdf_rot90_scan/pdf_rot90_scan-p001.md 63
+.workflows/spikes/scout/baseline/pdf_rot90_scan/pdf_rot90_scan.md 58
+.workflows/spikes/scout/baseline/pdf_scanned/pdf_scanned-p001.md 43
+.workflows/spikes/scout/baseline/pdf_scanned/pdf_scanned-p002.md 43
+.workflows/spikes/scout/baseline/pdf_scanned/pdf_scanned.md 38
+.workflows/spikes/scout/baseline/pdf_table_scan/pdf_table_scan-p001.md 42
+.workflows/spikes/scout/baseline/pdf_table_scan/pdf_table_scan.md 37

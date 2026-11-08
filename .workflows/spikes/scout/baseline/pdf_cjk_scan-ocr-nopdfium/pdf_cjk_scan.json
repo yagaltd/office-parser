@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "format": "pdf",
+    "title": "pdf_cjk_scan",
+    "page_count": 1,
+    "slide_count": null,
+    "extra": {
+      "parser": "office-parser-pdf-v1",
+      "title": "pdf_cjk_scan",
+      "page_count": 1,
+      "page_block_ranges": [
+        {
+          "page_number": 1,
+          "block_start": 0,
+          "block_end": 1
+        }
+      ],
+      "outline": [],
+      "ocr": {
+        "engine": "indra-native",
+        "pages_ocr": 1,
+        "low_confidence_pages": [
+          0
+        ]
+      }
+    }
+  },
+  "blocks": [
+    {
+      "type": "paragraph",
+      "text": "传 力传 传",
+      "marks": []
+    },
+    {
+      "type": "paragraph",
+      "text": "感器订",
+      "marks": []
+    }
+  ],
+  "images": []
+}

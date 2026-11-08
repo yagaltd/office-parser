@@ -128,7 +128,9 @@ Prototypes (TASK_2, 3p) are serial, Tier C routing, never in a parallel group.
   favour of `columns` alone. Spike code in `.workflows/spikes/pdf-complexity/**` only.
 - **Verify**: `.workflows/spikes/pdf-complexity/README.md` holds the five-fixture score table plus a
   threshold recommendation with its justification; `git diff --stat src/` empty.
-- **Status**: ⬜ PENDING
+- **Status**: ✅ DONE — measured: gutters=0 on all text-layer pages; score/columns agree
+  everywhere → TASK 7 scope shrinks to columns + pdf_text_quality routing + standalone
+  rotation flag (deletion test branch 1). See spikes/pdf-complexity/README.md §Measured verdict.
 
 ### TASK 4 (🔴): `PageGeometry` emission
 - **Agent**: worker

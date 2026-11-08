@@ -1,0 +1,7 @@
+.workflows/spikes/scout/baseline/pdf_cjk_scan/pdf_cjk_scan-p001.md 16
+.workflows/spikes/scout/baseline/pdf_mixed/pdf_mixed-p001.md 305
+.workflows/spikes/scout/baseline/pdf_mixed/pdf_mixed-p002.md 0
+.workflows/spikes/scout/baseline/pdf_rot90_scan/pdf_rot90_scan-p001.md 0
+.workflows/spikes/scout/baseline/pdf_scanned/pdf_scanned-p001.md 0
+.workflows/spikes/scout/baseline/pdf_scanned/pdf_scanned-p002.md 0
+.workflows/spikes/scout/baseline/pdf_table_scan/pdf_table_scan-p001.md 0
