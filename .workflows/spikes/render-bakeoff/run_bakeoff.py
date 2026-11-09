@@ -62,7 +62,10 @@ FLIP_MARGIN = 0.01  # WER(hayro) <= WER(pdfium) + 1pt flips the default (TASK 4)
 # corresponding render feature is compiled in. b"libpdfium.so" is NOT a
 # usable pdfium marker -- install_pdfium() carries that literal regardless
 # of features. b"FPDF_*" are pdfium-render's libloading symbol names.
-PDFIUM_MARKERS = (b"FPDF_", b"pdfium-render", b"pdfium.dll", b"pdfium.dylib")
+# bug-hunter-002 P2-4: pdfium.dll/.dylib markers are dead — install_pdfium()
+# carries those literals in every binary (cfg! is runtime). Only pdfium-render
+# libloading symbols (FPDF_*) prove the feature.
+PDFIUM_MARKERS = (b"FPDF_", b"pdfium-render")
 HAYRO_MARKERS = (b"hayro",)
 
 sys.path.insert(0, str(HARNESS_DIR))

@@ -229,7 +229,12 @@ impl<'a, 'r> Device<'a> for Renderer<'r> {
     }
 
     fn knockout_erase_wanted(&mut self) -> bool {
-        self.in_knockout()
+        // PdfCraft patch (bug-hunter-002 P1-1): a nested /Group form inside a
+        // knockout element must not re-enter the erase pass — mask.rs and
+        // cmyk.rs already guard on `erasing`; the renderer-side gate is the
+        // same. Without it a nested end_knockout_erase clears `erasing`
+        // mid-pass and the outer content paints with Compose::Copy.
+        !self.erasing && self.in_knockout()
     }
 
     fn begin_knockout_erase(&mut self) {
@@ -358,16 +363,19 @@ pub fn render<'a>(
     let mut x_scale = pixmap_settings.x_scale;
     let mut y_scale = pixmap_settings.y_scale;
     if x_scale.is_finite() && y_scale.is_finite() && x_scale > 0.0 && y_scale > 0.0 {
-        let fit_side = |s: f32| {
+        // PdfCraft patch (bug-hunter-002 P3-1): each axis clamps against its
+        // own dimension — the old closure checked height for both, letting a
+        // width>65535pt page saturate the u16 cast.
+        let fit_side = |dim: f32, s: f32| {
             let max = u64::from(u16::MAX);
-            if (height.max(0.0) as f64 * s as f64) as u64 > max {
-                max as f32 / height.max(1.0) as f32
+            if (dim.max(0.0) as f64 * s as f64) as u64 > max {
+                max as f32 / dim.max(1.0) as f32
             } else {
                 s
             }
         };
-        x_scale = fit_side(x_scale);
-        y_scale = fit_side(y_scale);
+        x_scale = fit_side(width.max(0.0) as f32, x_scale);
+        y_scale = fit_side(height.max(0.0) as f32, y_scale);
         let pixels = (width.max(0.0) as f64 * x_scale as f64) as u64
             * (height.max(0.0) as f64 * y_scale as f64) as u64;
         if pixels > MAX_RENDER_PIXELS {

@@ -54,7 +54,8 @@ Parallel notes: TASK_2 (vendor/ + src/render.rs + Cargo.toml) and TASK_3 (`.work
 - **Wave**: 0
 - **What**: For each of the 10 still-needed families (list in the research report), pin the exact 0.9.0 file/function anchors in /tmp/hayro-upstream (or a fresh clone) where the port lands — renderer.rs split into 8 modules, fonts in hayro-font. Also: the exact new render API surface for the glue rewrite (PixmapSettings, render(), RenderCache changes), and the registry hayro-jbig2 0.4.0 / hayro-postscript 0.2.0 API check (do they satisfy what our unwired vendored copies provided?). Findings to `.workflows/scout/20261108-002.md`.
 - **Verify**: `.workflows/scout/20261108-002.md` exists; every family has ≥1 file:line anchor; glue section lists the new signatures.
-- **context**: no changes
+- context: no changes
+- ok:true
 - **Status**: ✅ DONE (gate persisted .workflows/scout/20261108-002.md; anchors for all 10 families + glue spec + registry check incl. offline gap)
 
 ### TASK 2 (🔴): Upgrade vendored stack to 0.9.0
@@ -66,7 +67,8 @@ Parallel notes: TASK_2 (vendor/ + src/render.rs + Cargo.toml) and TASK_3 (`.work
 - **Testing strategy**: example-based
 - **What**: vendor/ = 0.9.0 copies of hayro, hayro-syntax, hayro-interpret, hayro-cmap + NEW hayro-font; re-apply the 10 families per the TASK 1 anchors (patch marks preserved, `PdfCraft patch:` convention); DELETE vendor dirs hayro-jbig2, hayro-postscript, vello_common, vello_cpu (registry serves; update `[patch.crates-io]` + workspace excludes); rewrite the glue in pdf.rs against render()/PixmapSettings; **re-baseline** any fixture-locked transcript diffs with per-fixture verdict records (decision 3).
 - **Verify**: `cargo build --features render-hayro` green; all 5 fixtures render non-blank rasters through hayro; parser matrix green post re-baseline; `ls vendor/` shows exactly hayro, hayro-syntax, hayro-interpret, hayro-cmap, hayro-font (+hayro-jbig2 etc. REMOVED).
-- **context**: updated
+- context: updated
+- ok:true
 - **Status**: ✅ DONE (T2b branch merged 8f8f994; 90/0 hayro matrix; no re-baseline needed; verdict .workflows/reviews/task-2.md)
 
 ### TASK 3 (🟠): Bake-off harness + real-scans slot
@@ -79,14 +81,16 @@ Parallel notes: TASK_2 (vendor/ + src/render.rs + Cargo.toml) and TASK_3 (`.work
 - **What**: `.workflows/spikes/render-bakeoff/`: (1) seeded dense-scan generator (formalize the reportlab→pdftoppm→drawImage flow, N pages configurable, exact ground-truth words.json emitted); (2) WER scorer (generated ground truth vs OCR transcript); (3) A/B runner: pdfium vs hayro over the synthetic corpus + the 5 fixtures + `.workflows/spikes/render-bakeoff/real-scans/` drop-in (any PDFs placed there are scored with char/word-delta, no WER claim); (4) markdown report table. CARGO_BUILD_JOBS=4 respected; measurement-only — no src/ changes, no CI wiring.
 - **Verify**: harness runs end-to-end (both renderers × corpus), WER + delta table produced, real-scans slot demonstrably scored (≥1 scan present — the human drops them in).
 - **Status**: ✅ DONE (gate: harness applied from the store event, WER selfcheck 9/9, runner --selfcheck exit 0 after two gate fixes — reportlab /ID+XMP byte noise normalized to rasterized-content hashes, path-hash bug; report.md generated at the T2 gate for TASK 4)
-- **context**: no changes
+- context: no changes
+- ok:true
 
 ### TASK 4 (🔴): HUMAN — bake-off verdict + flip decision
 - **Agent**: human
 - **Depends on**: TASK 2, TASK 3
 - **Wave**: 2
 - **What**: Read the bake-off report. Apply rule 2: flip default to hayro iff WER(hayro) ≤ WER(pdfium) + 1pt AND re-baselined tests green. Decision recorded in the plan (STATUS line under this task).
-- **context**: no changes
+- context: no changes
+- ok:true
 - **Status**: ✅ DONE (human 2026-11-09: STAY — rule NOT satisfied at 150 dpi (+2.81pt); flip declined. verdict .workflows/reviews/task-4.md)
 
 ### TASK 5 (🟡): Execute the renderer-default decision
@@ -98,7 +102,8 @@ Parallel notes: TASK_2 (vendor/ + src/render.rs + Cargo.toml) and TASK_3 (`.work
 - **Testing strategy**: example-based
 - **What**: If flip: `render-pages` default order becomes hayro → pdfium (fallback); OFFICE_PARSER_RENDERER still overrides both ways; docs updated in the same change. If stay: the report + decision documented in CONTEXT.md §Rulings. Conditional contract — finalized after TASK 4.
 - **Verify**: `cargo test --features pdf,ocr-indra-native,render-hayro,render-pdfium` green; the rendered-output A/B on fixtures matches the decision.
-- **context**: no changes
+- context: no changes
+- ok:true
 - **Status**: ✅ DONE (stay branch: ruling in CONTEXT.md §Rulings with numbers + revisit-when; zero code change — pdfium default untouched)
 
 ### TASK 6 (⚪): Docs sweep
@@ -106,7 +111,8 @@ Parallel notes: TASK_2 (vendor/ + src/render.rs + Cargo.toml) and TASK_3 (`.work
 - **Depends on**: TASK 5
 - **Wave**: 4
 - **What**: README renderer paragraph (default, bake-off numbers, hayro-font note), docs/formats.md renderer notes, CHANGELOG entry with Plan ID 20261108-002.
-- **context**: updated
+- context: updated
+- ok:true
 - **Status**: ✅ DONE (README renderer paragraph + formats.md OCR-renderer section + CHANGELOG Plan-ID entry)
 
 (No verify/quality tasks: `/next` verdict-gates every task; `/review` is the final gate at SHIP.)

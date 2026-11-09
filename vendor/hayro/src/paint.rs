@@ -38,6 +38,12 @@ impl Renderer<'_> {
                 AlphaColor::from_rgba8(c[0], c[1], c[2], c[3]).into()
             }
             Paint::Pattern(p) => {
+                // PdfCraft patch (bug-hunter-002 P2-1): patterns and shadings
+                // cannot be tinted per-ink — drawing them literally into a
+                // pass canvas would read as inverted tints. Mark the group
+                // unsupported so the CMYK pass falls back to straight
+                // composition (documented in cmyk.rs).
+                self.ink.unsupported = true;
                 let path_transform = self.ctx.transform();
                 let bbox = {
                     let mut bbox = path_transform.transform_rect_bbox(path_bbox());

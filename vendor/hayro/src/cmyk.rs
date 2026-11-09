@@ -30,6 +30,12 @@ pub(crate) enum InkPass {
 }
 
 impl InkState {
+    /// PdfCraft patch (bug-hunter-002 P2-1): is an ink pass live? (image.rs
+    /// needs the answer without touching the private field.)
+    pub(crate) fn is_passing(&self) -> bool {
+        self.pass.is_some()
+    }
+
     /// The colour a pass paints for `color`; transparent, with the group marked unsupported,
     /// when the colour has no ink tints.
     pub(crate) fn paint(
@@ -168,10 +174,14 @@ impl Renderer<'_> {
             rgba,
             width,
             height,
-            vello_cpu::PixelMetadata {
-                may_have_transparency: true,
-                ..Default::default()
-            },
+            vello_cpu::PixelMetadata::new(
+                    // PdfCraft patch (bug-hunter-002 P2-2): the composited
+                    // rgba above is STRAIGHT alpha; the default metadata is
+                    // AlphaPremultiplied, which made AA edges composite
+                    // bright when the pixmap is drawn.
+                vello_cpu::peniko::ImageAlphaType::Alpha,
+                true,
+            ),
         );
 
         // The group's own soft mask and blend mode are on its layer; what the contents set

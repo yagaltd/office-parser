@@ -64,7 +64,10 @@ runs produce identical dense_scan.pdf + words.json sha256 checksums — and
 ## Ground truth and WER
 
 words.json records the per-page word list EXACTLY as drawn (draw order =
-column-major: left column top-to-bottom, then right column). WER = standard
+column-major: left column top-to-bottom, then right column — which is also
+the CLI's XY-Cut reading order for 2-column pages, so hypothesis and
+reference sequences align by construction; an order-free bag-of-words WER
+cross-check is a known future refinement). WER = standard
 Levenshtein edit distance over the page word sequence, normalized by the
 reference length; tokens are whitespace-split and casefolded; micro-averaged
 across pages (total edit distance / total reference words). Hypothesis =

@@ -221,7 +221,14 @@ fn parse_codespace_range<F>(
         // PdfCraft patch: a malformed codespace entry is skipped, not fatal.
         let Some(low) = extract_u32_code(&obj, &mut ctx.buf) else { continue };
         let Ok(n_bytes) = u8::try_from(ctx.buf.len()) else { continue };
-        let Some(high) = read_u32_code(scanner, &mut ctx.buf) else { continue };
+        // PdfCraft patch (bug-hunter-002 P2-3): fetch the high token explicitly
+        // and end the section when it is the marker — a truncated entry must
+        // not consume `endcodespacerange` (or the next section's tokens).
+        let Ok(high_obj) = scanner.parse_token() else { return };
+        if name_matches(&high_obj, "endcodespacerange") {
+            return;
+        }
+        let Some(high) = extract_u32_code(&high_obj, &mut ctx.buf) else { continue };
 
         if ctx.buf.len() != usize::from(n_bytes) {
             continue;
@@ -251,9 +258,20 @@ fn parse_range<F>(
         // PdfCraft patch: a malformed range entry is skipped, not fatal.
         let Some(start) = extract_u32_code(&obj, &mut ctx.buf) else { continue };
         let byte_len = ctx.buf.len();
-        let Some(end) = read_u32_code(scanner, &mut ctx.buf) else { continue };
+        // PdfCraft patch (bug-hunter-002 P2-3): explicit token fetches with
+        // end-marker checks — truncated entries end the section instead of
+        // swallowing the marker and the following tokens.
+        let Ok(end_obj) = scanner.parse_token() else { return };
+        if name_matches(&end_obj, end_marker) {
+            return;
+        }
+        let Some(end) = extract_u32_code(&end_obj, &mut ctx.buf) else { continue };
+        let Ok(cid_obj) = scanner.parse_token() else { return };
+        if name_matches(&cid_obj, end_marker) {
+            return;
+        }
         let Some(cid_start) =
-            u32::try_from(parse_integer(scanner).unwrap_or(i64::MIN)).ok()
+            u32::try_from(parse_integer_from_token(&cid_obj).unwrap_or(i64::MIN)).ok()
         else {
             continue;
         };
@@ -284,8 +302,12 @@ fn parse_char<F>(
         // PdfCraft patch: a malformed char entry is skipped, not fatal.
         let Some(code) = extract_u32_code(&obj, &mut ctx.buf) else { continue };
         let byte_len = ctx.buf.len();
+        let Ok(cid_obj) = scanner.parse_token() else { return };
+        if name_matches(&cid_obj, end_marker) {
+            return;
+        }
         let Some(cid_start) =
-            u32::try_from(parse_integer(scanner).unwrap_or(i64::MIN)).ok()
+            u32::try_from(parse_integer_from_token(&cid_obj).unwrap_or(i64::MIN)).ok()
         else {
             continue;
         };
@@ -323,7 +345,14 @@ fn parse_bf_char<F>(
             let _ = scanner.parse_token();
             continue;
         };
-        let Ok(dst) = scanner.parse_string() else { continue };
+        // PdfCraft patch (bug-hunter-002 P2-3): fetch the destination token
+        // explicitly — an end marker here ends the section instead of being
+        // swallowed by a failed parse_string.
+        let Ok(dst_obj) = scanner.parse_token() else { return };
+        if name_matches(&dst_obj, "endbfchar") {
+            return;
+        }
+        let Token::String(dst) = &dst_obj else { continue };
         if dst.decode_into(&mut ctx.buf).is_err() {
             continue;
         }
@@ -358,10 +387,13 @@ fn parse_bf_range<F>(
             let _ = scanner.parse_token();
             continue;
         };
-        let Some(end) = read_u32_code(scanner, &mut ctx.buf) else {
-            let _ = scanner.parse_token();
-            continue;
-        };
+        // PdfCraft patch (bug-hunter-002 P2-3): explicit end-token fetch with
+        // an end-marker check (truncated entry ends the section).
+        let Ok(end_obj) = scanner.parse_token() else { return };
+        if name_matches(&end_obj, "endbfrange") {
+            return;
+        }
+        let Some(end) = extract_u32_code(&end_obj, &mut ctx.buf) else { continue };
 
         let Ok(next) = scanner.parse_token() else { return };
 
@@ -376,6 +408,12 @@ fn parse_bf_range<F>(
                         dst_base,
                     });
                 }
+            }
+            _ if name_matches(&next, "endbfrange") => {
+                // PdfCraft patch (bug-hunter-002 P2-3): single-code bfrange
+                // whose destination slot holds the end marker — end the
+                // section instead of treating it as garbage.
+                return;
             }
             _ if name_matches(&next, "[") => {
                 for code in start..=end {
@@ -430,6 +468,16 @@ fn decode_be(bytes: &[u8]) -> Option<Vec<u16>> {
 }
 
 #[inline]
+/// PdfCraft patch (bug-hunter-002 P2-3): integer from an already-fetched
+/// token, so callers can end-marker-check before consuming.
+#[inline]
+fn parse_integer_from_token(obj: &Token<'_>) -> Option<i64> {
+    match obj {
+        Token::Number(Number::Integer(i)) => Some(*i),
+        _ => None,
+    }
+}
+
 fn read_u32_code(scanner: &mut Scanner<'_>, buf: &mut Vec<u8>) -> Option<u32> {
     let s = scanner.parse_string().ok()?;
     s.decode_into(buf).ok()?;

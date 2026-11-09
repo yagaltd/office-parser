@@ -45,6 +45,15 @@ fn decode_context<'a>(
         height: obj.height(),
     };
 
+    // PdfCraft patch (bug-hunter-002 P3-4): gate on the DECLARED dimensions
+    // before decoding — a hostile image previously paid the full decode (up
+    // to ~1 GiB) only to be rejected afterwards. The post-decode check below
+    // stays for actual (post-decode) dimensions.
+    if !image_size_ok(obj.width(), obj.height()) {
+        (obj.warning_sink)(InterpreterWarning::ImageDecodeFailure);
+        return None;
+    }
+
     let decoded = obj
         .stream
         .decoded_image(&decode_params)
