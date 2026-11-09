@@ -3,17 +3,11 @@
 //! PDF shadings are very expensive to evaluate. Because of this, at least for
 //! radial-axial shadings it's useful if we can instead approximate them by
 //! SVG-like sRGB gradients.
-//!
-//! PdfCraft patch: backported from hayro-interpret 0.8.0 (Apache-2.0 OR MIT), adapted to this
-//! version's `EncodedShadingType::RadialAxial` variant. Remove when the vendored copy moves to
-//! 0.8. A full-page axial soft mask was sampled pixel by pixel (InDesign fades: 15 s per page).
 
 use crate::color::AlphaColor;
-use crate::encode::{EncodedShadingPattern, EncodedShadingType, RadialAxialParams};
-use crate::function::StitchingBounds;
-use crate::shading::ShadingFunction;
+use crate::encode::{EncodedRadialAxialShading, EncodedShadingPattern, RadialAxialParams};
+use crate::function::MAX_COMPONENTS;
 use kurbo::{Affine, Circle, Point, Rect, Shape};
-use smallvec::smallvec;
 
 const MAX_GRADIENT_SUBDIVISION_DEPTH: u8 = 10;
 const RADIAL_EPSILON: f64 = 1.0e-6;
@@ -58,39 +52,9 @@ pub struct SvgGradientStop {
     pub color: [f32; 4],
 }
 
-impl EncodedShadingPattern {
-    /// Convert an axial/radial PDF shading into an SVG-like gradient approximation, or `None`
-    /// for other shading types and for cases a native gradient cannot represent exactly.
-    pub fn as_svg_gradient(&self, path_bbox: Rect, tolerance: f32) -> Option<SvgGradient> {
-        let EncodedShadingType::RadialAxial {
-            function,
-            params,
-            domain,
-            extend,
-        } = &self.shading_type
-        else {
-            return None;
-        };
-
-        EncodedRadialAxialShading {
-            function,
-            params,
-            domain: *domain,
-            extend: *extend,
-        }
-        .as_svg_gradient(self, path_bbox, tolerance)
-    }
-}
-
-struct EncodedRadialAxialShading<'a> {
-    function: &'a ShadingFunction,
-    params: &'a RadialAxialParams,
-    domain: [f32; 2],
-    extend: [bool; 2],
-}
-
-impl EncodedRadialAxialShading<'_> {
-    fn as_svg_gradient(
+impl EncodedRadialAxialShading {
+    /// Convert an axial/radial PDF shading into an SVG-like gradient approximation.
+    pub fn as_svg_gradient(
         &self,
         pattern: &EncodedShadingPattern,
         path_bbox: Rect,
@@ -124,7 +88,7 @@ impl EncodedRadialAxialShading<'_> {
     }
 
     fn native_gradient_kind(&self) -> SvgGradientKind {
-        match self.params {
+        match &self.params {
             RadialAxialParams::Axial => SvgGradientKind::Linear {
                 start: Point::ZERO,
                 end: Point::new(1.0, 0.0),
@@ -141,10 +105,12 @@ impl EncodedRadialAxialShading<'_> {
     fn sample_t(&self, pattern: &EncodedShadingPattern, t: f32) -> [f32; 4] {
         let (t0, t1) = (self.domain[0], self.domain[1]);
         let t = t0 + (t1 - t0) * t;
-        let Some(out) = self.function.eval(&smallvec![t]) else {
+        let mut out = [0.0; MAX_COMPONENTS];
+        let out = &mut out[..self.function.num_outputs()];
+        if self.function.eval(&[t], out).is_none() {
             return [0.0, 0.0, 0.0, 0.0];
-        };
-        let mut components = pattern.color_space.to_rgba(&out, 1.0, false).components();
+        }
+        let mut components = pattern.color_space.to_rgba(out, 1.0).components();
         components[3] *= pattern.opacity;
 
         if let Some(tf) = &pattern.transfer_function {
@@ -164,7 +130,7 @@ impl EncodedRadialAxialShading<'_> {
     }
 
     fn radial_extend_covers_bbox(&self, pattern: &EncodedShadingPattern, path_bbox: Rect) -> bool {
-        let RadialAxialParams::Radial { p1, r } = *self.params else {
+        let RadialAxialParams::Radial { p1, r } = self.params else {
             return false;
         };
 
@@ -199,11 +165,11 @@ impl EncodedRadialAxialShading<'_> {
         inner_extend_ok && outer_extend_ok
     }
 
-    fn normalized_stitching_bounds(&self) -> StitchingBounds {
+    fn normalized_stitching_bounds(&self) -> Vec<f32> {
         let [t0, t1] = self.domain;
         let dt = t1 - t0;
         if dt.abs() <= f32::EPSILON {
-            return StitchingBounds::new();
+            return vec![];
         }
 
         let mut bounds = self
@@ -212,7 +178,7 @@ impl EncodedRadialAxialShading<'_> {
             .into_iter()
             .map(|bound| (bound - t0) / dt)
             .filter(|bound| *bound > 0.0 && *bound < 1.0)
-            .collect::<StitchingBounds>();
+            .collect::<Vec<_>>();
 
         if dt < 0.0 {
             bounds.reverse();

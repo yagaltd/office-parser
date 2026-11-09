@@ -1,12 +1,13 @@
 //! Content stream operators.
 
-use crate::content::{Instruction, OPERANDS_THRESHOLD, OperatorTrait, Stack};
+use crate::content::{INLINE_COLOR_COMPONENTS, Instruction, OperatorTrait, Stack};
 use crate::object;
 use crate::object::Array;
 use crate::object::Name;
 use crate::object::Number;
 use crate::object::Object;
 use crate::object::Stream;
+use core::fmt::{Display, Formatter};
 use smallvec::{SmallVec, smallvec};
 
 use crate::content::macros::{op_all, op_impl, op0, op1, op2, op3, op4, op6};
@@ -17,7 +18,10 @@ include!("ops_generated.rs");
 
 fn parse_named_color<'b, 'a>(
     objects: &'b [Object<'a>],
-) -> Option<(SmallVec<[Number; OPERANDS_THRESHOLD]>, Option<&'b Name<'a>>)> {
+) -> Option<(
+    SmallVec<[Number; INLINE_COLOR_COMPONENTS]>,
+    Option<&'b Name<'a>>,
+)> {
     let mut nums = smallvec![];
     let mut name = None;
 
@@ -26,8 +30,6 @@ fn parse_named_color<'b, 'a>(
             Object::Number(n) => nums.push(*n),
             Object::Name(n) => name = Some(n),
             _ => {
-                warn!("encountered unknown object {o:?} when parsing scn/SCN");
-
                 return None;
             }
         }
@@ -36,11 +38,43 @@ fn parse_named_color<'b, 'a>(
     Some((nums, name))
 }
 
+fn fmt_named_color(
+    f: &mut Formatter<'_>,
+    operator: &str,
+    numbers: &[Number],
+    name: Option<&Name<'_>>,
+) -> core::fmt::Result {
+    f.write_str(operator)?;
+    if !numbers.is_empty() || name.is_some() {
+        f.write_str("(")?;
+        for (index, number) in numbers.iter().enumerate() {
+            if index > 0 {
+                f.write_str(" ")?;
+            }
+            Display::fmt(number, f)?;
+        }
+        if let Some(name) = name {
+            if !numbers.is_empty() {
+                f.write_str(" ")?;
+            }
+            Display::fmt(name, f)?;
+        }
+        f.write_str(")")?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StrokeColorNamed<'b, 'a>(
-    pub SmallVec<[Number; OPERANDS_THRESHOLD]>,
+    pub SmallVec<[Number; INLINE_COLOR_COMPONENTS]>,
     pub Option<&'b Name<'a>>,
 );
+
+impl Display for StrokeColorNamed<'_, '_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        fmt_named_color(f, "StrokeColorNamed", &self.0, self.1)
+    }
+}
 
 op_impl!(
     StrokeColorNamed<'b, 'a>,
@@ -54,9 +88,15 @@ op_impl!(
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct NonStrokeColorNamed<'b, 'a>(
-    pub SmallVec<[Number; OPERANDS_THRESHOLD]>,
+    pub SmallVec<[Number; INLINE_COLOR_COMPONENTS]>,
     pub Option<&'b Name<'a>>,
 );
+
+impl Display for NonStrokeColorNamed<'_, '_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        fmt_named_color(f, "NonStrokeColorNamed", &self.0, self.1)
+    }
+}
 
 op_impl!(
     NonStrokeColorNamed<'b, 'a>,
@@ -152,44 +192,37 @@ f
         assert!(iter.next().is_none());
     }
 
-    /// PdfCraft patch (28): a twelve-ink DeviceN colour's `scn` keeps all twelve operands, and
-    /// the instructions after it are still read (#4260). The eleventh operand ended the stream.
     #[test]
-    fn scn_with_twelve_components_keeps_them_all() {
-        let input = b"1 2 3 4 5 6 7 8 9 10 11 12 scn 0 0 10 10 re f";
-        let mut iter = TypedIter::new(input);
+    fn display_ops() {
+        let mut iter = TypedIter::new(
+            b"h 2 w 1 0 0 RG 0 0 10 20 re 10 20 m 30 20 60 40 90 80 c \
+              0.1 0.2 SC 0.0 scn 1.0 /Spot SCN (Hello) Tj <00FF> Tj foo",
+        );
 
-        match iter.next() {
-            Some(TypedInstruction::NonStrokeColorNamed(NonStrokeColorNamed(nums, None))) => {
-                let expected = (1..=12).map(Number::from_i32).collect::<Vec<_>>();
-                assert_eq!(nums.as_slice(), expected.as_slice());
-            }
-            other => panic!("unexpected instruction: {other:?}"),
-        }
-        assert!(matches!(iter.next(), Some(TypedInstruction::RectPath(_))));
-        assert!(matches!(iter.next(), Some(TypedInstruction::FillPathNonZero(_))));
-        assert!(iter.next().is_none());
-    }
-
-    /// PdfCraft patch (28): past the operand cap the oldest operands are dropped, in order, and
-    /// the operator reads the ones nearest to it.
-    #[test]
-    fn operands_past_the_cap_keep_the_latest_in_order() {
-        let mut input = String::new();
-        for i in 0..600 {
-            input.push_str(&format!("{i} "));
-        }
-        input.push_str("scn 0 1 0 rg");
-        let mut iter = TypedIter::new(input.as_bytes());
-
-        match iter.next() {
-            Some(TypedInstruction::NonStrokeColorNamed(NonStrokeColorNamed(nums, None))) => {
-                let expected = (344..600).map(Number::from_i32).collect::<Vec<_>>();
-                assert_eq!(nums.as_slice(), expected.as_slice());
-            }
-            other => panic!("unexpected instruction: {other:?}"),
-        }
-        assert!(matches!(iter.next(), Some(TypedInstruction::NonStrokeColorDeviceRgb(_))));
+        assert_eq!(format!("{}", iter.next().unwrap()), "ClosePath");
+        assert_eq!(format!("{}", iter.next().unwrap()), "LineWidth(2)");
+        assert_eq!(
+            format!("{}", iter.next().unwrap()),
+            "StrokeColorDeviceRgb(1 0 0)"
+        );
+        assert_eq!(format!("{}", iter.next().unwrap()), "RectPath(0 0 10 20)");
+        assert_eq!(format!("{}", iter.next().unwrap()), "MoveTo(10 20)");
+        assert_eq!(
+            format!("{}", iter.next().unwrap()),
+            "CubicTo(30 20 60 40 90 80)"
+        );
+        assert_eq!(format!("{}", iter.next().unwrap()), "StrokeColor(0.1 0.2)");
+        assert_eq!(
+            format!("{}", iter.next().unwrap()),
+            "NonStrokeColorNamed(0.0)"
+        );
+        assert_eq!(
+            format!("{}", iter.next().unwrap()),
+            "StrokeColorNamed(1.0 /Spot)"
+        );
+        assert_eq!(format!("{}", iter.next().unwrap()), "ShowText(\"Hello\")");
+        assert_eq!(format!("{}", iter.next().unwrap()), "ShowText([0, 255])");
+        assert_eq!(format!("{}", iter.next().unwrap()), "Fallback(foo)");
         assert!(iter.next().is_none());
     }
 
@@ -224,6 +257,24 @@ f
             other => panic!("unexpected instruction: {other:?}"),
         }
 
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn scn_device_n_pattern() {
+        let input = [b"0.5 ".repeat(32), b"/P0 scn 0 0 m".to_vec()].concat();
+
+        let mut iter = TypedIter::new(&input);
+
+        match iter.next() {
+            Some(TypedInstruction::NonStrokeColorNamed(NonStrokeColorNamed(nums, Some(name)))) => {
+                assert_eq!(nums.as_slice(), &[Number::from_f32(0.5); 32]);
+                assert_eq!(name.as_ref(), b"P0");
+            }
+            other => panic!("unexpected instruction: {other:?}"),
+        }
+
+        assert!(matches!(iter.next(), Some(TypedInstruction::MoveTo(_))));
         assert!(iter.next().is_none());
     }
 

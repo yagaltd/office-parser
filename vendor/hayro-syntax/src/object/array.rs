@@ -6,7 +6,7 @@ use crate::object::{FromBytes, Object, ObjectLike};
 use crate::reader::Reader;
 use crate::reader::{Readable, ReaderContext, ReaderExt, Skippable};
 use alloc::vec::Vec;
-use core::fmt::{Debug, Formatter};
+use core::fmt::{Debug, Display, Formatter};
 use core::marker::PhantomData;
 use smallvec::SmallVec;
 
@@ -62,7 +62,20 @@ impl Debug for Array<'_> {
             debug_list.entry(&i);
         });
 
-        Ok(())
+        debug_list.finish()
+    }
+}
+
+impl Display for Array<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        f.write_str("[")?;
+        for (index, item) in self.raw_iter().enumerate() {
+            if index > 0 {
+                f.write_str(" ")?;
+            }
+            Display::fmt(&item, f)?;
+        }
+        f.write_str("]")
     }
 }
 
@@ -70,23 +83,27 @@ object!(Array<'a>, Array);
 
 impl Skippable for Array<'_> {
     fn skip(r: &mut Reader<'_>, is_content_stream: bool) -> Option<()> {
-        r.forward_tag(b"[")?;
-        r.enter_container()?;
+        Self::skip_with_depth(r, is_content_stream, 0)
+    }
 
-        // PdfCraft patch: leave even when an element's skip fails through `?`.
-        let result = (|| loop {
+    fn skip_with_depth(r: &mut Reader<'_>, is_content_stream: bool, depth: usize) -> Option<()> {
+        if depth >= super::MAX_OBJECT_NESTING_DEPTH {
+            return None;
+        }
+
+        r.forward_tag(b"[")?;
+
+        loop {
             r.skip_white_spaces_and_comments();
 
             if let Some(()) = r.forward_tag(b"]") {
                 return Some(());
             } else if is_content_stream {
-                r.skip::<Object<'_>>(true)?;
+                r.skip_with_depth::<Object<'_>>(true, depth + 1)?;
             } else {
-                r.skip::<MaybeRef<Object<'_>>>(false)?;
+                r.skip_with_depth::<MaybeRef<Object<'_>>>(false, depth + 1)?;
             }
-        })();
-        r.leave_container();
-        result
+        }
     }
 }
 
@@ -128,16 +145,14 @@ impl<'a> Iterator for ArrayIter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         self.reader.skip_white_spaces_and_comments();
 
-        if !self.reader.at_end() {
-            // Objects are already guaranteed to be valid.
-            let item = self
-                .reader
-                .read_with_context::<MaybeRef<Object<'_>>>(&self.ctx)
-                .unwrap();
-            return Some(item);
+        if self.reader.at_end() {
+            return None;
         }
 
-        None
+        // The array was validated by skipping its items, which accepts some items that
+        // can't be read.
+        self.reader
+            .read_with_context::<MaybeRef<Object<'_>>>(&self.ctx)
     }
 }
 
@@ -214,8 +229,6 @@ impl<'a, T: ObjectLike<'a> + Copy + Default, const C: usize> TryFrom<Array<'a>> 
         }
 
         if iter.next().is_some() {
-            warn!("found excess elements in array");
-
             return Err(());
         }
 
@@ -316,9 +329,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::object::Array;
     use crate::object::Object;
     use crate::object::r#ref::{MaybeRef, ObjRef};
+    use crate::object::{Array, FromBytes};
     use crate::reader::Reader;
     use crate::reader::{ReaderContext, ReaderExt};
     use crate::xref::XRef;
@@ -417,5 +430,37 @@ mod tests {
         let res = array_impl(b"[(Hi) /Test]trialing data").unwrap();
         assert!(matches!(res[0], Object::String(_)));
         assert!(matches!(res[1], Object::Name(_)));
+    }
+
+    #[test]
+    fn array_repr() {
+        let array = Array::from_bytes(b"[34]").unwrap();
+
+        assert_eq!(format!("{array:?}"), "[Number(Number(Integer(34)))]");
+    }
+
+    #[test]
+    fn display() {
+        let array = Array::from_bytes(b"[  34 % comment\n /Test  [1   2] ]").unwrap();
+
+        assert_eq!(format!("{array}"), "[34 /Test [1 2]]");
+    }
+
+    #[test]
+    fn array_with_bare_number_sign_name() {
+        let res = array_impl(b"[34 /quotedbl /# 37 /percent]").unwrap();
+        assert_eq!(res.len(), 5);
+        assert!(matches!(&res[2], Object::Name(name) if name.as_ref() == b"#"));
+    }
+
+    #[test]
+    fn array_with_lone_plus() {
+        let array = Array::from_bytes(b"[+ 1]").unwrap();
+        assert_eq!(array.iter::<i32>().collect::<Vec<_>>(), vec![0, 1]);
+    }
+
+    #[test]
+    fn array_with_unreadable_item() {
+        let _ = array_ref_impl(b"[true <<>>stream false]");
     }
 }

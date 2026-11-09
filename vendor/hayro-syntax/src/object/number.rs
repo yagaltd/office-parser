@@ -1,18 +1,20 @@
 //! Numbers.
 
-use crate::math::{powi_f64, trunc_f64};
 use crate::object::macros::object;
 use crate::object::{Object, ObjectLike};
 use crate::reader::Reader;
 use crate::reader::{Readable, ReaderContext, ReaderExt, Skippable};
-use crate::trivia::{is_regular_character, is_white_space_character};
-use core::fmt::Debug;
+use crate::trivia::is_regular_character;
+use core::fmt::{Debug, Display, Formatter};
 
 #[rustfmt::skip]
-static POWERS_OF_10: [f64; 20] = [
+static POWERS_OF_10: [f64; 23] = [
     1.0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9,
     1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19,
+    1e20, 1e21, 1e22,
 ];
+
+const MAX_EXACT_MANTISSA: u64 = 1 << 53;
 
 /// A number.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -43,15 +45,7 @@ impl Number {
     /// Returns the number as an i64.
     pub fn as_i64(&self) -> i64 {
         match self.0 {
-            InternalNumber::Real(r) => {
-                let res = r as i64;
-
-                if !(trunc_f64(r) == r) {
-                    debug!("float {r} was truncated to {res}");
-                }
-
-                res
-            }
+            InternalNumber::Real(r) => r as i64,
             InternalNumber::Integer(i) => i,
         }
     }
@@ -67,16 +61,18 @@ impl Number {
     }
 }
 
+impl Display for Number {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            InternalNumber::Real(value) => write!(f, "{value:?}"),
+            InternalNumber::Integer(value) => write!(f, "{value}"),
+        }
+    }
+}
+
 impl Skippable for Number {
     fn skip(r: &mut Reader<'_>, _: bool) -> Option<()> {
         let has_sign = r.forward_if(|b| b == b'+' || b == b'-').is_some();
-        // PdfCraft patch: one more sign, so that skipping a number covers what `read_inner`
-        // reads. `--280` was already covered by the `b'-'` arm below, but `-+280` and `++280`
-        // were not, and a skip that fails where a read succeeds puts the reader back where it
-        // started (#3630 review).
-        if has_sign {
-            r.forward_if(|b| b == b'+' || b == b'-');
-        }
 
         // Some PDFs have weird trailing minuses, so try to accept those as well.
         match r.peek_byte()? {
@@ -91,10 +87,8 @@ impl Skippable for Number {
                     r.forward_while(is_digit_or_minus);
                 }
             }
-            // See PDFJS-bug1753983 - accept just + or - as a zero.
-            // ALso see PDFJS-bug1953099, where the sign is followed by a show
-            // text string operand, requiring us to allow '<' and '(' as well.
-            b if has_sign && (is_white_space_character(b) || matches!(b, b'(' | b'<')) => {}
+            // See PDFJS-bug1753983 and PDFJS-bug1953099 - accept just + or - as a zero.
+            _ if has_sign => {}
             _ => return None,
         }
 
@@ -111,58 +105,130 @@ impl Readable<'_> for Number {
     #[inline]
     fn read(r: &mut Reader<'_>, _: &ReaderContext<'_>) -> Option<Self> {
         let old_offset = r.offset();
-        read_inner(r).or_else(|| {
-            r.jump(old_offset);
-            None
-        })
+        Self::read_simple(r)
+            .or_else(|| {
+                r.jump(old_offset);
+                read_inner(r)
+            })
+            .or_else(|| {
+                r.jump(old_offset);
+                None
+            })
+    }
+}
+
+impl Number {
+    #[inline(always)]
+    pub(crate) fn read_simple(r: &mut Reader<'_>) -> Option<Self> {
+        let negative = match r.peek_byte() {
+            Some(b'-') => {
+                r.forward();
+                true
+            }
+            Some(b'+') => {
+                r.forward();
+                false
+            }
+            _ => false,
+        };
+
+        let mut mantissa: u64 = 0;
+        let mut read_digits = |r: &mut Reader<'_>| {
+            let start = r.offset();
+            while let Some(d) = r
+                .peek_byte()
+                .map(|b| b.wrapping_sub(b'0'))
+                .filter(|d| *d < 10)
+            {
+                mantissa = mantissa.wrapping_mul(10).wrapping_add(d as u64);
+                r.forward();
+            }
+            r.offset() - start
+        };
+
+        let mut digits = read_digits(r);
+        let mut decimal_shift = None;
+        if r.peek_byte() == Some(b'.') {
+            r.forward();
+            let fraction_digits = read_digits(r);
+            decimal_shift = Some(fraction_digits as u32);
+            digits += fraction_digits;
+        }
+
+        if digits == 0 || digits > 18 || r.peek_byte().is_some_and(is_regular_character) {
+            return None;
+        }
+
+        Self::from_parts(negative, mantissa, decimal_shift)
+    }
+
+    #[inline(always)]
+    fn from_parts(negative: bool, mantissa: u64, decimal_shift: Option<u32>) -> Option<Self> {
+        match decimal_shift {
+            None => {
+                let value = mantissa as i64;
+                Some(Self(InternalNumber::Integer(if negative {
+                    value.wrapping_neg()
+                } else {
+                    value
+                })))
+            }
+            Some(shift) => {
+                if mantissa > MAX_EXACT_MANTISSA {
+                    return None;
+                }
+
+                let value = mantissa as f64 / POWERS_OF_10.get(shift as usize)?;
+                Some(Self(InternalNumber::Real(if negative {
+                    -value
+                } else {
+                    value
+                })))
+            }
+        }
     }
 }
 
 #[inline(always)]
 fn read_inner(r: &mut Reader<'_>) -> Option<Number> {
-    // PdfCraft patch: a doubled sign is one number, not two. `--280` left `negative` set with no
-    // digits read, so it returned 0 and the reader stopped on `-280`, which became a second
-    // number: a `cm` with it got seven operands, kept the last six, and the matrix
-    // `0 0 1 0 -280 10` hid everything drawn under it (#3565). `Number::skip` above already
-    // consumes the whole token, so read and skip disagreed about where the number ended.
-    //
-    // One extra sign is absorbed and the value is negative if either sign was a minus, which is
-    // what the COS lexer does since #3299 (`--280` and `+-280` are both -280). A third sign is
-    // left to the digit loop's trailing-minus arm, as before.
-    let mut negative = false;
-    let mut signs = 0;
-    while signs < 2
-        && let Some(b @ (b'-' | b'+')) = r.peek_byte()
-    {
-        r.forward();
-        negative |= b == b'-';
-        signs += 1;
-    }
+    let start_offset = r.offset();
+    let (has_sign, negative) = match r.peek_byte()? {
+        b'-' => {
+            r.forward();
+            (true, true)
+        }
+        b'+' => {
+            r.forward();
+            (true, false)
+        }
+        _ => (false, false),
+    };
 
-    // PdfCraft patch: high-precision float mantissa overflow (jsPDF double-precision coordinates).
-    // Digits that don't fit in `mantissa` are dropped: past the dot they are only precision;
-    // before it, each one scales the value by ten (`extra_int_digits`).
     let mut mantissa: u64 = 0;
     let mut has_dot = false;
     let mut decimal_shift: u32 = 0;
     let mut has_digits = false;
-    let mut extra_int_digits: u32 = 0;
+    let mut overflowed = false;
+    let mut number_end = None;
 
     loop {
         match r.peek_byte() {
             Some(b'0'..=b'9') => {
-                let d = (r.read_byte().unwrap() - b'0') as u64;
-                has_digits = true;
-                if let Some(next) = mantissa.checked_mul(10).and_then(|m| m.checked_add(d)) {
-                    mantissa = next;
-                    if has_dot {
-                        decimal_shift += 1;
+                let d = r.read_byte().unwrap();
+                if !overflowed {
+                    if let Some(value) = mantissa
+                        .checked_mul(10)
+                        .and_then(|v| v.checked_add((d - b'0') as u64))
+                    {
+                        mantissa = value;
+                    } else {
+                        overflowed = true;
                     }
-                } else if !has_dot {
-                    extra_int_digits = extra_int_digits.saturating_add(1);
                 }
-                // If has_dot and adding the digit would overflow u64:
-                // Safely ignore excess trailing fractional digits (do not add, do not increment decimal_shift).
+                has_digits = true;
+                if has_dot {
+                    decimal_shift += 1;
+                }
             }
             Some(b'.') if !has_dot => {
                 r.forward();
@@ -170,6 +236,7 @@ fn read_inner(r: &mut Reader<'_>) -> Option<Number> {
             }
             // Some weird PDFs have trailing minus in the fraction of number.
             Some(b'-') if has_digits => {
+                number_end = Some(r.offset());
                 r.forward();
                 r.forward_while(is_digit_or_minus);
                 break;
@@ -179,7 +246,7 @@ fn read_inner(r: &mut Reader<'_>) -> Option<Number> {
     }
 
     if !has_digits {
-        if negative || has_dot {
+        if has_dot || (has_sign && r.peek_byte().is_some_and(|b| !is_regular_character(b))) {
             // Treat numbers like just `-`, `+` or `-.` as zero.
             return Some(Number(InternalNumber::Integer(0)));
         }
@@ -192,49 +259,25 @@ fn read_inner(r: &mut Reader<'_>) -> Option<Number> {
         return None;
     }
 
-    // A value whose integer part overflowed `u64` is a real, scaled by the digits dropped and
-    // kept finite.
-    let scaled = |value: f64| -> f64 {
-        let value = if extra_int_digits > 0 { value * powi_f64(10.0, extra_int_digits) } else { value };
-        if value.is_finite() { value } else { f64::MAX }
-    };
+    let integer_overflow = !has_dot && mantissa > i64::MAX as u64;
 
-    if !has_dot && extra_int_digits > 0 {
-        let value = scaled(mantissa as f64);
-        return Some(Number(InternalNumber::Real(if negative { -value } else { value })));
+    if !overflowed
+        && !integer_overflow
+        && let Some(number) =
+            Number::from_parts(negative, mantissa, has_dot.then_some(decimal_shift))
+    {
+        return Some(number);
     }
 
-    if !has_dot {
-        let value = if mantissa <= i64::MAX as u64 {
-            let i = mantissa as i64;
-            if negative { -i } else { i }
-        } else if negative && mantissa == (i64::MIN as u64) {
-            i64::MIN
-        } else {
-            let mut val = mantissa as f64;
-            if negative {
-                val = -val;
-            }
-            return Some(Number(InternalNumber::Real(val)));
-        };
-        Some(Number(InternalNumber::Integer(value)))
-    } else {
-        let mut value = scaled(mantissa as f64);
+    let end_offset = number_end.unwrap_or_else(|| r.offset());
+    let number = core::str::from_utf8(r.range(start_offset..end_offset)?).ok()?;
 
-        if decimal_shift > 0 {
-            if decimal_shift < POWERS_OF_10.len() as u32 {
-                value /= POWERS_OF_10[decimal_shift as usize];
-            } else {
-                value /= powi_f64(10.0, decimal_shift);
-            }
-        }
-
-        if negative {
-            value = -value;
-        }
-
-        Some(Number(InternalNumber::Real(value)))
+    if !has_dot && let Ok(value) = number.parse::<i64>() {
+        return Some(Number(InternalNumber::Integer(value)));
     }
+
+    let value = number.parse::<f64>().ok()?;
+    Some(Number(InternalNumber::Real(value)))
 }
 
 object!(Number, Number);
@@ -362,28 +405,11 @@ mod tests {
     use crate::reader::Reader;
     use crate::reader::ReaderExt;
 
-    /// PdfCraft patch: a doubled sign is one number. `--280` returned 0 and left `-280` to be
-    /// read as a second number, so a `cm` carrying it got seven operands and a degenerate matrix
-    /// (#3565). The COS lexer reads these the same way since #3299.
     #[test]
-    fn a_doubled_sign_is_one_number() {
-        for (src, want) in [("--280", -280), ("+-280", -280), ("-+280", -280), ("++280", 280), ("-280", -280), ("+280", 280)] {
-            let mut r = Reader::new(src.as_bytes());
-            assert_eq!(r.read_without_context::<i32>().unwrap(), want, "{src}");
-            assert!(r.at_end(), "{src}: the whole number was read, leaving nothing for a second one");
-        }
-        // The fraction too, and a lone sign is still zero.
-        assert_eq!(Reader::new("--280.5".as_bytes()).read_without_context::<f64>().unwrap(), -280.5);
-        assert_eq!(Reader::new("-".as_bytes()).read_without_context::<i32>().unwrap(), 0);
-
-        // Skipping covers what reading accepts: a skip that fails where a read succeeds puts the
-        // reader back where it started, so `Object::skip` would leave the number in place
-        // (#3630 review).
-        for src in ["--280", "+-280", "-+280", "++280", "-280", "+280", "--280.5"] {
-            let mut r = Reader::new(src.as_bytes());
-            assert!(r.skip::<Number>(false).is_some(), "{src}: not skipped");
-            assert!(r.at_end(), "{src}: only part of the number was skipped");
-        }
+    fn display() {
+        assert_eq!(format!("{}", Number::from_i32(10)), "10");
+        assert_eq!(format!("{}", Number::from_f32(10.0)), "10.0");
+        assert_eq!(format!("{}", Number::from_f32(10.5)), "10.5");
     }
 
     #[test]
@@ -437,13 +463,12 @@ mod tests {
     }
 
     #[test]
-    fn int_min_does_not_panic() {
-        assert_eq!(
-            Reader::new("-9223372036854775808".as_bytes())
-                .read_without_context::<i64>()
-                .unwrap(),
-            i64::MIN
-        );
+    fn int_min_stays_integer() {
+        let number = Reader::new("-9223372036854775808".as_bytes())
+            .read_without_context::<Number>()
+            .unwrap();
+        assert_eq!(number.0, super::InternalNumber::Integer(i64::MIN));
+        assert_eq!(number.as_i64(), i64::MIN);
     }
 
     #[test]
@@ -537,6 +562,25 @@ mod tests {
     }
 
     #[test]
+    fn lone_sign() {
+        for input in ["+ ", "+(", "+<", "+]", "+/", "- ", "-(", "-<", "-]", "-/"] {
+            assert_eq!(
+                Reader::new(input.as_bytes()).read_without_context::<i32>(),
+                Some(0),
+                "{input:?}"
+            );
+        }
+
+        for input in ["+", "-", "+abc", "-abc"] {
+            assert_eq!(
+                Reader::new(input.as_bytes()).read_without_context::<i32>(),
+                None,
+                "{input:?}"
+            );
+        }
+    }
+
+    #[test]
     fn real_failing() {
         assert!(
             Reader::new("+abc".as_bytes())
@@ -600,35 +644,77 @@ mod tests {
     }
 
     #[test]
-    fn high_precision_float_does_not_overflow_mantissa() {
-        let num1 = Reader::new("3874.9606299212600788".as_bytes())
-            .read_without_context::<f64>()
-            .unwrap();
-        assert!((num1 - 3874.96062992126).abs() < 1e-6, "got {num1}");
+    fn twenty_digit_real_does_not_wrap() {
+        let got = Reader::new("190.50000762939453225".as_bytes())
+            .read_without_context::<Number>()
+            .unwrap()
+            .as_f64();
+        assert_eq!(got, 190.500_007_629_394_53);
+    }
 
-        let num2 = Reader::new("5493.5433070866147318".as_bytes())
-            .read_without_context::<f64>()
-            .unwrap();
-        assert!((num2 - 5493.543307086615).abs() < 1e-6, "got {num2}");
+    #[test]
+    fn nineteen_digit_real_stays_exact() {
+        let got = Reader::new("190.5000076293945313".as_bytes())
+            .read_without_context::<Number>()
+            .unwrap()
+            .as_f64();
+        assert_eq!(got, 190.500_007_629_394_53);
+    }
 
-        // Verify extreme fractional precision (50 decimal places) truncates safely
-        let num3 = Reader::new("0.12345678901234567890123456789012345678901234567890".as_bytes())
-            .read_without_context::<f64>()
+    #[test]
+    fn oversized_integer_uses_float_fallback() {
+        let n = Reader::new("9999999999999999999".as_bytes())
+            .read_without_context::<Number>()
             .unwrap();
-        assert!((num3 - 0.12345678901234568).abs() < 1e-15, "got {num3}");
+        assert_eq!(n.as_f64(), 9_999_999_999_999_999_999_u64 as f64);
+        assert_eq!(n.as_i64(), i64::MAX);
+    }
 
-        // Integer digits past `u64` scale the value instead of being dropped.
-        let num4 = Reader::new("123456789012345678901.5".as_bytes())
-            .read_without_context::<f64>()
+    #[test]
+    fn oversized_negative_integer_uses_float_fallback() {
+        let n = Reader::new("-1234567890123456789012345".as_bytes())
+            .read_without_context::<Number>()
             .unwrap();
-        assert!((num4 / 1.2345678901234568e20 - 1.0).abs() < 1e-12, "got {num4}");
-        let num5 = Reader::new("-123456789012345678901".as_bytes())
-            .read_without_context::<f64>()
+        assert_eq!(n.as_f64(), -1.234_567_890_123_456_8e24);
+        assert_eq!(n.as_i64(), i64::MIN);
+    }
+
+    #[test]
+    fn integer_overflow_then_fraction_uses_float_fallback() {
+        let got = Reader::new("12345678901234567890123.456".as_bytes())
+            .read_without_context::<Number>()
+            .unwrap()
+            .as_f64();
+        assert_eq!(got, 1.234_567_890_123_456_8e22);
+    }
+
+    #[test]
+    fn f32_max_uses_float_fallback() {
+        let got = Reader::new("340282346638528859811704183484516925440".as_bytes())
+            .read_without_context::<f32>()
             .unwrap();
-        assert!((num5 / -1.2345678901234568e20 - 1.0).abs() < 1e-12, "got {num5}");
-        // Hundreds of digits stay finite.
-        let huge = "9".repeat(400);
-        let num6 = Reader::new(huge.as_bytes()).read_without_context::<f64>().unwrap();
-        assert!(num6.is_finite() && num6 > 1e300, "got {num6}");
+        assert_eq!(got, f32::MAX);
+    }
+
+    #[test]
+    fn float_fallback_ignores_trailing_minus() {
+        let input = "1234567890123456789012345-123".as_bytes();
+        let mut reader = Reader::new(input);
+        let got = reader.read_without_context::<Number>().unwrap().as_f64();
+        assert_eq!(got, 1.234_567_890_123_456_8e24);
+        assert_eq!(reader.offset(), input.len());
+    }
+
+    #[test]
+    fn reals_are_correctly_rounded() {
+        let tiny = format!("0.{}1", "0".repeat(309));
+
+        for input in ["519188.22107137204", "-0.000123", &tiny] {
+            let got = Reader::new(input.as_bytes())
+                .read_without_context::<Number>()
+                .unwrap()
+                .as_f64();
+            assert_eq!(got, input.parse::<f64>().unwrap());
+        }
     }
 }

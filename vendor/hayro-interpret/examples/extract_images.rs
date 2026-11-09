@@ -3,19 +3,19 @@
 //!
 //! Note that you must have downloaded the corresponding PDF file for the example to work.
 
-use hayro_interpret::font::Glyph;
+use hayro_interpret::font::GlyphRun;
 use hayro_interpret::{
-    BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, ImageData, InterpreterCache,
-    InterpreterSettings, Paint, PathDrawMode, SoftMask, interpret_page,
+    BlendMode, ClipPath, Context, Device, DrawMode, DrawProps, Image, ImageData, ImageDrawProps,
+    InterpreterCache, InterpreterSettings, SoftMask, interpret_page,
+    kurbo::{Affine, BezPath, Rect},
 };
 use hayro_syntax::Pdf;
 use image::{DynamicImage, ImageBuffer};
-use kurbo::{Affine, BezPath, Rect};
 use std::path::PathBuf;
 
 fn main() {
     let data = std::fs::read(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../hayro-tests/pdfs/custom/image_rgb8.pdf"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/pdfs/custom/image_rgb8.pdf"),
     )
     .unwrap();
 
@@ -54,29 +54,27 @@ impl ImageExtractor {
 /// Implement `Device` for `ImageExtractor`. We can ignore most operations and only
 /// need to implement `draw_rgba_image` and `draw_stencil_image`.
 impl Device<'_> for ImageExtractor {
-    fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
-
-    fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'_>, _: &PathDrawMode) {}
+    fn draw_path(&mut self, _: &BezPath, _: DrawProps<'_>, _: &DrawMode) {}
 
     fn push_clip_path(&mut self, _: &ClipPath) {}
 
-    fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
-
-    fn draw_glyph(
+    fn push_transparency_group(
         &mut self,
-        _: &Glyph<'_>,
-        _: Affine,
-        _: Affine,
-        _: &Paint<'_>,
-        _: &GlyphDrawMode,
+        _: f32,
+        _: Option<SoftMask<'_>>,
+        _: BlendMode,
+        _: bool,
+        _: bool,
     ) {
     }
 
-    fn pop_clip_path(&mut self) {}
+    fn draw_glyph_run(&mut self, _: &GlyphRun<'_, '_>, _: DrawProps<'_>, _: &DrawMode) {}
+
+    fn pop_clip(&mut self) {}
 
     fn pop_transparency_group(&mut self) {}
 
-    fn draw_image(&mut self, image: Image<'_, '_>, _: Affine) {
+    fn draw_image(&mut self, image: Image<'_, '_>, _: ImageDrawProps<'_>) {
         match image {
             Image::Stencil(s) => {
                 s.with_stencil(
@@ -142,6 +140,4 @@ impl Device<'_> for ImageExtractor {
             }
         }
     }
-
-    fn set_blend_mode(&mut self, _: BlendMode) {}
 }

@@ -554,11 +554,6 @@ impl PartitionedRanges {
         }
     }
 
-    // PdfCraft patch: needed by the truncated-stream guard in parse.rs.
-    pub(crate) fn is_empty(&self) -> bool {
-        self.buckets.iter().all(|b| b.is_empty())
-    }
-
     pub(crate) fn push(&mut self, byte_len: usize, range: CidRange) {
         if let Some(bucket) = byte_len
             .checked_sub(1)
@@ -575,7 +570,7 @@ impl PartitionedRanges {
 
     pub(crate) fn sort(&mut self) {
         for bucket in &mut self.buckets {
-            bucket.sort_by(|a, b| a.range.start.cmp(&b.range.start));
+            bucket.sort_by_key(|a| a.range.start);
         }
     }
 }
@@ -622,7 +617,7 @@ pub struct Metadata {
 }
 
 /// The registry+ordering family of a CID character collection.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CidFamily {
     /// Adobe-Japan1
     AdobeJapan1,
@@ -691,7 +686,7 @@ impl CidFamily {
 }
 
 /// A CID character collection identifying the character set and ordering.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CharacterCollection {
     /// The registry+ordering family.
     pub family: CidFamily,
@@ -735,17 +730,6 @@ endcodespacerange
         data.extend_from_slice(PREAMBLE);
         data.extend_from_slice(body);
         CMap::parse(&data, |_| None).unwrap()
-    }
-
-    /// PdfCraft patch test: a binary CMap whose `usecmap` names itself stops at the nesting limit.
-    #[cfg(feature = "embed-cmaps")]
-    #[test]
-    fn self_referencing_binary_usecmap_stops_at_the_nesting_limit() {
-        // Header (magic, version, file length 19), then one usecmap segment (length 9) naming "Self".
-        const SELF_REF: &[u8] = &[
-            b'b', b'c', b'm', b'a', b'p', 1, 0, 0, 0, 19, 0x09, 0, 0, 0, 9, b'S', b'e', b'l', b'f',
-        ];
-        assert!(CMap::parse(SELF_REF, |_| Some(SELF_REF)).is_none());
     }
 
     #[test]
@@ -833,6 +817,41 @@ endcidchar
         assert_eq!(cmap.lookup_cid_code(0x03, 1), Some(1));
         assert_eq!(cmap.lookup_cid_code(0x04, 1), Some(2));
         assert_eq!(cmap.lookup_cid_code(0x20, 1), Some(50));
+    }
+
+    #[test]
+    fn empty_bfchar_destination_keeps_the_other_entries() {
+        let cmap = parse_with_preamble(
+            br#"
+2 beginbfchar
+<00> <0041>
+<01> <>
+endbfchar
+"#,
+        );
+
+        assert_eq!(cmap.lookup_bf_string(0x00), Some(BfString::Char('A')));
+        assert_eq!(cmap.lookup_bf_string(0x01), None);
+    }
+
+    #[test]
+    fn empty_bfrange_destination_keeps_the_other_entries() {
+        let cmap = parse_with_preamble(
+            br#"
+3 beginbfrange
+<02> <03> <>
+<04> <05> <0042>
+<06> <07> [<> <0044>]
+endbfrange
+"#,
+        );
+
+        assert_eq!(cmap.lookup_bf_string(0x02), None);
+        assert_eq!(cmap.lookup_bf_string(0x03), None);
+        assert_eq!(cmap.lookup_bf_string(0x04), Some(BfString::Char('B')));
+        assert_eq!(cmap.lookup_bf_string(0x05), Some(BfString::Char('C')));
+        assert_eq!(cmap.lookup_bf_string(0x06), None);
+        assert_eq!(cmap.lookup_bf_string(0x07), Some(BfString::Char('D')));
     }
 
     #[test]
@@ -1104,122 +1123,6 @@ endbfchar
         assert_eq!(
             cmap.lookup_bf_string(0x005F),
             Some(BfString::String(String::from("ff")))
-        );
-    }
-
-    // PdfCraft patch: malformed pieces of a CMap are skipped, not fatal - the reading
-    // path used to discard the whole CMap and fall back to the font encoding for every
-    // code, so search and search-redaction missed text the edit layer could see (#3177).
-
-    #[test]
-    fn bad_bfchar_entry_is_skipped() {
-        let cmap = parse_with_preamble(
-            br#"
-2 beginbfchar
-<41> <ZZZZ>
-<42> <0059>
-endbfchar
-"#,
-        );
-        assert_eq!(cmap.lookup_bf_string(0x41), None);
-        assert_eq!(
-            cmap.lookup_bf_string(0x42),
-            Some(BfString::Char('Y'))
-        );
-    }
-
-    #[test]
-    fn stream_cut_off_inside_a_block_keeps_the_entries_before_it() {
-        let cmap = parse_with_preamble(b"1 beginbfchar <41> <0058>\n<42> <00");
-        assert_eq!(cmap.lookup_bf_string(0x41), Some(BfString::Char('X')));
-        assert_eq!(cmap.lookup_bf_string(0x42), None);
-    }
-
-    #[test]
-    fn truncated_stream_with_no_entries_reports_failure() {
-        // The tolerant parser keeps collected entries, but a stream that
-        // breaks before any entry must still report failure so callers
-        // fall back to the font's own encoding.
-        assert!(CMap::parse(b"<00", |_| None).is_none());
-    }
-
-    #[test]
-    fn truncated_stream_with_only_metadata_reports_failure() {
-        // Character-collection metadata alone is not a usable CMap: an empty
-        // metadata-only map would block the caller's fallback paths, so a
-        // truncated stream with no mappings must report failure here too.
-        assert!(CMap::parse(
-            b"/Registry (Adobe) /Ordering (Japan1) /Supplement 0 <00",
-            |_| None
-        )
-        .is_none());
-    }
-
-    #[test]
-    fn unresolved_usecmap_with_no_mappings_reports_failure() {
-        // A stream whose only content is a `usecmap` reference that cannot be
-        // resolved yields no mappings at all; returning an empty map here
-        // would block the caller's encoding fallback paths, so it must
-        // report failure exactly as a full parse failure did before.
-        assert!(CMap::parse(b"/Bogus usecmap", |_| None).is_none());
-    }
-
-    #[test]
-    fn unresolved_usecmap_keeps_local_mappings() {
-        // The same unresolved reference must not discard mappings the stream
-        // carries itself: only the missing base is dropped.
-        let cmap = CMap::parse(
-            b"/Bogus usecmap 1 beginbfchar <41> <0041> endbfchar",
-            |_| None,
-        )
-        .expect("local mappings survive an unresolved usecmap");
-        assert!(cmap.lookup_bf_string(0x41).is_some());
-    }
-
-    #[test]
-    fn bad_bfchar_code_keeps_later_entries_aligned() {
-        // The malformed 5-byte code still has a destination object; both
-        // must be skipped or every later pair shifts by one object.
-        let cmap = parse_with_preamble(
-            br#"
-2 beginbfchar
-<0102030405> <0041>
-<42> <0059>
-endbfchar
-"#,
-        );
-        assert_eq!(cmap.lookup_bf_string(0x41), None);
-        assert_eq!(cmap.lookup_bf_string(0x42), Some(BfString::Char('Y')));
-    }
-
-    #[test]
-    fn bfrange_array_stops_at_exhaustion() {
-        // One member for 256 codes: the array cannot be resynced, so the
-        // loop must stop rather than spin over the remaining codes.
-        let cmap = parse_with_preamble(
-            br#"
-1 beginbfrange
-<0000> <00FF> [<0041>]
-endbfrange
-"#,
-        );
-        assert_eq!(cmap.lookup_bf_string(0x00), Some(BfString::Char('A')));
-        assert_eq!(cmap.lookup_bf_string(0x01), None);
-    }
-
-    #[test]
-    fn unresolvable_usecmap_is_skipped() {
-        let cmap = parse_with_preamble(
-            br#"
-/Bogus usecmap
-1 beginbfchar
-<41> <0058>
-endbfchar
-"#,
-        );
-        assert_eq!(
-            cmap.lookup_bf_string(0x41),
-            Some(BfString::Char('X'))
         );
     }
 

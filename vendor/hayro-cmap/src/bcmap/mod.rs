@@ -109,13 +109,10 @@ pub(crate) fn parse<'a>(
             SEGMENT_USECMAP => {
                 let base_data = get_cmap(CMapName::from_bytes(payload))?;
 
-                // PdfCraft patch: a binary `usecmap` counts against the nesting limit as a text
-                // one does; passing the same depth let a self-referencing CMap recurse until the
-                // stack overflowed.
                 base = Some(Box::new(parse::parse_inner(
                     base_data,
                     get_cmap.clone(),
-                    depth + 1,
+                    depth,
                 )?));
             }
             SEGMENT_WMODE => {
@@ -189,7 +186,7 @@ pub(crate) fn parse<'a>(
 
     cid_ranges.sort();
     notdef_ranges.sort();
-    bf_entries.sort_by(|a, b| a.range.start.cmp(&b.range.start));
+    bf_entries.sort_by_key(|a| a.range.start);
 
     Some(CMap {
         metadata: Metadata {

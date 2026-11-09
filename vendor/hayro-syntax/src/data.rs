@@ -1,10 +1,10 @@
 use crate::object::ObjectIdentifier;
 use crate::object::Stream;
 use crate::reader::ReaderContext;
-use crate::sync::HashMap;
+use crate::sync::FxHashMap;
 use crate::sync::{Arc, Mutex, MutexExt};
 use crate::util::SegmentList;
-use alloc::borrow::Cow;
+use crate::xref::ObjectStream;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Formatter};
 
@@ -65,9 +65,8 @@ impl From<Vec<u8>> for PdfData {
 pub(crate) struct Data {
     data: PdfData,
     // 32 segments are more than enough as we can't have more objects than this.
-    decoded: SegmentList<Option<Vec<u8>>, 32>,
-    map: Mutex<HashMap<ObjectIdentifier, usize>>,
-    loading: LoadGate,
+    object_streams: SegmentList<ObjectStream, 32>,
+    map: Mutex<FxHashMap<ObjectIdentifier, usize>>,
 }
 
 impl Debug for Data {
@@ -81,9 +80,8 @@ impl Data {
     pub(crate) fn new(data: PdfData) -> Self {
         Self {
             data,
-            decoded: SegmentList::new(),
-            map: Mutex::new(HashMap::new()),
-            loading: LoadGate::default(),
+            object_streams: SegmentList::new(),
+            map: Mutex::new(FxHashMap::default()),
         }
     }
 
@@ -92,173 +90,29 @@ impl Data {
         &self.data
     }
 
-    /// Get access to the data of a decoded object stream.
-    pub(crate) fn get_with(&self, id: ObjectIdentifier, ctx: &ReaderContext<'_>) -> Option<&[u8]> {
-        // PdfCraft patch: (#307, see vendor/README.md hayro-syntax (10)) register exactly once:
-        // racing misses must not allocate different slots
-        // for the same id (or reuse the resulting hole for another stream).
-        let idx = {
-            let mut map = self.map.get();
-            let next = map.len();
-            *map.entry(id).or_insert(next)
-        };
-        if let Some(decoded) = self.decoded.get(idx) {
-            return decoded.as_deref();
+    /// Get access to a decoded object stream.
+    pub(crate) fn object_stream(
+        &self,
+        id: ObjectIdentifier,
+        ctx: &ReaderContext<'_>,
+    ) -> Option<&ObjectStream> {
+        if let Some(&idx) = self.map.get().get(&id) {
+            return self.object_streams.get(idx);
         }
-        // Only cold initialization is serialized. Nested streams may depend on
-        // one another; the gate rejects cycles without blocking on our own cell.
-        let _loading = self.loading.enter(id)?;
-        self.decoded
-            .get_or_init(idx, || {
-                let stream = ctx.xref().get_with::<Stream<'_>>(id, ctx)?;
-                stream.decoded().ok().map(Cow::into_owned)
-            })?
-            .as_deref()
-    }
-}
 
-/// PdfCraft patch: (#307) one cold initializer at a time prevents cross-thread dependency deadlocks.
-/// The owner may recursively load different streams, up to a fixed depth. No
-/// state mutex is held while parsing or decoding input. no_std is single-threaded
-/// (its Arc/locks are Rc/RefCell), so it needs the same cycle/depth checks only.
-#[derive(Default)]
-struct LoadGate {
-    state: Mutex<LoadState>,
-    #[cfg(feature = "std")]
-    ready: std::sync::Condvar,
-}
+        // Decoding may resolve other objects, so do it without holding the cache lock.
+        let stream = ctx.xref().get_with::<Stream<'_>>(id, ctx)?;
+        let object_stream = ObjectStream::new(&stream)?;
 
-#[derive(Default)]
-struct LoadState {
-    active: Vec<ObjectIdentifier>,
-    #[cfg(feature = "std")]
-    owner: Option<std::thread::ThreadId>,
-    failed: bool,
-}
-
-impl LoadGate {
-    fn enter(&self, id: ObjectIdentifier) -> Option<LoadGuard<'_>> {
-        let mut state = self.state.get();
-        #[cfg(feature = "std")]
-        while !state.failed
-            && state
-                .owner
-                .is_some_and(|owner| owner != std::thread::current().id())
-        {
-            state = self.ready.wait(state).unwrap_or_else(|p| p.into_inner());
+        let mut locked = self.map.get();
+        if let Some(&idx) = locked.get(&id) {
+            return self.object_streams.get(idx);
         }
-        if state.failed || state.active.len() >= 64 || state.active.contains(&id) {
-            return None;
-        }
-        #[cfg(feature = "std")]
-        {
-            state.owner = Some(std::thread::current().id());
-        }
-        state.active.push(id);
-        Some(LoadGuard(self))
-    }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+        let idx = locked.len();
+        let object_stream = self.object_streams.get_or_init(idx, || object_stream);
+        locked.insert(id, idx);
 
-    #[test]
-    fn recursive_loads_reject_cycles_and_limit_depth() {
-        let gate = LoadGate::default();
-        let mut guards = Vec::new();
-        for n in 0..64 {
-            guards.push(
-                gate.enter(ObjectIdentifier::new(n, 0))
-                    .expect("nested distinct stream"),
-            );
-        }
-        assert!(gate.enter(ObjectIdentifier::new(64, 0)).is_none());
-        assert!(gate.enter(ObjectIdentifier::new(0, 0)).is_none());
-        while guards.pop().is_some() {}
-        assert!(gate.enter(ObjectIdentifier::new(0, 0)).is_some());
-    }
-
-    #[cfg(feature = "std")]
-    #[test]
-    fn competing_dependency_chains_cannot_wait_on_each_other() {
-        let gate = Arc::new(LoadGate::default());
-        let barrier = Arc::new(std::sync::Barrier::new(16));
-        let jobs: Vec<_> = (0..16)
-            .map(|n| {
-                let gate = gate.clone();
-                let barrier = barrier.clone();
-                std::thread::spawn(move || {
-                    barrier.wait();
-                    let (a, b) = (
-                        ObjectIdentifier::new(n % 2, 0),
-                        ObjectIdentifier::new(1 - n % 2, 0),
-                    );
-                    let _a = gate.enter(a).unwrap();
-                    let _b = gate.enter(b).unwrap();
-                    assert!(gate.enter(a).is_none());
-                })
-            })
-            .collect();
-        for job in jobs {
-            job.join().unwrap();
-        }
-    }
-
-    #[cfg(feature = "std")]
-    #[test]
-    fn panicking_initializer_wakes_waiters_and_prevents_retries() {
-        use std::{
-            panic::{AssertUnwindSafe, catch_unwind},
-            sync::mpsc,
-            time::Duration,
-        };
-        let gate = Arc::new(LoadGate::default());
-        let (ready_tx, ready_rx) = mpsc::channel();
-        let (done_tx, done_rx) = mpsc::channel();
-        let mut jobs = Vec::new();
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            let _guard = gate.enter(ObjectIdentifier::new(1, 0)).unwrap();
-            for _ in 0..8 {
-                let (gate, ready, done) = (gate.clone(), ready_tx.clone(), done_tx.clone());
-                jobs.push(std::thread::spawn(move || {
-                    ready.send(()).unwrap();
-                    done.send(gate.enter(ObjectIdentifier::new(2, 0)).is_none())
-                        .unwrap();
-                }));
-            }
-            for _ in 0..8 {
-                ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-            }
-            panic!("injected decode failure");
-        }));
-        assert!(result.is_err());
-        for _ in 0..8 {
-            assert!(done_rx.recv_timeout(Duration::from_secs(2)).unwrap());
-        }
-        for job in jobs {
-            job.join().unwrap();
-        }
-        assert!(gate.enter(ObjectIdentifier::new(1, 0)).is_none());
-        assert!(gate.enter(ObjectIdentifier::new(3, 0)).is_none());
-    }
-}
-
-struct LoadGuard<'a>(&'a LoadGate);
-
-impl Drop for LoadGuard<'_> {
-    fn drop(&mut self) {
-        let mut state = self.0.state.get();
-        state.active.pop();
-        #[cfg(feature = "std")]
-        {
-            // OnceLock itself permits a retry after a panic. The parser does not:
-            // wake all waiters and fail closed until the caller replaces the Pdf.
-            state.failed |= std::thread::panicking();
-            if state.active.is_empty() {
-                state.owner = None;
-            }
-            self.0.ready.notify_all();
-        }
+        Some(object_stream)
     }
 }

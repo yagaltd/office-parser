@@ -1,30 +1,93 @@
 //! Encoding shading patterns for easy sampling.
 
 use crate::color::{AlphaColor, ColorComponents, ColorSpace};
+use crate::function::MAX_COMPONENTS;
 use crate::interpret::state::ActiveTransferFunction;
 use crate::pattern::ShadingPattern;
-use crate::shading::{ShadingFunction, ShadingType, Triangle, TriangleVertex};
-use kurbo::{Affine, Point};
+use crate::shading::{ShadingFunction, ShadingType, Triangle};
+use crate::util::x_y_advances;
+use kurbo::{Affine, Point, Rect};
 use rustc_hash::FxHashMap;
-use smallvec::{ToSmallVec, smallvec};
+use std::sync::Arc;
 
 /// A shading pattern that was encoded so it can be sampled.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct EncodedShadingPattern {
     /// The base transform of the shading pattern.
     pub base_transform: Affine,
     pub(crate) color_space: ColorSpace,
     pub(crate) background_color: AlphaColor,
-    pub(crate) shading_type: EncodedShadingType,
+    /// The encoded shading type.
+    pub shading_type: EncodedShadingType,
     pub(crate) opacity: f32,
     pub(crate) transfer_function: Option<ActiveTransferFunction>,
-    /// PdfCraft patch (35): where the shading can paint at all, in device space: for a mesh
-    /// (types 4–7), the pixels its triangles touched when it was encoded (empty when none
-    /// lies in the area); `None` for the shading types that paint everywhere (function-based,
-    /// axial, radial). The renderer samples a texture only there, and skips a mesh that
-    /// touches nothing: painted over the whole canvas, 310 one-triangle meshes on a plan cost
-    /// 310 full tiles per tile, and the watchdog gave the page up.
-    pub extent: Option<kurbo::Rect>,
+}
+
+/// The encoded shading type.
+#[derive(Clone, Debug)]
+pub enum EncodedShadingType {
+    /// Function-based shading.
+    FunctionBased(EncodedFunctionBasedShading),
+    /// Axial or radial shading.
+    RadialAxial(EncodedRadialAxialShading),
+    /// Mesh-based shading sampled into device pixels.
+    Sampled(EncodedSampledShading),
+    /// Empty dummy shading.
+    Dummy(EncodedDummyShading),
+}
+
+/// Encoded function-based shading.
+#[derive(Clone, Debug)]
+pub struct EncodedFunctionBasedShading {
+    pub(crate) domain: Rect,
+    pub(crate) function: ShadingFunction,
+}
+
+/// Encoded axial or radial shading.
+#[derive(Clone, Debug)]
+pub struct EncodedRadialAxialShading {
+    pub(crate) function: ShadingFunction,
+    pub(crate) params: RadialAxialParams,
+    pub(crate) domain: [f32; 2],
+    pub(crate) extend: [bool; 2],
+}
+
+/// Encoded sampled mesh shading.
+#[derive(Clone, Debug)]
+pub struct EncodedSampledShading {
+    pub(crate) samples: Arc<FxHashMap<(u16, u16), ColorComponents>>,
+    pub(crate) function: Option<ShadingFunction>,
+}
+
+/// Encoded dummy shading.
+#[derive(Clone, Debug)]
+pub struct EncodedDummyShading;
+
+/// A shading that was rasterized into a texture.
+pub struct ShadingTexture {
+    /// The straight (non-premultiplied) RGBA8 pixel data, row-major.
+    pub data: Vec<u8>,
+    /// The width of the texture in pixels.
+    pub width: u32,
+    /// The height of the texture in pixels.
+    pub height: u32,
+    /// The transform from texture space to the space of the rasterized
+    /// bounding box.
+    pub transform: Affine,
+    /// Whether any pixel of the texture is not fully opaque.
+    pub has_transparency: bool,
+}
+
+/// Return the texture dimensions [`EncodedShadingPattern::sample_texture`]
+/// uses for the given bounding box and scale factor.
+///
+/// Exposed so that callers can bound the size of the resulting texture
+/// before sampling.
+pub fn texture_dimensions(bbox: Rect, scale: f32) -> (u32, u32) {
+    (
+        (bbox.width() as f32 * scale).max(1.0).ceil() as u32,
+        (bbox.height() as f32 * scale).max(1.0).ceil() as u32,
+    )
 }
 
 impl EncodedShadingPattern {
@@ -45,20 +108,86 @@ impl EncodedShadingPattern {
             })
             .unwrap_or([0.0, 0.0, 0.0, 0.0])
     }
+
+    /// Sample the shading on a pixel grid covering `bbox`, with `scale`
+    /// pixels per unit of `bbox`.
+    ///
+    /// The callback is invoked once per pixel in row-major order with the
+    /// straight (non-premultiplied) RGBA sample, letting callers apply their
+    /// own conversion. Returns the dimensions of the grid (see
+    /// [`texture_dimensions`]) and the transform from grid space to the space
+    /// of `bbox`. No size cap is applied — callers that need to bound the
+    /// texture size should check [`texture_dimensions`] first.
+    pub fn sample_texture(
+        &self,
+        bbox: Rect,
+        scale: f32,
+        mut f: impl FnMut([f32; 4]),
+    ) -> (u32, u32, Affine) {
+        let (width, height) = texture_dimensions(bbox, scale);
+        let inv_scale = 1.0 / scale as f64;
+
+        let (x_advance, y_advance) =
+            x_y_advances(&(Affine::scale(inv_scale) * self.base_transform));
+
+        let mut start_point = self.base_transform
+            * Affine::translate((0.5 * inv_scale, 0.5 * inv_scale))
+            * Point::new(bbox.x0, bbox.y0);
+
+        for _ in 0..height {
+            let mut point = start_point;
+
+            for _ in 0..width {
+                f(self.sample(point));
+
+                point += x_advance;
+            }
+
+            start_point += y_advance;
+        }
+
+        (
+            width,
+            height,
+            Affine::translate((bbox.x0, bbox.y0)) * Affine::scale(inv_scale),
+        )
+    }
+
+    /// Rasterize the shading into a straight (non-premultiplied) RGBA8
+    /// texture covering `bbox`, with `scale` pixels per unit of `bbox`.
+    ///
+    /// See [`sample_texture`](Self::sample_texture) for the grid semantics.
+    pub fn render_texture(&self, bbox: Rect, scale: f32) -> ShadingTexture {
+        let (width, height) = texture_dimensions(bbox, scale);
+        let mut data = Vec::with_capacity(width as usize * height as usize * 4);
+        let mut has_transparency = false;
+
+        let (_, _, transform) = self.sample_texture(bbox, scale, |sample| {
+            let converted = [
+                (sample[0] * 255.0 + 0.5) as u8,
+                (sample[1] * 255.0 + 0.5) as u8,
+                (sample[2] * 255.0 + 0.5) as u8,
+                (sample[3] * 255.0 + 0.5) as u8,
+            ];
+
+            has_transparency |= converted[3] != 255;
+            data.extend_from_slice(&converted);
+        });
+
+        ShadingTexture {
+            data,
+            width,
+            height,
+            transform,
+            has_transparency,
+        }
+    }
 }
 
 impl ShadingPattern {
     /// Encode the shading pattern.
     pub fn encode(&self) -> EncodedShadingPattern {
-        self.encode_within(None)
-    }
-
-    /// PdfCraft patch: encode the shading pattern for drawing inside `area` (device space) only.
-    /// Mesh shadings are sampled pixel by pixel, and only there (see `TriangleSampler`).
-    pub fn encode_within(&self, area: Option<kurbo::Rect>) -> EncodedShadingPattern {
         let base_transform;
-        // PdfCraft patch (35): see `EncodedShadingPattern::extent`.
-        let mut extent = None;
 
         let shading_type = match self.shading.shading_type.as_ref() {
             ShadingType::FunctionBased {
@@ -88,73 +217,51 @@ impl ShadingPattern {
                 function,
             } => {
                 let full_transform = self.matrix;
-                let mut sampler = TriangleSampler::new(area);
-                sampler.sample(triangles, full_transform);
-                extent = Some(sampler.extent());
-                let samples = sampler.map;
+                let samples = sample_triangles(triangles, full_transform);
 
                 base_transform = Affine::IDENTITY;
 
-                EncodedShadingType::Sampled {
-                    samples,
+                EncodedShadingType::Sampled(EncodedSampledShading {
+                    samples: Arc::new(samples),
                     function: function.clone(),
-                }
+                })
             }
             ShadingType::CoonsPatchMesh { patches, function } => {
-                // PdfCraft patch: one patch's triangles at a time (each is 722); collecting all
-                // of them first held 150 KB per patch before any limit applied.
-                let full_transform = self.matrix;
-                let mut sampler = TriangleSampler::new(area);
                 let mut triangles = vec![];
                 for patch in patches {
-                    if !mesh_budget_left() {
-                        break;
-                    }
-                    triangles.clear();
                     patch.to_triangles(&mut triangles);
-                    if !sampler.sample_owned(&mut triangles, full_transform) {
-                        break;
-                    }
                 }
-                extent = Some(sampler.extent());
-                let samples = sampler.map;
+
+                let full_transform = self.matrix;
+                let samples = sample_triangles(&triangles, full_transform);
 
                 base_transform = Affine::IDENTITY;
 
-                EncodedShadingType::Sampled {
-                    samples,
+                EncodedShadingType::Sampled(EncodedSampledShading {
+                    samples: Arc::new(samples),
                     function: function.clone(),
-                }
+                })
             }
             ShadingType::TensorProductPatchMesh { patches, function } => {
-                // PdfCraft patch: one patch's triangles at a time, as for Coons patches.
-                let full_transform = self.matrix;
-                let mut sampler = TriangleSampler::new(area);
                 let mut triangles = vec![];
                 for patch in patches {
-                    if !mesh_budget_left() {
-                        break;
-                    }
-                    triangles.clear();
                     patch.to_triangles(&mut triangles);
-                    if !sampler.sample_owned(&mut triangles, full_transform) {
-                        break;
-                    }
                 }
-                extent = Some(sampler.extent());
-                let samples = sampler.map;
+
+                let full_transform = self.matrix;
+                let samples = sample_triangles(&triangles, full_transform);
 
                 base_transform = Affine::IDENTITY;
 
-                EncodedShadingType::Sampled {
-                    samples,
+                EncodedShadingType::Sampled(EncodedSampledShading {
+                    samples: Arc::new(samples),
                     function: function.clone(),
-                }
+                })
             }
             ShadingType::Dummy => {
                 base_transform = Affine::IDENTITY;
 
-                EncodedShadingType::Dummy
+                EncodedShadingType::Dummy(EncodedDummyShading)
             }
         };
 
@@ -164,7 +271,7 @@ impl ShadingPattern {
             .shading
             .background
             .as_ref()
-            .map(|b| color_space.to_rgba(b, 1.0, false))
+            .map(|b| color_space.to_rgba(b, 1.0))
             .unwrap_or(AlphaColor::TRANSPARENT);
 
         EncodedShadingPattern {
@@ -174,9 +281,6 @@ impl ShadingPattern {
             base_transform,
             opacity: self.opacity,
             transfer_function: self.transfer_function.clone(),
-            // A `/Background` is painted wherever the triangles aren't (pattern fills), so such
-            // a mesh has no extent to confine it to.
-            extent: if self.shading.background.is_some() { None } else { extent },
         }
     }
 }
@@ -215,223 +319,71 @@ fn encode_axial_shading(
     };
 
     (
-        EncodedShadingType::RadialAxial {
+        EncodedShadingType::RadialAxial(EncodedRadialAxialShading {
             function: function.clone(),
             params,
             domain,
             extend,
-        },
+        }),
         initial_transform,
     )
 }
 
-/// PdfCraft patch: pixel visits one mesh shading may make, per pixel of the area it is drawn in
-/// and per triangle. Sampling walks each triangle's bounding box (rounded out to whole pixels),
-/// so triangles far off the page (a fuzzed patch decoded onto ±40000) asked for 65536 × 65536
-/// samples, and many triangles covering the same pixels repeat the work. A triangle's box is
-/// about twice its area, and a sub-pixel triangle's box is at most 2 × 2 pixels.
-const MESH_VISITS_PER_PIXEL: u64 = 8;
-const MESH_VISITS_PER_TRIANGLE: u64 = 4;
+fn sample_triangles(
+    triangles: &[Triangle],
+    transform: Affine,
+) -> FxHashMap<(u16, u16), ColorComponents> {
+    let mut map = FxHashMap::default();
 
-/// PdfCraft patch: the visits allowed when no area is given (the public `encode`).
-const MESH_VISITS_WITHOUT_AREA: u64 = 1 << 24;
+    for t in triangles {
+        let t = {
+            let p0 = transform * t.p0.point;
+            let p1 = transform * t.p1.point;
+            let p2 = transform * t.p2.point;
 
-/// PdfCraft patch: mesh triangles one page may sample in all, across every shading painted on
-/// it. A shading is triangulated again each time it is painted (2^16 patches are 47 million
-/// triangles, several seconds), so painting one a thousand times took hours. A 200 × 200
-/// gradient mesh is 29 million triangles.
-const MAX_PAGE_MESH_TRIANGLES: u64 = 1 << 25;
+            let mut v0 = t.p0.clone();
+            v0.point = p0;
+            let mut v1 = t.p1.clone();
+            v1.point = p1;
+            let mut v2 = t.p2.clone();
+            v2.point = p2;
 
-std::thread_local! {
-    static MESH_TRIANGLES_LEFT: core::cell::Cell<u64> =
-        const { core::cell::Cell::new(MAX_PAGE_MESH_TRIANGLES) };
-}
-
-/// PdfCraft patch: a page starts with a fresh mesh triangle budget (called from
-/// `Context::new`).
-pub(crate) fn reset_mesh_budget() {
-    MESH_TRIANGLES_LEFT.with(|n| n.set(MAX_PAGE_MESH_TRIANGLES));
-}
-
-/// PdfCraft patch: `false` once this page's mesh triangle budget is spent.
-fn mesh_budget_left() -> bool {
-    MESH_TRIANGLES_LEFT.with(|n| n.get() > 0)
-}
-
-/// PdfCraft patch: samples mesh triangles into a map with one entry per pixel, only inside
-/// `area` (device space), within the visit budget above.
-struct TriangleSampler {
-    map: FxHashMap<(u16, u16), ColorComponents>,
-    area: kurbo::Rect,
-    visits_left: u64,
-    /// PdfCraft patch (35): the pixels sampled so far, as `(x0, y0, x1, y1)` inclusive.
-    touched: Option<(u16, u16, u16, u16)>,
-}
-
-impl TriangleSampler {
-    fn new(area: Option<kurbo::Rect>) -> Self {
-        let visits_left = match area {
-            Some(a) => (a.width().max(0.0).ceil() as u64)
-                .saturating_mul(a.height().max(0.0).ceil() as u64)
-                .saturating_mul(MESH_VISITS_PER_PIXEL),
-            None => MESH_VISITS_WITHOUT_AREA,
+            Triangle::new(v0, v1, v2)
         };
-        Self {
-            map: FxHashMap::default(),
-            area: area.unwrap_or(kurbo::Rect::new(0.0, 0.0, 65536.0, 65536.0)),
-            visits_left,
-            touched: None,
-        }
-    }
 
-    /// PdfCraft patch (35): the device-space rectangle covering every pixel sampled so far
-    /// (whole pixels), or an empty rectangle when no triangle touched the area.
-    fn extent(&self) -> kurbo::Rect {
-        match self.touched {
-            Some((x0, y0, x1, y1)) => kurbo::Rect::new(
-                f64::from(x0),
-                f64::from(y0),
-                f64::from(x1) + 1.0,
-                f64::from(y1) + 1.0,
-            ),
-            None => kurbo::Rect::ZERO,
-        }
-    }
-
-    /// Sample `triangles`; `false` once a budget is spent (the rest is left unsampled).
-    fn sample(&mut self, triangles: &[Triangle], transform: Affine) -> bool {
-        if !self.take_page_budget(triangles.len()) {
-            return false;
-        }
-        triangles.iter().all(|t| {
-            self.sample_one(transformed(
-                t.p0.clone(),
-                t.p1.clone(),
-                t.p2.clone(),
-                transform,
-            ))
-        })
-    }
-
-    /// PdfCraft patch (33): [`Self::sample`] for triangles made for this sampling alone (a
-    /// patch's), moving their vertices instead of copying each one's colours (`triangles` is
-    /// left empty).
-    fn sample_owned(&mut self, triangles: &mut Vec<Triangle>, transform: Affine) -> bool {
-        if !self.take_page_budget(triangles.len()) {
-            return false;
-        }
-        triangles
-            .drain(..)
-            .all(|t| self.sample_one(transformed(t.p0, t.p1, t.p2, transform)))
-    }
-
-    /// Take `count` triangles from the page's budget; `false` (and none left) when it is short.
-    fn take_page_budget(&mut self, count: usize) -> bool {
-        let page_left = MESH_TRIANGLES_LEFT.with(core::cell::Cell::get);
-        if page_left < count as u64 {
-            MESH_TRIANGLES_LEFT.with(|n| n.set(0));
-            warn!("page mesh triangle budget exceeded; the rest of the shading is not drawn");
-            return false;
-        }
-        MESH_TRIANGLES_LEFT.with(|n| n.set(page_left - count as u64));
-        true
-    }
-
-    /// Sample one triangle in device space; `false` once the visit budget is spent.
-    fn sample_one(&mut self, t: Triangle) -> bool {
-        // Only the part of the triangle inside `area`; only such triangles add visits.
-        let bbox = t.bounding_box().intersect(self.area);
-        if bbox.width() <= 0.0 || bbox.height() <= 0.0 {
-            return true;
-        }
-        self.visits_left = self.visits_left.saturating_add(MESH_VISITS_PER_TRIANGLE);
+        let bbox = t.bounding_box();
 
         for y in (bbox.y0.floor() as u16)..(bbox.y1.ceil() as u16) {
             for x in (bbox.x0.floor() as u16)..(bbox.x1.ceil() as u16) {
-                if self.visits_left == 0 {
-                    warn!("mesh shading visit budget exceeded; the rest is not drawn");
-                    return false;
-                }
-                self.visits_left -= 1;
-                let corner = Point::new(x as f64, y as f64);
-                let sampled = if t.contains_point(corner) {
-                    self.map.insert((x, y), t.interpolate(corner));
-                    true
-                } else if t.covers(Point::new(x as f64 + 0.5, y as f64 + 0.5)) {
-                    // PdfCraft patch (36): a pixel whose corner no triangle holds strictly (it
-                    // lies on an edge two triangles share, or on the mesh's side) still belongs
-                    // to the triangle that covers its centre, edges included. Testing only the
-                    // corner left a white seam along every shared edge. Such a pixel takes the
-                    // colour at its corner, as every other pixel does (where MuPDF's colours
-                    // agree), unless a triangle that holds the corner gives it one.
-                    self.map.entry((x, y)).or_insert_with(|| t.interpolate(corner));
-                    true
-                } else {
-                    false
-                };
-                if sampled {
-                    self.touched = Some(match self.touched {
-                        Some((x0, y0, x1, y1)) => (x0.min(x), y0.min(y), x1.max(x), y1.max(y)),
-                        None => (x, y, x, y),
-                    });
+                let point = Point::new(x as f64, y as f64);
+                if t.contains_point(point) {
+                    map.insert((x, y), t.interpolate(point));
                 }
             }
         }
-        true
     }
-}
 
-/// The triangle `v0`, `v1`, `v2` with its points mapped through `transform` (its colours as
-/// they are).
-fn transformed(
-    mut v0: TriangleVertex,
-    mut v1: TriangleVertex,
-    mut v2: TriangleVertex,
-    transform: Affine,
-) -> Triangle {
-    v0.point = transform * v0.point;
-    v1.point = transform * v1.point;
-    v2.point = transform * v2.point;
-    Triangle::new(v0, v1, v2)
+    map
 }
 
 fn encode_function_shading(domain: &[f32; 4], function: &ShadingFunction) -> EncodedShadingType {
-    let domain = kurbo::Rect::new(
+    let domain = Rect::new(
         domain[0] as f64,
         domain[2] as f64,
         domain[1] as f64,
         domain[3] as f64,
     );
 
-    EncodedShadingType::FunctionBased {
+    EncodedShadingType::FunctionBased(EncodedFunctionBasedShading {
         domain,
         function: function.clone(),
-    }
+    })
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum RadialAxialParams {
     Axial,
     Radial { p1: Point, r: Point },
-}
-
-#[derive(Debug)]
-pub(crate) enum EncodedShadingType {
-    FunctionBased {
-        domain: kurbo::Rect,
-        function: ShadingFunction,
-    },
-    RadialAxial {
-        function: ShadingFunction,
-        params: RadialAxialParams,
-        domain: [f32; 2],
-        extend: [bool; 2],
-    },
-    Sampled {
-        samples: FxHashMap<(u16, u16), ColorComponents>,
-        function: Option<ShadingFunction>,
-    },
-    Dummy,
 }
 
 impl EncodedShadingType {
@@ -442,21 +394,23 @@ impl EncodedShadingType {
         color_space: &ColorSpace,
     ) -> Option<AlphaColor> {
         match self {
-            Self::FunctionBased { domain, function } => {
+            Self::FunctionBased(EncodedFunctionBasedShading { domain, function }) => {
                 if !domain.contains(pos) {
                     Some(bg_color)
                 } else {
-                    let out = function.eval(&smallvec![pos.x as f32, pos.y as f32])?;
+                    let mut out = [0.0; MAX_COMPONENTS];
+                    let out = &mut out[..function.num_outputs()];
+                    function.eval(&[pos.x as f32, pos.y as f32], out)?;
                     // TODO: Clamp out-of-range values.
-                    Some(color_space.to_rgba(&out, 1.0, false))
+                    Some(color_space.to_rgba(out, 1.0))
                 }
             }
-            Self::RadialAxial {
+            Self::RadialAxial(EncodedRadialAxialShading {
                 function,
                 params,
                 domain,
                 extend,
-            } => {
+            }) => {
                 let (t0, t1) = (domain[0], domain[1]);
 
                 let mut t = match params {
@@ -486,25 +440,29 @@ impl EncodedShadingType {
 
                 let t = t0 + (t1 - t0) * t;
 
-                let val = function.eval(&smallvec![t])?;
+                let mut val = [0.0; MAX_COMPONENTS];
+                let val = &mut val[..function.num_outputs()];
+                function.eval(&[t], val)?;
 
-                Some(color_space.to_rgba(&val, 1.0, false))
+                Some(color_space.to_rgba(val, 1.0))
             }
-            Self::Sampled { samples, function } => {
+            Self::Sampled(EncodedSampledShading { samples, function }) => {
                 let sample_point = (pos.x as u16, pos.y as u16);
 
                 if let Some(color) = samples.get(&sample_point) {
                     if let Some(function) = function {
-                        let val = function.eval(&color.to_smallvec())?;
-                        Some(color_space.to_rgba(&val, 1.0, false))
+                        let mut val = [0.0; MAX_COMPONENTS];
+                        let val = &mut val[..function.num_outputs()];
+                        function.eval(color, val)?;
+                        Some(color_space.to_rgba(val, 1.0))
                     } else {
-                        Some(color_space.to_rgba(color, 1.0, false))
+                        Some(color_space.to_rgba(color, 1.0))
                     }
                 } else {
                     Some(bg_color)
                 }
             }
-            Self::Dummy => Some(AlphaColor::TRANSPARENT),
+            Self::Dummy(_) => Some(AlphaColor::TRANSPARENT),
         }
     }
 }

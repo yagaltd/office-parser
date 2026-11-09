@@ -4,9 +4,9 @@
 
 use crate::CacheKey;
 use crate::cache::Cache;
-use crate::color::{ColorComponents, ColorSpace, DefaultColorSpaces, DeviceFamily};
-use crate::function::{Function, StitchingBounds, Values, interpolate};
-use crate::util::{Float32Ext, PointExt, RectExt, hash128};
+use crate::color::{ColorComponents, ColorSpace};
+use crate::function::{Function, interpolate};
+use crate::util::{Float32Ext, PointExt, RectExt};
 use hayro_syntax::bit_reader::BitReader;
 use hayro_syntax::object::Array;
 use hayro_syntax::object::Dict;
@@ -26,32 +26,41 @@ use std::sync::Arc;
 pub enum ShadingFunction {
     /// A single function, which should be used to evaluate all components of the shading.
     Single(Function),
-    /// Multiple functions, one for each color component.
-    Multiple(SmallVec<[Function; 4]>),
+    /// Multiple 1-in, 1-out functions, one for each color component.
+    Multiple(Vec<Function>),
 }
 
 impl ShadingFunction {
-    /// Evaluate the shading function.
-    pub fn eval(&self, input: &Values) -> Option<Values> {
+    /// The number of output values of the shading function.
+    pub fn num_outputs(&self) -> usize {
         match self {
-            Self::Single(s) => s.eval(input.clone()),
-            Self::Multiple(m) => {
-                // 1-in, 1-out function for each color component.
+            Self::Single(function) => function.num_outputs(),
+            Self::Multiple(functions) => functions.len(),
+        }
+    }
 
-                let mut out = smallvec![];
-
-                for func in m {
-                    out.push(*func.eval(input.clone())?.first()?);
+    /// Evaluate the shading function for a single sample.
+    ///
+    /// `output` needs to have space for [`Self::num_outputs`] values.
+    pub fn eval(&self, input: &[f32], output: &mut [f32]) -> Option<()> {
+        match self {
+            Self::Single(function) => function.eval(input, output),
+            Self::Multiple(functions) => {
+                if functions.len() != output.len() {
+                    return None;
                 }
 
-                Some(out)
+                for (function, output) in functions.iter().zip(output.iter_mut()) {
+                    function.eval(input, std::slice::from_mut(output))?;
+                }
+
+                Some(())
             }
         }
     }
 
-    /// PdfCraft patch (backport of hayro 0.8): stitching breakpoints of all component functions.
-    pub(crate) fn stitching_bounds(&self) -> StitchingBounds {
-        let mut bounds = StitchingBounds::new();
+    pub(crate) fn stitching_bounds(&self) -> Vec<f32> {
+        let mut bounds = vec![];
 
         match self {
             Self::Single(function) => bounds.extend(function.stitching_bounds()),
@@ -136,28 +145,18 @@ pub struct Shading {
     pub clip_path: Option<BezPath>,
     /// The background color of the shading.
     pub background: Option<SmallVec<[f32; 4]>>,
+    pub(crate) mesh_bounds: Option<kurbo::Rect>,
 }
 
 impl Shading {
-    /// PdfCraft patch (38): a shading in a device space is drawn in its default colour space
-    /// from `defaults`, the resources it is painted with (ISO 32000-2 §8.6.5.6), and keyed by
-    /// it as an image is.
-    pub(crate) fn new(
-        dict: &Dict<'_>,
-        stream: Option<&Stream<'_>>,
-        cache: &Cache,
-        defaults: &DefaultColorSpaces<'_, '_>,
-    ) -> Option<Self> {
+    pub(crate) fn new(dict: &Dict<'_>, stream: Option<&Stream<'_>>, cache: &Cache) -> Option<Self> {
+        let cache_key = stream.map_or_else(|| dict.cache_key(), |s| s.cache_key());
+
         let shading_num = dict.get::<u8>(SHADING_TYPE)?;
 
-        let color_space_obj = dict.get::<Object<'_>>(COLORSPACE)?;
-        let default =
-            DeviceFamily::of_object(&color_space_obj).and_then(|family| defaults.get(family));
-        let (color_space, cache_key) = match default {
-            Some((space, key)) => (space, hash128(&(dict.cache_key(), key))),
-            None => (ColorSpace::new(color_space_obj, cache)?, dict.cache_key()),
-        };
+        let color_space = ColorSpace::new(dict.get(COLORSPACE)?, cache)?;
 
+        let mut mesh_bounds = None;
         let shading_type = match shading_num {
             1 => {
                 let domain = dict.get::<[f32; 4]>(DOMAIN).unwrap_or([0.0, 1.0, 0.0, 1.0]);
@@ -206,7 +205,7 @@ impl Shading {
             }
             4 => {
                 let stream = stream?;
-                let stream_data = stream.decoded().ok()?;
+                let stream_data = stream.decoded_data().ok()?;
                 let bp_coord = dict.get::<u8>(BITS_PER_COORDINATE)?;
                 let bp_comp = dict.get::<u8>(BITS_PER_COMPONENT)?;
                 let bpf = dict.get::<u8>(BITS_PER_FLAG)?;
@@ -216,7 +215,7 @@ impl Shading {
                     .iter::<f32>()
                     .collect::<Vec<_>>();
 
-                let triangles = read_free_form_triangles(
+                let (triangles, bounds) = read_free_form_triangles(
                     stream_data.as_ref(),
                     bpf,
                     bp_coord,
@@ -224,6 +223,7 @@ impl Shading {
                     function.is_some(),
                     &decode,
                 )?;
+                mesh_bounds = bounds;
 
                 ShadingType::TriangleMesh {
                     triangles,
@@ -232,7 +232,7 @@ impl Shading {
             }
             5 => {
                 let stream = stream?;
-                let stream_data = stream.decoded().ok()?;
+                let stream_data = stream.decoded_data().ok()?;
                 let bp_coord = dict.get::<u8>(BITS_PER_COORDINATE)?;
                 let bp_comp = dict.get::<u8>(BITS_PER_COMPONENT)?;
                 let function = read_function(dict, &color_space);
@@ -242,7 +242,7 @@ impl Shading {
                     .collect::<Vec<_>>();
                 let vertices_per_row = dict.get::<u32>(VERTICES_PER_ROW)?;
 
-                let triangles = read_lattice_triangles(
+                let (triangles, bounds) = read_lattice_triangles(
                     stream_data.as_ref(),
                     bp_coord,
                     bp_comp,
@@ -250,6 +250,7 @@ impl Shading {
                     vertices_per_row,
                     &decode,
                 )?;
+                mesh_bounds = bounds;
 
                 ShadingType::TriangleMesh {
                     triangles,
@@ -258,7 +259,7 @@ impl Shading {
             }
             6 => {
                 let stream = stream?;
-                let stream_data = stream.decoded().ok()?;
+                let stream_data = stream.decoded_data().ok()?;
                 let bp_coord = dict.get::<u8>(BITS_PER_COORDINATE)?;
                 let bp_comp = dict.get::<u8>(BITS_PER_COMPONENT)?;
                 let bpf = dict.get::<u8>(BITS_PER_FLAG)?;
@@ -268,7 +269,7 @@ impl Shading {
                     .iter::<f32>()
                     .collect::<Vec<_>>();
 
-                let patches = read_coons_patch_mesh(
+                let (patches, bounds) = read_coons_patch_mesh(
                     stream_data.as_ref(),
                     bpf,
                     bp_coord,
@@ -276,12 +277,13 @@ impl Shading {
                     function.is_some(),
                     &decode,
                 )?;
+                mesh_bounds = bounds;
 
                 ShadingType::CoonsPatchMesh { patches, function }
             }
             7 => {
                 let stream = stream?;
-                let stream_data = stream.decoded().ok()?;
+                let stream_data = stream.decoded_data().ok()?;
                 let bp_coord = dict.get::<u8>(BITS_PER_COORDINATE)?;
                 let bp_comp = dict.get::<u8>(BITS_PER_COMPONENT)?;
                 let bpf = dict.get::<u8>(BITS_PER_FLAG)?;
@@ -291,7 +293,7 @@ impl Shading {
                     .iter::<f32>()
                     .collect::<Vec<_>>();
 
-                let patches = read_tensor_product_patch_mesh(
+                let (patches, bounds) = read_tensor_product_patch_mesh(
                     stream_data.as_ref(),
                     bpf,
                     bp_coord,
@@ -299,6 +301,7 @@ impl Shading {
                     function.is_some(),
                     &decode,
                 )?;
+                mesh_bounds = bounds;
 
                 ShadingType::TensorProductPatchMesh { patches, function }
             }
@@ -316,6 +319,7 @@ impl Shading {
             color_space,
             clip_path: bbox.map(|r| r.to_path(0.1)),
             background,
+            mesh_bounds,
         })
     }
 }
@@ -385,24 +389,6 @@ impl Triangle {
     /// Return whether the point is contained within the triangle.
     pub fn contains_point(&self, pos: Point) -> bool {
         self.kurbo_tri.winding(pos) != 0
-    }
-
-    /// PdfCraft patch (36): whether the point is inside the triangle or on one of its edges.
-    /// Two triangles of a mesh share an edge; a sample on it belongs to both (their colours
-    /// agree there), where `contains_point` can give it to neither and leave a seam. A
-    /// degenerate triangle covers nothing.
-    pub fn covers(&self, pos: Point) -> bool {
-        // Relative to the barycentric coordinates' scale (1), well above f64 rounding.
-        const EDGE: f64 = 1e-9;
-        let (a, b, c) = (self.p0.point, self.p1.point, self.p2.point);
-        let (v0, v1, v2) = (b - a, c - a, pos - a);
-        let denom = self.d00 * self.d11 - self.d01 * self.d01;
-        let (d20, d21) = (v2.dot(v0), v2.dot(v1));
-        let v = (self.d11 * d20 - self.d01 * d21) / denom;
-        let w = (self.d00 * d21 - self.d01 * d20) / denom;
-        // A degenerate triangle divides by zero: NaN fails every comparison, and infinite
-        // coordinates can't sum to at most one.
-        v >= -EDGE && w >= -EDGE && v + w <= 1.0 + EDGE
     }
 
     /// Return the bounding box of the triangle.
@@ -477,6 +463,24 @@ impl CoonsPatch {
             + v * ((1.0 - u) * c2.eval(0.0).to_vec2() + u * c2.eval(1.0).to_vec2());
 
         (sc + sd - sb).to_point()
+    }
+
+    fn bounds(&self) -> kurbo::Rect {
+        let cp = &self.control_points;
+        let c1 = CubicBez::new(cp[0], cp[11], cp[10], cp[9]);
+        let c2 = CubicBez::new(cp[3], cp[4], cp[5], cp[6]);
+        let d1 = CubicBez::new(cp[0], cp[1], cp[2], cp[3]);
+        let d2 = CubicBez::new(cp[9], cp[8], cp[7], cp[6]);
+        let c = c1.bounding_box().union(c2.bounding_box());
+        let d = d1.bounding_box().union(d2.bounding_box());
+        let corners = points_bbox(&[cp[0], cp[3], cp[6], cp[9]]);
+
+        kurbo::Rect::new(
+            c.x0 + d.x0 - corners.x1,
+            c.y0 + d.y0 - corners.y1,
+            c.x1 + d.x1 - corners.x0,
+            c.y1 + d.y1 - corners.y0,
+        )
     }
 
     /// Approximate the patch by triangles.
@@ -593,13 +597,6 @@ impl TensorProductPatch {
     }
 }
 
-/// PdfCraft patch: the most triangles a free-form or lattice mesh, and the most patches a
-/// patch mesh, may hold. Each was read without limit: a patch can be 19 bits, a triangle 216
-/// bytes in memory, so a small stream made gigabytes. Real meshes are far smaller (a 200 × 200
-/// gradient mesh is 40 thousand patches).
-const MAX_MESH_TRIANGLES: usize = 1 << 20;
-const MAX_MESH_PATCHES: usize = 1 << 16;
-
 fn read_free_form_triangles(
     data: &[u8],
     bpf: u8,
@@ -607,15 +604,21 @@ fn read_free_form_triangles(
     bp_comp: u8,
     has_function: bool,
     decode: &[f32],
-) -> Option<Vec<Triangle>> {
+) -> Option<(Vec<Triangle>, Option<kurbo::Rect>)> {
     let mut triangles = vec![];
+    let mut bounds = None;
 
     let ([x_min, x_max, y_min, y_max], decode) = split_decode(decode)?;
     let mut reader = BitReader::new(data);
     let helpers = InterpolationHelpers::new(bp_cord, bp_comp, x_min, x_max, y_min, y_max);
 
-    let read_single = |reader: &mut BitReader<'_>| -> Option<TriangleVertex> {
-        helpers.read_triangle_vertex(reader, bpf, has_function, decode)
+    let mut read_single = |reader: &mut BitReader<'_>| -> Option<TriangleVertex> {
+        let vertex = helpers.read_triangle_vertex(reader, bpf, has_function, decode)?;
+        extend_bounds(
+            &mut bounds,
+            kurbo::Rect::from_points(vertex.point, vertex.point),
+        );
+        Some(vertex)
     };
 
     let mut a = None;
@@ -649,15 +652,10 @@ fn read_free_form_triangles(
             continue;
         }
 
-        // PdfCraft patch: see `MAX_MESH_TRIANGLES`.
-        if triangles.len() >= MAX_MESH_TRIANGLES {
-            warn!("free-form mesh has over {MAX_MESH_TRIANGLES} triangles; the rest is not drawn");
-            break;
-        }
         triangles.push(Triangle::new(a.clone()?, b.clone()?, c.clone()?));
     }
 
-    Some(triangles)
+    Some((triangles, bounds))
 }
 
 /// Common interpolation functions used across different shading types.
@@ -717,7 +715,7 @@ impl InterpolationHelpers {
             ));
         } else {
             let num_components = decode.len() / 2;
-            for (_, decode) in (0..num_components).zip(decode.chunks_exact(2)) {
+            for (_, decode) in (0..num_components).zip(decode.as_chunks::<2>().0) {
                 colors.push(self.interpolate_comp(
                     reader.read(self.bp_comp)?,
                     decode[0],
@@ -761,10 +759,6 @@ where
 {
     const GRID_SIZE: usize = 20;
     let mut grid = vec![vec![Point::ZERO; GRID_SIZE]; GRID_SIZE];
-    // PdfCraft patch (33): each grid point's colours, interpolated once. Every cell below
-    // interpolated its four corners itself, so an inner point was interpolated four times
-    // (1,444 interpolations a patch instead of 400) for the same values.
-    let mut colors = vec![vec![ColorComponents::new(); GRID_SIZE]; GRID_SIZE];
 
     // Create grid by mapping unit square coordinates.
     for i in 0..GRID_SIZE {
@@ -775,7 +769,6 @@ where
             // Map unit square coordinate to patch coordinate.
             let unit_point = Point::new(u, v);
             grid[i][j] = map_coordinate(unit_point);
-            colors[i][j] = interpolate(unit_point);
         }
     }
 
@@ -786,26 +779,32 @@ where
             let p01 = grid[i][j + 1];
             let p11 = grid[i + 1][j + 1];
 
-            // Create triangle vertices with their grid points' colors.
+            // Calculate unit square coordinates for color interpolation.
+            let u0 = i as f64 / (GRID_SIZE - 1) as f64;
+            let u1 = (i + 1) as f64 / (GRID_SIZE - 1) as f64;
+            let v0 = j as f64 / (GRID_SIZE - 1) as f64;
+            let v1 = (j + 1) as f64 / (GRID_SIZE - 1) as f64;
+
+            // Create triangle vertices with interpolated colors.
             let v00 = TriangleVertex {
                 flag: 0,
                 point: p00,
-                colors: colors[i][j].clone(),
+                colors: interpolate(Point::new(u0, v0)),
             };
             let v10 = TriangleVertex {
                 flag: 0,
                 point: p10,
-                colors: colors[i + 1][j].clone(),
+                colors: interpolate(Point::new(u1, v0)),
             };
             let v01 = TriangleVertex {
                 flag: 0,
                 point: p01,
-                colors: colors[i][j + 1].clone(),
+                colors: interpolate(Point::new(u0, v1)),
             };
             let v11 = TriangleVertex {
                 flag: 0,
                 point: p11,
-                colors: colors[i + 1][j + 1].clone(),
+                colors: interpolate(Point::new(u1, v1)),
             };
 
             let inflate_point = |p: Point, mid: Point| -> Point {
@@ -824,9 +823,16 @@ where
                 triangle
             };
 
-            // PdfCraft patch (33): the second triangle takes the vertices the first copied.
-            buffer.push(inflate(Triangle::new(v00, v10.clone(), v01.clone())));
-            buffer.push(inflate(Triangle::new(v10, v11, v01)));
+            buffer.push(inflate(Triangle::new(
+                v00.clone(),
+                v10.clone(),
+                v01.clone(),
+            )));
+            buffer.push(inflate(Triangle::new(
+                v10.clone(),
+                v11.clone(),
+                v01.clone(),
+            )));
         }
     }
 }
@@ -838,26 +844,19 @@ fn read_lattice_triangles(
     has_function: bool,
     vertices_per_row: u32,
     decode: &[f32],
-) -> Option<Vec<Triangle>> {
-    // PdfCraft patch: ISO 32000-2 8.7.4.5.6 requires at least two vertices per row; with none,
-    // the loop below pushed empty rows for ever, and one row of 4294967295 read the whole stream
-    // into memory before any cap (see `MAX_MESH_TRIANGLES`).
-    if !(2..=(MAX_MESH_TRIANGLES / 2) as u32).contains(&vertices_per_row) {
-        warn!("lattice-form mesh with {vertices_per_row} vertices per row");
-
-        return None;
-    }
-
+) -> Option<(Vec<Triangle>, Option<kurbo::Rect>)> {
     let mut lattices = vec![];
+    let mut bounds = None;
 
     let ([x_min, x_max, y_min, y_max], decode) = split_decode(decode)?;
     let mut reader = BitReader::new(data);
     let helpers = InterpolationHelpers::new(bp_cord, bp_comp, x_min, x_max, y_min, y_max);
 
-    let read_single = |reader: &mut BitReader<'_>| -> Option<TriangleVertex> {
+    let mut read_single = |reader: &mut BitReader<'_>| -> Option<TriangleVertex> {
         let point = helpers.read_point(reader)?;
         let colors = helpers.read_colors(reader, has_function, decode)?;
         reader.align();
+        extend_bounds(&mut bounds, kurbo::Rect::from_points(point, point));
 
         Some(TriangleVertex {
             flag: 0,
@@ -867,11 +866,6 @@ fn read_lattice_triangles(
     };
 
     'outer: loop {
-        // PdfCraft patch: see `MAX_MESH_TRIANGLES` (two triangles per vertex at most).
-        if lattices.len().saturating_mul(vertices_per_row as usize) >= MAX_MESH_TRIANGLES / 2 {
-            warn!("lattice-form mesh has too many vertices; the rest is not drawn");
-            break;
-        }
         let mut single_row = vec![];
 
         for _ in 0..vertices_per_row {
@@ -903,7 +897,7 @@ fn read_lattice_triangles(
         }
     }
 
-    Some(triangles)
+    Some((triangles, bounds))
 }
 
 fn read_coons_patch_mesh(
@@ -913,8 +907,9 @@ fn read_coons_patch_mesh(
     bp_comp: u8,
     has_function: bool,
     decode: &[f32],
-) -> Option<Vec<CoonsPatch>> {
-    read_patch_mesh(
+) -> Option<(Vec<CoonsPatch>, Option<kurbo::Rect>)> {
+    let mut bounds = None;
+    let patches = read_patch_mesh(
         data,
         bpf,
         bp_coord,
@@ -925,12 +920,16 @@ fn read_coons_patch_mesh(
         |control_points, colors| {
             let mut coons_points = [Point::ZERO; 12];
             coons_points.copy_from_slice(&control_points[0..12]);
-            CoonsPatch {
+            let patch = CoonsPatch {
                 control_points: coons_points,
                 colors,
-            }
+            };
+            extend_bounds(&mut bounds, patch.bounds());
+            patch
         },
-    )
+    )?;
+
+    Some((patches, bounds))
 }
 
 /// Generic patch mesh reading function that works for both Coons and Tensor Product patches.
@@ -943,10 +942,10 @@ fn read_patch_mesh<P, F>(
     has_function: bool,
     decode: &[f32],
     control_points_count: usize,
-    create_patch: F,
+    mut create_patch: F,
 ) -> Option<Vec<P>>
 where
-    F: Fn([Point; 16], [ColorComponents; 4]) -> P,
+    F: FnMut([Point; 16], [ColorComponents; 4]) -> P,
 {
     let ([x_min, x_max, y_min, y_max], decode) = split_decode(decode)?;
     let mut reader = BitReader::new(data);
@@ -961,11 +960,6 @@ where
     let mut patches = vec![];
 
     while let Some(flag) = reader.read(bpf) {
-        // PdfCraft patch: see `MAX_MESH_PATCHES`.
-        if patches.len() >= MAX_MESH_PATCHES {
-            warn!("patch mesh has over {MAX_MESH_PATCHES} patches; the rest is not drawn");
-            break;
-        }
         let mut control_points = vec![Point::ZERO; 16]; // Always allocate 16, use subset as needed.
         let mut colors = [smallvec![], smallvec![], smallvec![], smallvec![]];
 
@@ -1064,8 +1058,9 @@ fn read_tensor_product_patch_mesh(
     bp_comp: u8,
     has_function: bool,
     decode: &[f32],
-) -> Option<Vec<TensorProductPatch>> {
-    read_patch_mesh(
+) -> Option<(Vec<TensorProductPatch>, Option<kurbo::Rect>)> {
+    let mut bounds = None;
+    let patches = read_patch_mesh(
         data,
         bpf,
         bp_coord,
@@ -1073,24 +1068,30 @@ fn read_tensor_product_patch_mesh(
         has_function,
         decode,
         16,
-        |control_points, colors| TensorProductPatch {
-            control_points,
-            colors,
+        |control_points, colors| {
+            extend_bounds(&mut bounds, points_bbox(&control_points));
+            TensorProductPatch {
+                control_points,
+                colors,
+            }
         },
-    )
+    )?;
+
+    Some((patches, bounds))
 }
 
 fn read_function(dict: &Dict<'_>, color_space: &ColorSpace) -> Option<ShadingFunction> {
     if let Some(arr) = dict.get::<Array<'_>>(FUNCTION) {
-        let arr: Option<SmallVec<_>> = arr
+        let arr = arr
             .iter::<Object<'_>>()
             .map(|o| Function::new(&o))
-            .collect();
-        let arr = arr?;
+            .collect::<Option<Vec<_>>>()?;
 
         if arr.len() != color_space.num_components() as usize {
-            warn!("function array of shading has wrong size");
+            return None;
+        }
 
+        if arr.iter().any(|f| f.num_outputs() != 1) {
             return None;
         }
 
@@ -1100,4 +1101,16 @@ fn read_function(dict: &Dict<'_>, color_space: &ColorSpace) -> Option<ShadingFun
     } else {
         None
     }
+}
+
+fn extend_bounds(bounds: &mut Option<kurbo::Rect>, rect: kurbo::Rect) {
+    *bounds = Some(bounds.map_or(rect, |bounds| bounds.union(rect)));
+}
+
+fn points_bbox(points: &[Point]) -> kurbo::Rect {
+    points
+        .iter()
+        .fold(kurbo::Rect::from_points(points[0], points[0]), |bbox, p| {
+            bbox.union_pt(*p)
+        })
 }

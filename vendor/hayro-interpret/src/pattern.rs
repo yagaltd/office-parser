@@ -1,21 +1,21 @@
 //! PDF patterns.
 
 use crate::cache::Cache;
-use crate::color::{Color, ColorSpace, DefaultColorSpaces};
+use crate::color::{Color, ColorSpace};
 use crate::context::{Context, InterpreterCache};
 use crate::device::Device;
-use crate::font::Glyph;
+use crate::font::GlyphRun;
 use crate::interpret::state::{ActiveTransferFunction, State};
 use crate::shading::Shading;
-use crate::soft_mask::SoftMask;
 use crate::util::{Float32Ext, RectExt, hash128};
-use crate::{BlendMode, CacheKey, ClipPath, GlyphDrawMode, Image, PathDrawMode};
+use crate::x_object::soft_mask::SoftMask;
+use crate::{BlendMode, CacheKey, ClipPath, DrawMode, DrawProps, Image, ImageDrawProps};
 use crate::{FillRule, InterpreterSettings, Paint, interpret};
 use hayro_syntax::content::TypedIter;
 use hayro_syntax::object::Dict;
 use hayro_syntax::object::Stream;
 use hayro_syntax::object::dict::keys::{
-    BBOX, EXT_G_STATE, MATRIX, PAINT_TYPE, RESOURCES, SHADING, X_STEP, Y_STEP,
+    BBOX, MATRIX, PAINT_TYPE, RESOURCES, SHADING, X_STEP, Y_STEP,
 };
 use hayro_syntax::object::{Object, dict_or_stream};
 use hayro_syntax::page::Resources;
@@ -34,23 +34,15 @@ pub enum Pattern<'a> {
 }
 
 impl<'a> Pattern<'a> {
-    /// PdfCraft patch (38): `defaults` are those of the resources the pattern is selected with,
-    /// for a shading pattern's shading in a device space.
-    pub(crate) fn new(
-        object: Object<'a>,
-        ctx: &Context<'a>,
-        resources: &Resources<'a>,
-        defaults: &DefaultColorSpaces<'_, '_>,
-    ) -> Option<Self> {
+    pub(crate) fn new(object: Object<'a>, ctx: &Context<'a>) -> Option<Self> {
         match object {
             Object::Dict(dict) => Some(Self::Shading(ShadingPattern::new(
                 &dict,
                 &ctx.interpreter_cache.object_cache,
-                defaults,
             )?)),
-            Object::Stream(stream) => Some(Self::Tiling(Box::new(TilingPattern::new(
-                stream, ctx, resources,
-            )?))),
+            Object::Stream(stream) => {
+                Some(Self::Tiling(Box::new(TilingPattern::new(stream, ctx)?)))
+            }
             _ => None,
         }
     }
@@ -66,25 +58,10 @@ impl<'a> Pattern<'a> {
         }
     }
 
-    /// PdfCraft patch (46): the pattern without the fill or stroke opacity it captured when it was
-    /// set (`scn`). A stencil mask's transparency group applies the opacity in force when the mask
-    /// is drawn, so a pattern paint carrying it too drew the mask at the opacity squared (#2975).
-    pub(crate) fn without_opacity(mut self) -> Self {
-        match &mut self {
-            Self::Shading(p) => p.opacity = 1.0,
-            Self::Tiling(p) => {
-                p.non_stroking_paint = p.non_stroking_paint.clone().opaque();
-                p.stroke_paint = p.stroke_paint.clone().opaque();
-            }
-        }
-        self
-    }
-
-    /// PdfCraft patch: set the alpha of the graphics state in effect when the pattern is painted. The `gs` operator
-    /// can come after `scn`/`SCN`, so the alpha must not be captured when the pattern is selected.
-    pub(crate) fn set_alpha(&mut self, alpha: f32) {
-        if let Self::Shading(p) = self {
-            p.opacity = alpha;
+    pub(crate) fn set_opacity(&mut self, opacity: f32) {
+        match self {
+            Self::Shading(p) => p.opacity = opacity,
+            Self::Tiling(p) => p.opacity = opacity,
         }
     }
 
@@ -118,24 +95,16 @@ pub struct ShadingPattern {
 }
 
 impl ShadingPattern {
-    pub(crate) fn new(
-        dict: &Dict<'_>,
-        cache: &Cache,
-        defaults: &DefaultColorSpaces<'_, '_>,
-    ) -> Option<Self> {
+    pub(crate) fn new(dict: &Dict<'_>, cache: &Cache) -> Option<Self> {
         let shading = dict.get::<Object<'_>>(SHADING).and_then(|o| {
             let (dict, stream) = dict_or_stream(&o)?;
 
-            Shading::new(dict, stream, cache, defaults)
+            Shading::new(dict, stream, cache)
         })?;
         let matrix = dict
             .get::<[f64; 6]>(MATRIX)
             .map(Affine::new)
             .unwrap_or_default();
-
-        if dict.contains_key(EXT_G_STATE) {
-            warn!("shading patterns with ext_g_state are not supported yet");
-        }
 
         Some(Self {
             shading: Arc::new(shading),
@@ -148,7 +117,11 @@ impl ShadingPattern {
 
 impl CacheKey for ShadingPattern {
     fn cache_key(&self) -> u128 {
-        hash128(&(self.shading.cache_key(), self.matrix.cache_key()))
+        hash128(&(
+            self.shading.cache_key(),
+            self.matrix.cache_key(),
+            self.opacity.to_bits(),
+        ))
     }
 }
 
@@ -165,11 +138,13 @@ pub struct TilingPattern<'a> {
     pub y_step: f32,
     /// A transformation to apply prior to rendering.
     pub matrix: Affine,
+    /// An additional opacity to apply to the pattern cell as a whole.
+    pub opacity: f32,
     stream: Stream<'a>,
     is_color: bool,
     pub(crate) stroke_paint: Color,
     pub(crate) non_stroking_paint: Color,
-    pub(crate) parent_resources: Resources<'a>,
+    resources: Resources<'a>,
     pub(crate) cache: InterpreterCache<'a>,
     pub(crate) settings: InterpreterSettings,
     pub(crate) xref: &'a XRef,
@@ -183,11 +158,7 @@ impl Debug for TilingPattern<'_> {
 }
 
 impl<'a> TilingPattern<'a> {
-    pub(crate) fn new(
-        stream: Stream<'a>,
-        ctx: &Context<'a>,
-        resources: &Resources<'a>,
-    ) -> Option<Self> {
+    pub(crate) fn new(stream: Stream<'a>, ctx: &Context<'a>) -> Option<Self> {
         let cache_key = stream.cache_key();
         let dict = stream.dict();
 
@@ -205,31 +176,23 @@ impl<'a> TilingPattern<'a> {
             .map(Affine::new)
             .unwrap_or_default();
 
-        let state = ctx.get().clone();
         let ctx_bbox = ctx.bbox();
 
-        let fill_cs = state
-            .graphics_state
-            .none_stroke_cs
+        let fill = ctx.fill_paint();
+        let fill_cs = fill
+            .color_space
             .pattern_cs()
             .unwrap_or(ColorSpace::device_gray());
-        let stroke_cs = state
-            .graphics_state
-            .stroke_cs
-            .pattern_cs()
-            .unwrap_or(ColorSpace::device_gray());
+        let non_stroking_paint = Color::new(fill_cs, fill.color.clone(), 1.0);
 
-        let non_stroking_paint = Color::new(
-            fill_cs,
-            state.graphics_state.non_stroke_color.clone(),
-            state.graphics_state.non_stroke_alpha,
-        );
-        let stroke_paint = Color::new(
-            stroke_cs,
-            state.graphics_state.stroke_color.clone(),
-            state.graphics_state.stroke_alpha,
-        );
+        let stroke = ctx.stroke_paint();
+        let stroke_cs = stroke
+            .color_space
+            .pattern_cs()
+            .unwrap_or(ColorSpace::device_gray());
+        let stroke_paint = Color::new(stroke_cs, stroke.color.clone(), 1.0);
         let nesting_depth = ctx.nesting_depth() + 1;
+        let resources = Resources::new(dict.get(RESOURCES).unwrap_or_default());
 
         Some(Self {
             cache_key,
@@ -237,13 +200,14 @@ impl<'a> TilingPattern<'a> {
             x_step,
             y_step,
             matrix,
+            opacity: 1.0,
             ctx_bbox,
             is_color,
             stream,
             stroke_paint,
             non_stroking_paint,
             settings: ctx.settings.clone(),
-            parent_resources: resources.clone(),
+            resources,
             cache: ctx.interpreter_cache.clone(),
             xref: ctx.xref,
             nesting_depth,
@@ -257,13 +221,6 @@ impl<'a> TilingPattern<'a> {
         initial_transform: Affine,
         is_stroke: bool,
     ) -> Option<()> {
-        // PdfCraft patch: a tiling pattern can paint itself (directly, or through resources it
-        // inherits when its own are missing), which recursed until the stack overflowed. Bound
-        // the nesting like XObjects do, tighter because every level rasterizes a tile.
-        if self.nesting_depth > crate::context::MAX_PAINT_NESTING || !crate::context::take_nested_paint(self.nesting_depth) {
-            warn!("tiling pattern nesting depth or paint budget exceeded");
-            return None;
-        }
         let state = State::new(initial_transform);
 
         let mut context = Context::new_with(
@@ -277,12 +234,7 @@ impl<'a> TilingPattern<'a> {
             self.nesting_depth,
         );
 
-        // PdfCraft patch: see `context::MAX_PAGE_CONTENT`.
-        let decoded = crate::context::decode_content(&self.stream)?;
-        let resources = Resources::from_parent(
-            self.stream.dict().get(RESOURCES).unwrap_or_default(),
-            self.parent_resources.clone(),
-        );
+        let decoded = self.stream.decoded_data().ok()?;
         let iter = TypedIter::new(decoded.as_ref());
 
         let clip_path = ClipPath {
@@ -292,7 +244,7 @@ impl<'a> TilingPattern<'a> {
         device.push_clip_path(&clip_path);
 
         if self.is_color {
-            interpret(iter, &resources, &mut context, device);
+            interpret(iter, &self.resources, &mut context, device);
         } else {
             let paint = if !is_stroke {
                 Paint::Color(self.non_stroking_paint.clone())
@@ -301,10 +253,10 @@ impl<'a> TilingPattern<'a> {
             };
 
             let mut device = StencilPatternDevice::new(device, paint.clone());
-            interpret(iter, &resources, &mut context, &mut device);
+            interpret(iter, &self.resources, &mut context, &mut device);
         }
 
-        device.pop_clip_path();
+        device.pop_clip();
 
         Some(())
     }
@@ -312,7 +264,20 @@ impl<'a> TilingPattern<'a> {
 
 impl CacheKey for TilingPattern<'_> {
     fn cache_key(&self) -> u128 {
-        self.cache_key
+        // An uncolored pattern is drawn in the color it is painted with.
+        let colors = (!self.is_color).then(|| {
+            (
+                self.non_stroking_paint.to_rgba().to_rgba8(),
+                self.stroke_paint.to_rgba().to_rgba8(),
+            )
+        });
+
+        hash128(&(
+            self.cache_key,
+            self.matrix.cache_key(),
+            self.opacity.to_bits(),
+            colors,
+        ))
     }
 }
 
@@ -332,49 +297,47 @@ impl<'a, 'b, T: Device<'a>> StencilPatternDevice<'a, 'b, T> {
 
 // Only filling, stroking of paths and stencil masks are allowed.
 impl<'a, T: Device<'a>> Device<'a> for StencilPatternDevice<'a, '_, T> {
-    fn draw_path(
-        &mut self,
-        path: &BezPath,
-        transform: Affine,
-        _: &Paint<'_>,
-        draw_mode: &PathDrawMode,
-    ) {
-        self.inner
-            .draw_path(path, transform, &self.paint, draw_mode);
+    fn draw_path(&mut self, path: &BezPath, props: DrawProps<'a>, draw_mode: &DrawMode) {
+        let props = DrawProps {
+            paint: self.paint.clone(),
+            ..props
+        };
+        self.inner.draw_path(path, props, draw_mode);
     }
-
-    fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
 
     fn push_clip_path(&mut self, clip_path: &ClipPath) {
         self.inner.push_clip_path(clip_path);
     }
 
-    fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
-
-    fn draw_glyph(
+    fn push_transparency_group(
         &mut self,
-        g: &Glyph<'a>,
-        transform: Affine,
-        glyph_transform: Affine,
-        p: &Paint<'a>,
-        draw_mode: &GlyphDrawMode,
+        _: f32,
+        _: Option<SoftMask<'_>>,
+        _: BlendMode,
+        _: bool,
+        _: bool,
     ) {
-        self.inner
-            .draw_glyph(g, transform, glyph_transform, p, draw_mode);
     }
 
-    fn draw_image(&mut self, image: Image<'a, '_>, transform: Affine) {
+    fn draw_glyph_run(
+        &mut self,
+        glyph_run: &GlyphRun<'_, 'a>,
+        props: DrawProps<'a>,
+        draw_mode: &DrawMode,
+    ) {
+        self.inner.draw_glyph_run(glyph_run, props, draw_mode);
+    }
+
+    fn draw_image(&mut self, image: Image<'a, '_>, props: ImageDrawProps<'a>) {
         if let Image::Stencil(mut s) = image {
             s.paint = self.paint.clone();
-            self.inner.draw_image(Image::Stencil(s), transform);
+            self.inner.draw_image(Image::Stencil(s), props);
         }
     }
 
-    fn pop_clip_path(&mut self) {
-        self.inner.pop_clip_path();
+    fn pop_clip(&mut self) {
+        self.inner.pop_clip();
     }
 
     fn pop_transparency_group(&mut self) {}
-
-    fn set_blend_mode(&mut self, _: BlendMode) {}
 }

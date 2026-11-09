@@ -1,81 +1,47 @@
-use crate::function::{Clamper, Values};
-use hayro_syntax::content;
-use hayro_syntax::object::Number;
+use hayro_postscript::{Procedure, Scanner, Token};
 use hayro_syntax::object::Stream;
-use hayro_syntax::reader::Reader;
-use hayro_syntax::reader::{ReaderContext, ReaderExt};
-use smallvec::SmallVec;
 use std::array;
 use std::ops::Rem;
 
-// PdfCraft patch: calculator color/transfer functions normally contain a handful of operators.
-// Bound every parsed branch and every executed operator as well as recursive procedure depth.
-// A shared budget is never reset when entering an `if` or `ifelse` branch.
-const MAX_CALCULATOR_DEPTH: usize = 64;
-const MAX_CALCULATOR_OPS: usize = 10_000;
-
-struct CalculatorBudget {
-    remaining: usize,
-}
-
-impl CalculatorBudget {
-    fn new() -> Self {
-        Self {
-            remaining: MAX_CALCULATOR_OPS,
-        }
-    }
-
-    fn take(&mut self) -> Option<()> {
-        if self.remaining == 0 {
-            warn!("PDF calculator function exceeds the limit of {MAX_CALCULATOR_OPS} operators");
-            return None;
-        }
-        self.remaining -= 1;
-        Some(())
-    }
-}
+const MAX_PROCEDURE_DEPTH: usize = 256;
 
 /// A type 4 function (postscript function).
 #[derive(Debug)]
 pub(crate) struct Type4 {
     program: Vec<PostScriptOp>,
-    clamper: Clamper,
 }
 
 impl Type4 {
     /// Create a new type 4 function.
     pub(crate) fn new(stream: &Stream<'_>) -> Option<Self> {
-        let dict = stream.dict().clone();
-        let clamper = Clamper::new(&dict)?;
-
         Some(Self {
-            clamper,
-            program: parse_procedure(&stream.decoded().ok()?)?,
+            program: parse_procedure(&stream.decoded_data().ok()?)?,
         })
     }
 
     /// Evaluate the function with the given input.
-    pub(crate) fn eval(&self, mut input: Values) -> Option<Values> {
-        self.clamper.clamp_input(&mut input);
+    pub(crate) fn eval(&self, input: &[f32], output: &mut [f32]) -> Option<()> {
+        let stack = self.run(input)?;
+        let items = stack.items();
+        let values = &items[items.len().checked_sub(output.len())?..];
 
-        let mut arg_stack = InterpreterStack::new();
-
-        for input in input {
-            arg_stack.push(Argument::Float(input))?;
+        for (output, value) in output.iter_mut().zip(values) {
+            *output = value.as_f32();
         }
 
-        eval_inner(
-            &self.program,
-            &mut arg_stack,
-            &mut CalculatorBudget::new(),
-            0,
-        )?;
+        Some(())
+    }
 
-        let mut out: SmallVec<_> = arg_stack.items().iter().map(|i| i.as_f32()).collect();
+    fn run(&self, input: &[f32]) -> Option<InterpreterStack> {
+        let mut stack = InterpreterStack::new();
 
-        self.clamper.clamp_output(&mut out);
+        for input in input {
+            stack.push(Argument::Float(*input))?;
+        }
 
-        Some(out)
+        eval_inner(&self.program, &mut stack)?;
+
+        Some(stack)
     }
 }
 
@@ -139,8 +105,6 @@ impl<T: Default, const C: usize> ArgumentsStack<T, C> {
     #[inline]
     fn push(&mut self, n: T) -> Option<()> {
         if self.len == C {
-            error!("overflowed post script argument stack");
-
             None
         } else {
             self.stack[self.len] = n;
@@ -171,8 +135,6 @@ impl<T: Default, const C: usize> ArgumentsStack<T, C> {
     #[inline]
     fn pop(&mut self) -> Option<T> {
         if self.is_empty() {
-            error!("underflowed post script argument stack");
-
             None
         } else {
             self.len -= 1;
@@ -191,29 +153,20 @@ impl<T: Default, const C: usize> ArgumentsStack<T, C> {
     }
 }
 
-type InterpreterStack = ArgumentsStack<Argument, 64>;
+type InterpreterStack = ArgumentsStack<Argument, 100>;
 type ParseStack = ArgumentsStack<Vec<PostScriptOp>, 2>;
 
-fn eval_inner(
-    procedure: &[PostScriptOp],
-    arg_stack: &mut InterpreterStack,
-    budget: &mut CalculatorBudget,
-    depth: usize,
-) -> Option<()> {
-    if depth >= MAX_CALCULATOR_DEPTH {
-        warn!("PDF calculator nesting exceeds the limit of {MAX_CALCULATOR_DEPTH} levels");
-        return None;
-    }
+fn eval_inner(procedure: &[PostScriptOp], arg_stack: &mut InterpreterStack) -> Option<()> {
     macro_rules! zero {
         ($eval:expr) => {
-            arg_stack.push($eval)?;
+            arg_stack.push($eval);
         };
     }
 
     macro_rules! one_f {
         ($eval:expr) => {
             let n1 = arg_stack.pop()?;
-            arg_stack.push(Argument::Float($eval(n1.as_f32())))?;
+            arg_stack.push(Argument::Float($eval(n1.as_f32())));
         };
     }
 
@@ -221,7 +174,7 @@ fn eval_inner(
         ($eval:expr) => {
             let n2 = arg_stack.pop()?;
             let n1 = arg_stack.pop()?;
-            arg_stack.push(Argument::Float($eval(n1.as_f32(), n2.as_f32())))?;
+            arg_stack.push(Argument::Float($eval(n1.as_f32(), n2.as_f32())));
         };
     }
 
@@ -241,7 +194,7 @@ fn eval_inner(
                 (Argument::Bool(f1), Argument::Bool(f2)) => Argument::Bool($eval_b(f1, f2)),
             };
 
-            arg_stack.push(res)?;
+            arg_stack.push(res);
         };
     }
 
@@ -250,9 +203,8 @@ fn eval_inner(
     }
 
     for op in procedure {
-        budget.take()?;
         match op {
-            PostScriptOp::Number(n) => arg_stack.push(Argument::Float(n.as_f64() as f32))?,
+            PostScriptOp::Number(n) => arg_stack.push(Argument::Float(*n))?,
             PostScriptOp::Abs => {
                 one_f!(|n: f32| n.abs());
             }
@@ -291,14 +243,12 @@ fn eval_inner(
                 one_f!(|n: f32| n.floor());
             }
             PostScriptOp::Idiv => {
-                // PdfCraft patch: zero divisors and MIN / -1 have no integer result.
-                let n2 = arg_stack.pop()?.as_f32() as i32;
-                let n1 = arg_stack.pop()?.as_f32() as i32;
-                let quotient = n1.checked_div(n2).or_else(|| {
-                    warn!("PDF calculator idiv has a zero divisor or an out-of-range result");
-                    None
-                })?;
-                arg_stack.push(Argument::Float(quotient as f32))?;
+                two_f!(|n1: f32, n2: f32| {
+                    let n1 = n1 as i32;
+                    let n2 = n2 as i32;
+
+                    (n1 / n2) as f32
+                });
             }
             PostScriptOp::Ln => {
                 one_f!(|n: f32| n.ln());
@@ -335,17 +285,14 @@ fn eval_inner(
             }
             PostScriptOp::Bitshift => {
                 two_f!(|n1: f32, n2: f32| {
-                    // PdfCraft patch: PLRM, bitshift, discards shifted-out bits and fills
-                    // with zeroes. All bits are gone at >= 32; use the signed word's bit
-                    // pattern for negative operands, and never negate MIN for right shifts.
-                    let num = n1 as i32 as u32;
+                    let num = n1 as u32;
                     let shift = n2 as i32;
-                    let bits = if shift >= 0 {
-                        num.checked_shl(shift as u32).unwrap_or(0)
+
+                    if shift >= 0 {
+                        (num << shift) as f32
                     } else {
-                        num.checked_shr(shift.unsigned_abs()).unwrap_or(0)
-                    };
-                    bits as i32 as f32
+                        (num >> -shift) as f32
+                    }
                 });
             }
             PostScriptOp::Eq => {
@@ -377,7 +324,7 @@ fn eval_inner(
                     Argument::Bool(b) => Argument::Bool(!b),
                 };
 
-                arg_stack.push(res)?;
+                arg_stack.push(res);
             }
             PostScriptOp::Or => {
                 four!(
@@ -398,40 +345,40 @@ fn eval_inner(
                 let cond = arg_stack.pop()?.as_bool();
 
                 if cond {
-                    eval_inner(p, arg_stack, budget, depth + 1)?;
+                    eval_inner(p, arg_stack)?;
                 }
             }
             PostScriptOp::IfElse(p1, p2) => {
                 let cond = arg_stack.pop()?.as_bool();
 
                 if cond {
-                    eval_inner(p1, arg_stack, budget, depth + 1)?;
+                    eval_inner(p1, arg_stack)?;
                 } else {
-                    eval_inner(p2, arg_stack, budget, depth + 1)?;
+                    eval_inner(p2, arg_stack)?;
                 }
             }
             PostScriptOp::Copy => {
                 let n = arg_stack.pop()?.as_f32() as u32 as usize;
                 let start = arg_stack.len().checked_sub(n)?;
                 for i in start..arg_stack.len() {
-                    arg_stack.push(*arg_stack.at(i)?)?;
+                    arg_stack.push(*arg_stack.at(i)?);
                 }
             }
             PostScriptOp::Dup => {
-                arg_stack.push(*arg_stack.last()?)?;
+                arg_stack.push(*arg_stack.last()?);
             }
             PostScriptOp::Exch => {
                 let n2 = arg_stack.pop()?;
                 let n1 = arg_stack.pop()?;
 
-                arg_stack.push(n2)?;
-                arg_stack.push(n1)?;
+                arg_stack.push(n2);
+                arg_stack.push(n1);
             }
             PostScriptOp::Index => {
                 let n = arg_stack.pop()?.as_f32() as u32 as usize;
-                let n = arg_stack.len().checked_sub(n.checked_add(1)?)?;
+                let n = arg_stack.len().checked_sub(n + 1)?;
 
-                arg_stack.push(*arg_stack.at(n)?)?;
+                arg_stack.push(*arg_stack.at(n)?);
             }
             PostScriptOp::Pop => {
                 arg_stack.pop()?;
@@ -451,7 +398,7 @@ fn eval_inner(
                     let shift = j as usize % target.len();
                     target.rotate_right(shift);
                 } else {
-                    let shift = j.unsigned_abs() as usize % target.len();
+                    let shift = (-j) as usize % target.len();
                     target.rotate_left(shift);
                 }
             }
@@ -462,39 +409,27 @@ fn eval_inner(
 }
 
 fn parse_procedure(data: &[u8]) -> Option<Vec<PostScriptOp>> {
-    let mut r = Reader::new(data);
-    parse_procedure_inner(&mut r, &mut CalculatorBudget::new(), 0)
+    let procedure = Scanner::new(data).parse_procedure().ok()?;
+    parse_procedure_inner(procedure, 0)
 }
 
-fn parse_procedure_inner(
-    r: &mut Reader<'_>,
-    budget: &mut CalculatorBudget,
-    depth: usize,
-) -> Option<Vec<PostScriptOp>> {
-    if depth >= MAX_CALCULATOR_DEPTH {
-        warn!("PDF calculator nesting exceeds the limit of {MAX_CALCULATOR_DEPTH} levels");
+fn parse_procedure_inner(procedure: Procedure<'_>, depth: usize) -> Option<Vec<PostScriptOp>> {
+    if depth >= MAX_PROCEDURE_DEPTH {
         return None;
     }
+
     let mut stack = ParseStack::new();
-
     let mut ops = vec![];
-    r.skip_white_spaces_and_comments();
-    r.forward_tag(b"{")?;
+    let mut tokens = procedure.tokens();
 
-    loop {
-        r.skip_white_spaces_and_comments();
-
-        if r.peek_byte()? == b'}' {
-            r.forward_tag(b"}")?;
-
-            break;
-        } else if r.peek_byte()? == b'{' {
-            budget.take()?;
-            stack.push(parse_procedure_inner(r, budget, depth + 1)?)?;
-        } else {
-            budget.take()?;
-            let op = PostScriptOp::from_reader(r, &mut stack)?;
-            ops.push(op);
+    while !tokens.at_end() {
+        match tokens.parse_token().ok()? {
+            Token::Number(n) => ops.push(PostScriptOp::Number(n.as_f64() as f32)),
+            Token::Procedure(p) => stack.push(parse_procedure_inner(p, depth + 1)?)?,
+            Token::Name(n) if !n.is_literal() && !n.is_immediate() => {
+                ops.push(PostScriptOp::from_operator(n.as_bytes(), &mut stack)?);
+            }
+            _ => return None,
         }
     }
 
@@ -503,7 +438,7 @@ fn parse_procedure_inner(
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum PostScriptOp {
-    Number(Number),
+    Number(f32),
     Abs,
     Add,
     Atan,
@@ -549,65 +484,55 @@ pub(super) enum PostScriptOp {
 }
 
 impl PostScriptOp {
-    fn from_reader(r: &mut Reader<'_>, stack: &mut ParseStack) -> Option<Self> {
-        let op = if let Some(n) = r.read::<Number>(&ReaderContext::dummy()) {
-            // TODO: Support radix numbers
-            Self::Number(n)
-        } else {
-            let op = r.read::<content::Operator<'_>>(&ReaderContext::dummy())?;
-            match op.as_ref() {
-                b"abs" => Self::Abs,
-                b"add" => Self::Add,
-                b"atan" => Self::Atan,
-                b"ceiling" => Self::Ceiling,
-                b"cos" => Self::Cos,
-                b"cvi" => Self::Cvi,
-                b"cvr" => Self::Cvr,
-                b"div" => Self::Div,
-                b"exp" => Self::Exp,
-                b"floor" => Self::Floor,
-                b"idiv" => Self::Idiv,
-                b"ln" => Self::Ln,
-                b"log" => Self::Log,
-                b"mod" => Self::Mod,
-                b"mul" => Self::Mul,
-                b"neg" => Self::Neg,
-                b"round" => Self::Round,
-                b"sin" => Self::Sin,
-                b"sqrt" => Self::Sqrt,
-                b"sub" => Self::Sub,
-                b"truncate" => Self::Truncate,
-                b"and" => Self::And,
-                b"bitshift" => Self::Bitshift,
-                b"eq" => Self::Eq,
-                b"false" => Self::False,
-                b"ge" => Self::Ge,
-                b"gt" => Self::Gt,
-                b"le" => Self::Le,
-                b"lt" => Self::Lt,
-                b"ne" => Self::Ne,
-                b"not" => Self::Not,
-                b"or" => Self::Or,
-                b"true" => Self::True,
-                b"xor" => Self::Xor,
-                b"if" => Self::If(stack.pop()?),
-                b"ifelse" => {
-                    let s = stack.pop()?;
-                    let f = stack.pop()?;
-                    Self::IfElse(f, s)
-                }
-                b"copy" => Self::Copy,
-                b"dup" => Self::Dup,
-                b"exch" => Self::Exch,
-                b"index" => Self::Index,
-                b"pop" => Self::Pop,
-                b"roll" => Self::Roll,
-                _ => {
-                    error!("encountered unknown postscript operator {op:?}");
-
-                    return None;
-                }
+    fn from_operator(op: &[u8], stack: &mut ParseStack) -> Option<Self> {
+        let op = match op {
+            b"abs" => Self::Abs,
+            b"add" => Self::Add,
+            b"atan" => Self::Atan,
+            b"ceiling" => Self::Ceiling,
+            b"cos" => Self::Cos,
+            b"cvi" => Self::Cvi,
+            b"cvr" => Self::Cvr,
+            b"div" => Self::Div,
+            b"exp" => Self::Exp,
+            b"floor" => Self::Floor,
+            b"idiv" => Self::Idiv,
+            b"ln" => Self::Ln,
+            b"log" => Self::Log,
+            b"mod" => Self::Mod,
+            b"mul" => Self::Mul,
+            b"neg" => Self::Neg,
+            b"round" => Self::Round,
+            b"sin" => Self::Sin,
+            b"sqrt" => Self::Sqrt,
+            b"sub" => Self::Sub,
+            b"truncate" => Self::Truncate,
+            b"and" => Self::And,
+            b"bitshift" => Self::Bitshift,
+            b"eq" => Self::Eq,
+            b"false" => Self::False,
+            b"ge" => Self::Ge,
+            b"gt" => Self::Gt,
+            b"le" => Self::Le,
+            b"lt" => Self::Lt,
+            b"ne" => Self::Ne,
+            b"not" => Self::Not,
+            b"or" => Self::Or,
+            b"true" => Self::True,
+            b"xor" => Self::Xor,
+            b"if" => Self::If(stack.pop()?),
+            b"ifelse" => {
+                let s = stack.pop()?;
+                let f = stack.pop()?;
+                Self::IfElse(f, s)
             }
+            b"copy" => Self::Copy,
+            b"dup" => Self::Dup,
+            b"exch" => Self::Exch,
+            b"index" => Self::Index,
+            b"pop" => Self::Pop,
+            b"roll" => Self::Roll,
+            _ => return None,
         };
 
         Some(op)
@@ -616,13 +541,30 @@ impl PostScriptOp {
 
 #[cfg(test)]
 mod tests {
-    use crate::function::type4::{PostScriptOp, Type4, parse_procedure};
-    use crate::function::{Clamper, Function, FunctionType, TupleVec, Values};
+    use crate::function::type4::{MAX_PROCEDURE_DEPTH, PostScriptOp, Type4, parse_procedure};
+    use crate::function::{Function, FunctionType, Interval, Repr};
     use std::f32::consts::LN_10;
     use std::sync::Arc;
 
-    use hayro_syntax::object::Number;
-    use smallvec::smallvec;
+    fn nested_program(depth: usize) -> Vec<u8> {
+        let mut program = "{ true ".repeat(depth - 1);
+        program.push_str("{ 1 }");
+        program.push_str(&" if }".repeat(depth - 1));
+
+        program.into_bytes()
+    }
+
+    #[test]
+    fn nested_procedures_up_to_bound() {
+        assert!(parse_procedure(&nested_program(MAX_PROCEDURE_DEPTH)).is_some());
+        assert!(parse_procedure(&nested_program(MAX_PROCEDURE_DEPTH + 1)).is_none());
+    }
+
+    #[test]
+    fn deep_procedure_nesting_fails() {
+        let program = format!("{}{}", "{".repeat(300_000), "}".repeat(300_000));
+        assert!(parse_procedure(program.as_bytes()).is_none());
+    }
 
     #[test]
     fn lex_1() {
@@ -634,7 +576,7 @@ mod tests {
             vec![
                 PostScriptOp::Copy,
                 PostScriptOp::Dup,
-                PostScriptOp::Number(Number::from_f32(2.0)),
+                PostScriptOp::Number(2.0),
                 PostScriptOp::Exch,
                 PostScriptOp::Roll,
             ]
@@ -651,8 +593,8 @@ mod tests {
             vec![
                 PostScriptOp::If(vec![PostScriptOp::Dup, PostScriptOp::Exch]),
                 PostScriptOp::IfElse(
-                    vec![PostScriptOp::Number(Number::from_i32(0))],
-                    vec![PostScriptOp::Number(Number::from_i32(1))]
+                    vec![PostScriptOp::Number(0.0)],
+                    vec![PostScriptOp::Number(1.0)]
                 )
             ]
         );
@@ -662,17 +604,16 @@ mod tests {
         let procedure = format!("{{{prog}}}");
         let procedure = parse_procedure(procedure.as_bytes()).unwrap();
 
-        let type4 = Type4 {
-            program: procedure,
-            clamper: Clamper {
-                domain: TupleVec::default(),
-                range: None,
-            },
-        };
-
-        let res = type4.eval(Values::new()).unwrap();
+        let type4 = Type4 { program: procedure };
+        let stack = type4.run(&[]).unwrap();
+        let res = stack.items().iter().map(|i| i.as_f32()).collect::<Vec<_>>();
 
         assert_eq!(res.as_slice(), out);
+    }
+
+    #[test]
+    fn radix_numbers() {
+        op_impl("16#FF 2#101", &[255.0, 5.0]);
     }
 
     #[test]
@@ -951,153 +892,21 @@ mod tests {
     fn domain() {
         let procedure = parse_procedure(b"{  }").unwrap();
 
-        let type4 = Function(Arc::new(FunctionType::Type4(Type4 {
-            program: procedure,
-            clamper: Clamper {
-                domain: smallvec![(-5.0, 5.0), (-5.0, 5.0), (-5.0, 5.0)],
-                range: None,
-            },
-        })));
+        let type4 = Function(Arc::new(Repr {
+            domain: vec![
+                Interval {
+                    min: -5.0,
+                    max: 5.0
+                };
+                3
+            ],
+            range: None,
+            num_outputs: 3,
+            function_type: FunctionType::Type4(Type4 { program: procedure }),
+        }));
 
-        let input = smallvec![-10.0, -2.0, 6.0];
-        let res = type4.eval(input).unwrap();
+        let res = type4.eval_one(&[-10.0, -2.0, 6.0]).unwrap();
 
         assert_eq!(res.as_slice(), &[-5.0, -2.0, 5.0]);
-    }
-
-    fn function_limits_result(program: &str) -> Option<Values> {
-        Type4 {
-            program: parse_procedure(format!("{{ {program} }}").as_bytes())?,
-            clamper: Clamper {
-                domain: TupleVec::default(),
-                range: None,
-            },
-        }
-        .eval(Values::new())
-    }
-
-    #[test]
-    fn function_limits_idiv_zero_is_refused() {
-        assert!(function_limits_result("1 0 idiv").is_none());
-    }
-
-    #[test]
-    fn function_limits_idiv_overflow_is_refused() {
-        assert!(function_limits_result("-2147483648 -1 idiv").is_none());
-    }
-
-    #[test]
-    fn function_limits_large_bitshifts_discard_all_bits() {
-        for shift in [32, -32, 2147483647, -2147483648] {
-            assert_eq!(
-                function_limits_result(&format!("7 {shift} bitshift")),
-                Some(smallvec![0.0])
-            );
-        }
-        assert_eq!(
-            function_limits_result("1073741824 1 bitshift"),
-            Some(smallvec![-2147483648.0])
-        );
-        assert_eq!(
-            function_limits_result("-2147483648 -1 bitshift"),
-            Some(smallvec![1073741824.0])
-        );
-    }
-
-    #[test]
-    fn function_limits_roll_handles_the_most_negative_integer() {
-        assert_eq!(
-            function_limits_result("1 2 3 3 -2147483648 roll"),
-            Some(smallvec![3.0, 1.0, 2.0])
-        );
-    }
-
-    #[test]
-    fn function_limits_large_indices_are_refused() {
-        assert!(function_limits_result("1 4294967295 index").is_none());
-    }
-
-    #[test]
-    fn function_limits_operand_stack_overflow_is_refused() {
-        assert_eq!(
-            function_limits_result(&format!("1 {}", "dup ".repeat(63)))
-                .unwrap()
-                .len(),
-            64
-        );
-        assert!(function_limits_result(&format!("1 {}", "dup ".repeat(64))).is_none());
-    }
-
-    fn function_limits_nested_program(levels: usize) -> String {
-        let mut program = "{ 0 }".to_owned();
-        for _ in 1..levels {
-            program = format!("{{ true {program} if }}");
-        }
-        program
-    }
-
-    #[test]
-    fn function_limits_calculator_parse_depth_is_bounded() {
-        assert!(parse_procedure(function_limits_nested_program(64).as_bytes()).is_some());
-        assert!(parse_procedure(function_limits_nested_program(65).as_bytes()).is_none());
-    }
-
-    #[test]
-    fn function_limits_calculator_parse_work_is_shared() {
-        assert!(parse_procedure(format!("{{ {} }}", "0 pop ".repeat(5000)).as_bytes()).is_some());
-        assert!(parse_procedure(format!("{{ {} }}", "0 pop ".repeat(5001)).as_bytes()).is_none());
-    }
-
-    #[test]
-    fn function_limits_parse_budget_counts_unselected_branches() {
-        let branch = "0 pop ".repeat(2500);
-        let program = format!("{{ true {{ {branch} }} {{ {branch} }} ifelse }}");
-        assert!(parse_procedure(program.as_bytes()).is_none());
-        assert!(parse_procedure(b"{ {} {} }").is_some());
-        assert!(parse_procedure(b"{ {} {} {} }").is_none());
-    }
-    fn function_limits_eval(program: Vec<PostScriptOp>) -> Option<Values> {
-        Type4 {
-            program,
-            clamper: Clamper {
-                domain: TupleVec::default(),
-                range: None,
-            },
-        }
-        .eval(Values::new())
-    }
-
-    #[test]
-    fn function_limits_calculator_eval_work_is_bounded() {
-        let pair = [PostScriptOp::Number(Number::from_i32(0)), PostScriptOp::Pop];
-        assert_eq!(
-            function_limits_eval((0..5000).flat_map(|_| pair.iter().cloned()).collect()),
-            Some(Values::new())
-        );
-        assert!(
-            function_limits_eval((0..5001).flat_map(|_| pair.iter().cloned()).collect()).is_none()
-        );
-    }
-
-    #[test]
-    fn function_limits_eval_budget_is_shared_by_branches() {
-        let pair = [PostScriptOp::Number(Number::from_i32(0)), PostScriptOp::Pop];
-        let mut program: Vec<_> = (0..3000).flat_map(|_| pair.iter().cloned()).collect();
-        program.push(PostScriptOp::True);
-        program.push(PostScriptOp::If(
-            (0..2000).flat_map(|_| pair.iter().cloned()).collect(),
-        ));
-        assert!(function_limits_eval(program).is_none());
-    }
-    #[test]
-    fn function_limits_calculator_eval_depth_is_bounded() {
-        let mut program = vec![PostScriptOp::Number(Number::from_i32(0))];
-        for _ in 1..64 {
-            program = vec![PostScriptOp::True, PostScriptOp::If(program)];
-        }
-        assert_eq!(function_limits_eval(program.clone()), Some(smallvec![0.0]));
-        assert!(
-            function_limits_eval(vec![PostScriptOp::True, PostScriptOp::If(program)]).is_none()
-        );
     }
 }

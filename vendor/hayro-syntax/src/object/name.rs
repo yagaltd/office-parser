@@ -7,7 +7,7 @@ use crate::reader::Reader;
 use crate::reader::{Readable, ReaderContext, Skippable};
 use crate::trivia::is_regular_character;
 use core::borrow::Borrow;
-use core::fmt::{self, Debug, Formatter};
+use core::fmt::{self, Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::ops::Deref;
 use smallvec::SmallVec;
@@ -72,16 +72,6 @@ impl Ord for Name<'_> {
 }
 
 impl<'a> Name<'a> {
-    // PdfCraft patch: (#307) lazy dictionary indexes cannot borrow through a
-    // OnceLock without making the enclosing PDF pages invariant in their lifetime.
-    // Ordinary PDF keys fit inline, so owning these bytes needs no allocation.
-    pub(crate) fn into_owned(self) -> Name<'static> {
-        Name(NameInner::Owned(match self.0 {
-            NameInner::Borrowed(data) => SmallVec::from_slice(data),
-            NameInner::Owned(data) => data,
-        }))
-    }
-
     /// Create a new name from a sequence of bytes.
     #[inline]
     pub fn new(data: &'a [u8]) -> Option<Self> {
@@ -105,9 +95,14 @@ impl<'a> Name<'a> {
         let mut r = Reader::new(data);
 
         while let Some(b) = r.read_byte() {
-            if b == b'#' {
-                let hex = r.read_bytes(2)?;
-                result.push(decode_hex_digit(hex[0])? << 4 | decode_hex_digit(hex[1])?);
+            // Before PDF 1.2, `#` was a regular character in names.
+            if b == b'#'
+                && let Some(hex) = r.peek_bytes(2)
+                && let (Some(high), Some(low)) =
+                    (decode_hex_digit(hex[0]), decode_hex_digit(hex[1]))
+            {
+                r.skip_bytes(2)?;
+                result.push(high << 4 | low);
             } else {
                 result.push(b);
             }
@@ -130,6 +125,12 @@ impl Debug for Name<'_> {
             Ok(s) => <str as Debug>::fmt(s, f),
             Err(_) => <[u8] as Debug>::fmt(self.as_ref(), f),
         }
+    }
+}
+
+impl Display for Name<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "/{}", self.as_str())
     }
 }
 
@@ -178,6 +179,15 @@ mod tests {
     use std::ops::Deref;
 
     #[test]
+    fn display() {
+        let name = Reader::new(b"/Test")
+            .read_without_context::<Name<'_>>()
+            .unwrap();
+
+        assert_eq!(format!("{name}"), "/Test");
+    }
+
+    #[test]
     fn name_1() {
         assert_eq!(
             Reader::new("/".as_bytes())
@@ -199,10 +209,12 @@ mod tests {
 
     #[test]
     fn name_3() {
-        assert!(
+        assert_eq!(
             Reader::new("/AB#FG".as_bytes())
                 .read_without_context::<Name<'_>>()
-                .is_none()
+                .unwrap()
+                .deref(),
+            b"AB#FG"
         );
     }
 
@@ -357,6 +369,39 @@ mod tests {
                 .unwrap()
                 .deref(),
             b"k1"
+        );
+    }
+
+    #[test]
+    fn name_18() {
+        assert_eq!(
+            Reader::new("/#".as_bytes())
+                .read_without_context::<Name<'_>>()
+                .unwrap()
+                .deref(),
+            b"#"
+        );
+    }
+
+    #[test]
+    fn name_19() {
+        assert_eq!(
+            Reader::new("/A#4".as_bytes())
+                .read_without_context::<Name<'_>>()
+                .unwrap()
+                .deref(),
+            b"A#4"
+        );
+    }
+
+    #[test]
+    fn name_20() {
+        assert_eq!(
+            Reader::new("/#2#23".as_bytes())
+                .read_without_context::<Name<'_>>()
+                .unwrap()
+                .deref(),
+            b"#2#"
         );
     }
 }

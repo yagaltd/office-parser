@@ -4,24 +4,30 @@ use crate::object::ObjectIdentifier;
 use crate::object::ObjectLike;
 use crate::reader::Reader;
 use crate::reader::{Readable, ReaderContext, ReaderExt, Skippable};
-use core::fmt::{Debug, Formatter};
+use core::fmt::{Debug, Display, Formatter};
 
 /// A reference to an object.
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
 pub struct ObjRef {
     /// The object number.
-    pub obj_number: i32,
+    pub obj_number: u32,
     /// The generation number.
     pub gen_number: i32,
 }
 
 impl ObjRef {
     /// Create a new object reference.
-    pub fn new(obj_number: i32, gen_number: i32) -> Self {
+    pub fn new(obj_number: u32, gen_number: i32) -> Self {
         Self {
             obj_number,
             gen_number,
         }
+    }
+}
+
+impl Display for ObjRef {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{} {} R", self.obj_number, self.gen_number)
     }
 }
 
@@ -39,7 +45,7 @@ impl From<ObjectIdentifier> for ObjRef {
 
 impl Skippable for ObjRef {
     fn skip(r: &mut Reader<'_>, _: bool) -> Option<()> {
-        r.skip::<i32>(false)?;
+        r.skip::<u32>(false)?;
         r.skip_white_spaces();
         r.skip::<i32>(false)?;
         r.skip_white_spaces();
@@ -51,7 +57,7 @@ impl Skippable for ObjRef {
 
 impl Readable<'_> for ObjRef {
     fn read(r: &mut Reader<'_>, _: &ReaderContext<'_>) -> Option<Self> {
-        let obj_ref = r.read_without_context::<i32>()?;
+        let obj_ref = r.read_without_context::<u32>()?;
         r.skip_white_spaces();
         let gen_num = r.read_without_context::<i32>()?;
         r.skip_white_spaces();
@@ -117,13 +123,26 @@ where
     }
 }
 
+impl<T: Display> Display for MaybeRef<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Ref(value) => Display::fmt(value, f),
+            Self::NotRef(value) => Display::fmt(value, f),
+        }
+    }
+}
+
 impl<T> Skippable for MaybeRef<T>
 where
     T: Skippable,
 {
     fn skip(r: &mut Reader<'_>, is_content_stream: bool) -> Option<()> {
+        Self::skip_with_depth(r, is_content_stream, 0)
+    }
+
+    fn skip_with_depth(r: &mut Reader<'_>, is_content_stream: bool, depth: usize) -> Option<()> {
         r.skip::<ObjRef>(is_content_stream)
-            .or_else(|| r.skip::<T>(is_content_stream))
+            .or_else(|| r.skip_with_depth::<T>(is_content_stream, depth))
             .map(|_| {})
     }
 }
@@ -143,9 +162,15 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::object::ObjRef;
+    use crate::object::{MaybeRef, Number, ObjRef};
     use crate::reader::Reader;
     use crate::reader::ReaderExt;
+
+    #[test]
+    fn display() {
+        assert_eq!(format!("{}", ObjRef::new(34, 1)), "34 1 R");
+        assert_eq!(format!("{}", MaybeRef::NotRef(Number::from_i32(12))), "12");
+    }
 
     #[test]
     fn ref_1() {
@@ -183,5 +208,32 @@ mod tests {
                 .read_without_context::<ObjRef>()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn ref_above_i32_max() {
+        assert_eq!(
+            Reader::new("2147483648 0 R".as_bytes())
+                .read_without_context::<ObjRef>()
+                .unwrap(),
+            ObjRef::new(2_147_483_648, 0)
+        );
+        assert_eq!(
+            Reader::new("4294967295 0 R".as_bytes())
+                .read_without_context::<ObjRef>()
+                .unwrap(),
+            ObjRef::new(u32::MAX, 0)
+        );
+    }
+
+    #[test]
+    fn ref_invalid_object_number() {
+        for input in ["4294967296 0 R", "-1 0 R"] {
+            assert!(
+                Reader::new(input.as_bytes())
+                    .read_without_context::<ObjRef>()
+                    .is_none()
+            );
+        }
     }
 }

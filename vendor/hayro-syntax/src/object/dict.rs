@@ -6,13 +6,10 @@ use crate::object::{Name, ObjectIdentifier};
 use crate::object::{Object, ObjectLike};
 use crate::reader::Reader;
 use crate::reader::{Readable, ReaderContext, ReaderExt, Skippable};
-use crate::sync::FxHashMap;
-use crate::sync::{Arc, OnceLock};
-use alloc::boxed::Box;
+use crate::sync::Arc;
 use alloc::format;
 use alloc::vec::Vec;
-use core::fmt::{Debug, Formatter};
-use core::ops::Deref;
+use core::fmt::{Debug, Display, Formatter};
 
 /// A dictionary, which is a key-value map, keys being names, and values being any PDF object or
 /// objetc reference.
@@ -55,18 +52,17 @@ impl<'a> Dict<'a> {
 
     /// Returns the number of entries in the dictionary.
     pub fn len(&self) -> usize {
-        self.offsets().map_or(0, FxHashMap::len)
+        self.offsets().len()
     }
 
     /// Return whether the dictionary is empty.
     pub fn is_empty(&self) -> bool {
-        self.offsets().is_none_or(FxHashMap::is_empty)
+        self.offsets().is_empty()
     }
 
     /// Checks whether the dictionary contains an entry with a specific key.
     pub fn contains_key(&self, key: impl AsRef<[u8]>) -> bool {
-        self.offsets()
-            .is_some_and(|offsets| offsets.contains_key(key.as_ref()))
+        self.offset(key.as_ref()).is_some()
     }
 
     /// Returns the entry of a key as a specific object, or try to resolve it in case it's
@@ -84,26 +80,24 @@ impl<'a> Dict<'a> {
 
     /// Get the object reference linked to a key.
     pub fn get_ref(&self, key: impl AsRef<[u8]>) -> Option<ObjRef> {
-        let offset = *self.offsets()?.get(key.as_ref())?;
+        let offset = self.offset(key.as_ref())?;
 
         Reader::new(&self.data()[offset..]).read_with_context::<ObjRef>(self.ctx())
     }
 
-    /// Returns an iterator over all keys in the dictionary.
+    /// Returns an iterator over all keys in the dictionary, in no particular order.
     pub fn keys(&self) -> impl Iterator<Item = Name<'a>> + '_ {
-        self.offsets()
-            .into_iter()
-            .flat_map(|offsets| offsets.keys().cloned())
+        self.offsets().iter().map(|(key, _)| key.clone())
     }
 
     /// An iterator over all entries in the dictionary, sorted by key.
     pub fn entries(&self) -> impl Iterator<Item = (Name<'a>, MaybeRef<Object<'a>>)> + '_ {
         let mut sorted_keys = self.keys().collect::<Vec<_>>();
         sorted_keys.sort_by(|n1, n2| n1.as_ref().cmp(n2.as_ref()));
-        sorted_keys.into_iter().map(|k| {
-            let obj = self.get_raw(k.deref()).unwrap();
-            (k, obj)
-        })
+        sorted_keys.dedup_by(|n1, n2| n1.as_ref() == n2.as_ref());
+        sorted_keys
+            .into_iter()
+            .filter_map(|k| self.get_raw(k.as_ref()).map(|obj| (k, obj)))
     }
 
     /// Return the object identifier of the dict, if it's an indirect object.
@@ -117,7 +111,7 @@ impl<'a> Dict<'a> {
     where
         T: Readable<'a>,
     {
-        let offset = *self.offsets()?.get(key.as_ref())?;
+        let offset = self.offset(key.as_ref())?;
 
         Reader::new(&self.data()[offset..]).read_with_context::<MaybeRef<T>>(self.ctx())
     }
@@ -129,27 +123,27 @@ impl<'a> Dict<'a> {
         }
     }
 
-    fn offsets(&self) -> Option<&FxHashMap<Name<'static>, usize>> {
+    fn offsets(&self) -> &[(Name<'a>, usize)] {
         match &self.0 {
-            Inner::Empty => None,
-            Inner::Some(repr) => Some(repr.offsets.get_or_init(|| {
-                // PdfCraft patch: (#307) large resource dictionaries are read for every
-                // page at open, but most are never looked up. Index them only on demand.
-                // The first pass already validated the same immutable bytes with this
-                // context. Keep the same parser, including duplicate-key and repair rules.
-                let mut offsets = new_offsets();
-                let mut reader = Reader::new(repr.data);
-                let (start, end): (Option<&[u8]>, &[u8]) = if repr.inline {
-                    (None, b"ID")
-                } else {
-                    (Some(b"<<"), b">>")
-                };
-                let _ = parse_dict_with(&mut reader, &repr.ctx, start, end, |name, offset, _| {
-                    offsets.insert(name.into_owned(), offset);
-                    Some(())
-                });
-                offsets
-            })),
+            Inner::Empty => &[],
+            Inner::Some(repr) => &repr.offsets,
+        }
+    }
+
+    fn offset(&self, key: &[u8]) -> Option<usize> {
+        let offsets = self.offsets();
+
+        if offsets.len() <= MAX_UNSORTED_LEN {
+            offsets
+                .iter()
+                .find(|(name, _)| name.as_ref() == key)
+                .map(|(_, offset)| *offset)
+        } else {
+            let idx = offsets
+                .binary_search_by(|(name, _)| name.as_ref().cmp(key))
+                .ok()?;
+
+            Some(offsets[idx].1)
         }
     }
 }
@@ -158,29 +152,43 @@ impl Debug for Dict<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         let mut debug_struct = f.debug_struct("Dict");
 
-        if let Some(offsets) = self.offsets() {
-            let mut r = Reader::new(self.data());
-
-            for (key, val) in offsets {
-                r.jump(*val);
-                debug_struct.field(
-                    &format!("{:?}", key.as_str()),
-                    &r.read_with_context::<MaybeRef<Object<'_>>>(&ReaderContext::dummy())
-                        .unwrap(),
-                );
-            }
+        for (key, value) in self.entries() {
+            debug_struct.field(&format!("{:?}", key.as_str()), &value);
         }
-        Ok(())
+
+        debug_struct.finish()
+    }
+}
+
+impl Display for Dict<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        f.write_str("<<")?;
+        for (key, value) in self.entries() {
+            f.write_str(" ")?;
+            Display::fmt(&key, f)?;
+            f.write_str(" ")?;
+            Display::fmt(&value, f)?;
+        }
+        if !self.is_empty() {
+            f.write_str(" ")?;
+        }
+        f.write_str(">>")
     }
 }
 
 impl Skippable for Dict<'_> {
     fn skip(r: &mut Reader<'_>, is_content_stream: bool) -> Option<()> {
-        r.forward_tag(b"<<")?;
-        r.enter_container()?;
+        Self::skip_with_depth(r, is_content_stream, 0)
+    }
 
-        // PdfCraft patch: leave even when a value or garbage fails through `?`.
-        let result = (|| loop {
+    fn skip_with_depth(r: &mut Reader<'_>, is_content_stream: bool, depth: usize) -> Option<()> {
+        if depth >= super::MAX_OBJECT_NESTING_DEPTH {
+            return None;
+        }
+
+        r.forward_tag(b"<<")?;
+
+        loop {
             r.skip_white_spaces_and_comments();
 
             if let Some(()) = r.forward_tag(b">>") {
@@ -188,21 +196,19 @@ impl Skippable for Dict<'_> {
             } else {
                 let Some(_) = r.skip::<Name<'_>>(is_content_stream) else {
                     // In case there is garbage in-between, be lenient and just try to skip it.
-                    r.skip::<Object<'_>>(is_content_stream)?;
+                    r.skip_with_depth::<Object<'_>>(is_content_stream, depth + 1)?;
                     continue;
                 };
 
                 r.skip_white_spaces_and_comments();
 
                 if is_content_stream {
-                    r.skip::<Object<'_>>(is_content_stream)?;
+                    r.skip_with_depth::<Object<'_>>(is_content_stream, depth + 1)?;
                 } else {
-                    r.skip::<MaybeRef<Object<'_>>>(is_content_stream)?;
+                    r.skip_with_depth::<MaybeRef<Object<'_>>>(is_content_stream, depth + 1)?;
                 }
             }
-        })();
-        r.leave_container();
-        result
+        }
     }
 }
 
@@ -212,57 +218,7 @@ impl<'a> Readable<'a> for Dict<'a> {
     }
 }
 
-// PdfCraft patch: (#307) retain the fast single-pass index for ordinary small
-// dictionaries. Above this entry count, validate without retaining a hash table.
-const EAGER_DICT_ENTRIES: usize = 32;
-
-fn new_offsets() -> FxHashMap<Name<'static>, usize> {
-    #[cfg(feature = "std")]
-    return FxHashMap::with_capacity_and_hasher(8, rustc_hash::FxBuildHasher);
-    #[cfg(not(feature = "std"))]
-    FxHashMap::new()
-}
-
-pub(crate) type SharedIndex = Arc<OnceLock<FxHashMap<Name<'static>, usize>>>;
-
-#[derive(Debug)]
-pub(crate) struct CachedDict {
-    data: Box<[u8]>,
-    offsets: SharedIndex,
-}
-
-// PdfCraft patch: share a validated large dictionary's index across pages. The cache
-// belongs to the xref, owns its keys, and is bounded even on documents with many unique
-// dictionaries. Comparing the bytes also makes address reuse harmless. No reader context
-// is cached: decryption, object identity and reference-cycle tracking stay with each read.
-#[derive(Debug, Default)]
-pub(crate) struct DictCache {
-    entries: FxHashMap<usize, Arc<CachedDict>>,
-    bytes: usize,
-}
-
-impl DictCache {
-    fn get(&self, data: &[u8]) -> Option<Arc<CachedDict>> {
-        self.entries
-            .get(&(data.as_ptr() as usize))
-            .filter(|cached| data.starts_with(&cached.data))
-            .cloned()
-    }
-
-    fn insert(&mut self, data: &[u8], offsets: SharedIndex) {
-        const MAX_BYTES: usize = 8 << 20;
-        if self.entries.len() < 256 && data.len() <= MAX_BYTES.saturating_sub(self.bytes) {
-            self.bytes += data.len();
-            self.entries.insert(
-                data.as_ptr() as usize,
-                Arc::new(CachedDict {
-                    data: data.into(),
-                    offsets,
-                }),
-            );
-        }
-    }
-}
+const MAX_UNSORTED_LEN: usize = 16;
 
 fn read_inner<'a>(
     r: &mut Reader<'a>,
@@ -270,56 +226,28 @@ fn read_inner<'a>(
     start_tag: Option<&[u8]>,
     end_tag: &[u8],
 ) -> Option<Dict<'a>> {
-    let cacheable = start_tag.is_some() && !ctx.in_content_stream();
-    if cacheable {
-        let tail = r.tail()?;
-        if let Some(cached) = ctx
-            .xref()
-            .with_dict_cache(|cache| cache.get(tail))
-            .flatten()
-        {
-            let data = r.read_bytes(cached.data.len())?;
-            return Some(Dict(Inner::Some(Arc::new(Repr {
-                data,
-                offsets: cached.offsets.clone(),
-                inline: false,
-                ctx: ctx.clone(),
-            }))));
-        }
-    }
-    let mut offsets = Some(new_offsets());
+    let mut offsets = Vec::with_capacity(8);
 
-    let (data, repaired) = parse_dict_with(
+    let data = parse_dict_with(
         r,
         ctx,
         start_tag,
         end_tag,
         #[inline]
         |name, offset, _| {
-            if let Some(index) = &mut offsets {
-                index.insert(name.into_owned(), offset);
-                if index.len() > EAGER_DICT_ENTRIES {
-                    offsets = None;
-                }
-            }
+            offsets.push((name, offset));
             Some(())
         },
     )?;
 
-    let index = Arc::new(OnceLock::new());
-    if let Some(offsets) = offsets {
-        let _ = index.set(offsets);
+    if offsets.len() > MAX_UNSORTED_LEN {
+        offsets.sort_by(|(a, _), (b, _)| a.as_ref().cmp(b.as_ref()));
+        offsets.dedup_by(|(a, _), (b, _)| a.as_ref() == b.as_ref());
     }
-    // Repair may read objects through the current reference context; only cache the
-    // context-independent validating path. Inline/content dictionaries stay uncached.
-    if cacheable && !repaired && data.len() >= 1024 {
-        ctx.xref()
-            .with_dict_cache(|cache| cache.insert(data, index.clone()));
-    }
+
     Some(Dict(Inner::Some(Arc::new(Repr {
         data,
-        offsets: index,
-        inline: start_tag.is_none(),
+        offsets,
         ctx: ctx.clone(),
     }))))
 }
@@ -342,7 +270,7 @@ pub(crate) fn probe_dict<'a>(
     let mut has_root = false;
     let mut has_type = false;
 
-    let (data, _) = parse_dict_with(
+    let data = parse_dict_with(
         r,
         ctx,
         start_tag,
@@ -366,38 +294,19 @@ pub(crate) fn probe_dict<'a>(
     })
 }
 
-// PdfCraft patch: an object where a key belongs is read, not skipped, so a dictionary
-// holding another one there (`<< << …`) recursed without a bound. Count each parsed
-// dictionary like a skipped one, and leave on every exit of the parse below.
 fn parse_dict_with<'a, F>(
     r: &mut Reader<'a>,
     ctx: &ReaderContext<'a>,
     start_tag: Option<&[u8]>,
     end_tag: &[u8],
-    on_entry: F,
-) -> Option<(&'a [u8], bool)>
-where
-    F: FnMut(Name<'a>, usize, &Reader<'a>) -> Option<()>,
-{
-    r.enter_container()?;
-    let result = parse_dict_with_inner(r, ctx, start_tag, end_tag, on_entry);
-    r.leave_container();
-    result
-}
-
-fn parse_dict_with_inner<'a, F>(
-    r: &mut Reader<'a>,
-    ctx: &ReaderContext<'a>,
-    start_tag: Option<&[u8]>,
-    end_tag: &[u8],
     mut on_entry: F,
-) -> Option<(&'a [u8], bool)>
+) -> Option<&'a [u8]>
 where
     F: FnMut(Name<'a>, usize, &Reader<'a>) -> Option<()>,
 {
+    let depth = usize::from(start_tag.is_some());
     let dict_data = r.tail()?;
     let start_offset = r.offset();
-    let mut repaired = false;
 
     // Inline image dictionaries don't start with '<<'.
     if let Some(start_tag) = start_tag {
@@ -412,15 +321,14 @@ where
             r.forward_tag(end_tag)?;
             let end_offset = r.offset() - start_offset;
 
-            break Some((&dict_data[..end_offset], repaired));
+            break Some(&dict_data[..end_offset]);
         } else {
             let Some(name) = r.read_without_context::<Name<'_>>() else {
                 if start_tag.is_some() {
                     // In case there is garbage in-between, be lenient and just try to skip it.
                     // But only do this if we are parsing a proper dictionary as opposed to an
                     // inline dictionary.
-                    repaired = true;
-                    r.read::<Object<'_>>(ctx)?;
+                    r.skip_with_depth::<Object<'_>>(ctx.in_content_stream(), depth)?;
                     continue;
                 } else {
                     return None;
@@ -439,9 +347,9 @@ where
             on_entry(name, offset, r)?;
 
             if ctx.in_content_stream() {
-                r.skip::<Object<'_>>(ctx.in_content_stream())?;
+                r.skip_with_depth::<Object<'_>>(ctx.in_content_stream(), depth)?;
             } else {
-                r.skip::<MaybeRef<Object<'_>>>(ctx.in_content_stream())?;
+                r.skip_with_depth::<MaybeRef<Object<'_>>>(ctx.in_content_stream(), depth)?;
             }
         }
     }
@@ -451,8 +359,7 @@ object!(Dict<'a>, Dict);
 
 struct Repr<'a> {
     data: &'a [u8],
-    offsets: SharedIndex,
-    inline: bool,
+    offsets: Vec<(Name<'a>, usize)>,
     ctx: ReaderContext<'a>,
 }
 
@@ -467,129 +374,6 @@ impl<'a> InlineImageDict<'a> {
 impl<'a> Readable<'a> for InlineImageDict<'a> {
     fn read(r: &mut Reader<'a>, ctx: &ReaderContext<'a>) -> Option<Self> {
         Some(Self(read_inner(r, ctx, None, b"ID")?))
-    }
-}
-
-#[cfg(test)]
-mod lazy_index_tests {
-    use super::*;
-    use crate::object::{Array, FromBytes};
-    use alloc::string::String;
-
-    fn entries() -> String {
-        let mut data = String::new();
-        for i in 0..100 {
-            data.push_str(&format!("/Key{i} {i} "));
-        }
-        // Escaped and long names, duplicate keys, null and nested values keep
-        // exactly the same semantics after the second (index-building) pass.
-        data.push_str("/Key99 123 /Esc#61ped 7 /ThisNameIsLongerThanTheInlineNameBuffer 9 /Nil null /Nested << /N [1 2 3] >> ");
-        data
-    }
-
-    #[test]
-    fn large_indexes_are_deferred_and_clones_share_the_result() {
-        let data = format!("<< {} >>", entries());
-        let dict = Dict::from_bytes(data.as_bytes()).unwrap();
-        let Inner::Some(repr) = &dict.0 else {
-            panic!("nonempty")
-        };
-        assert!(repr.offsets.get().is_none());
-        let cloned = dict.clone();
-        assert_eq!(cloned.get::<i32>(b"Key99"), Some(123));
-        assert!(repr.offsets.get().is_some());
-        assert_eq!(dict.len(), 104);
-        assert_eq!(dict.get::<i32>(b"Escaped"), Some(7));
-        assert_eq!(
-            dict.get::<i32>(b"ThisNameIsLongerThanTheInlineNameBuffer"),
-            Some(9)
-        );
-        assert!(dict.contains_key(b"Nil"));
-        assert!(!dict.contains_key(b"Missing"));
-        assert_eq!(
-            dict.get::<Dict<'_>>(b"Nested")
-                .unwrap()
-                .get::<Array<'_>>(b"N")
-                .unwrap()
-                .iter::<i32>()
-                .collect::<Vec<_>>(),
-            [1, 2, 3]
-        );
-        assert_eq!(dict.keys().count(), dict.len());
-        assert_eq!(dict.entries().count(), dict.len());
-        assert!(core::ptr::eq(
-            dict.offsets().unwrap(),
-            cloned.offsets().unwrap()
-        ));
-    }
-
-    #[test]
-    fn small_indexes_stay_eager_and_large_inline_dicts_work() {
-        let dict = Dict::from_bytes(b"<< /Key 42 >>").unwrap();
-        let Inner::Some(repr) = &dict.0 else {
-            panic!("nonempty")
-        };
-        assert!(repr.offsets.get().is_some());
-        assert_eq!(dict.get::<i32>(b"Key"), Some(42));
-        let data = format!("{} ID", entries());
-        let mut reader = Reader::new(data.as_bytes());
-        let inline = InlineImageDict::read(&mut reader, &ReaderContext::dummy()).unwrap();
-        assert_eq!(inline.0.get::<i32>(b"Key99"), Some(123));
-        assert_eq!(inline.0.len(), 104);
-    }
-
-    #[test]
-    fn large_dicts_are_still_validated_before_any_lookup() {
-        let data = format!("<< {} /Broken [", entries());
-        assert!(Dict::from_bytes(data.as_bytes()).is_none());
-    }
-
-    #[test]
-    fn repeated_resource_reads_share_indexes_but_keep_object_context() {
-        let data = format!(
-            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources 5 0 R >> endobj\n4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources 5 0 R >> endobj\n5 0 obj << /XObject << {} >> >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
-            entries()
-        );
-        let pdf = crate::Pdf::new(data.into_bytes()).unwrap();
-        let a = pdf
-            .xref()
-            .get::<Dict<'_>>(ObjectIdentifier::new(5, 0))
-            .unwrap()
-            .get::<Dict<'_>>(b"XObject")
-            .unwrap();
-        let b = pdf
-            .xref()
-            .get::<Dict<'_>>(ObjectIdentifier::new(5, 0))
-            .unwrap()
-            .get::<Dict<'_>>(b"XObject")
-            .unwrap();
-        let (Inner::Some(a_repr), Inner::Some(b_repr)) = (&a.0, &b.0) else {
-            panic!("nonempty")
-        };
-        assert!(Arc::ptr_eq(&a_repr.offsets, &b_repr.offsets));
-        assert_eq!(a.obj_id(), Some(ObjectIdentifier::new(5, 0)));
-        assert_eq!(a.get::<i32>(b"Key99"), Some(123));
-        assert_eq!(b.get::<i32>(b"Escaped"), Some(7));
-        assert!(core::ptr::eq(a.offsets().unwrap(), b.offsets().unwrap()));
-    }
-
-    #[test]
-    fn index_cache_is_bounded_and_rejects_changed_or_truncated_bytes() {
-        let mut cache = DictCache::default();
-        let mut data = format!("<< {} >>", entries()).into_bytes();
-        cache.insert(&data, Arc::new(OnceLock::new()));
-        assert!(cache.get(&data).is_some());
-        assert!(cache.get(&data[..data.len() - 1]).is_none());
-        data[3] = b'Z';
-        assert!(cache.get(&data).is_none());
-        let buffers: Vec<_> = (0..300)
-            .map(|i| format!("<< /Key{i} 1 >>").into_bytes())
-            .collect();
-        for data in &buffers {
-            cache.insert(data, Arc::new(OnceLock::new()));
-        }
-        assert_eq!(cache.entries.len(), 256);
-        assert!(cache.bytes <= 8 << 20);
     }
 }
 
@@ -1248,10 +1032,10 @@ pub mod keys {
 
 #[cfg(test)]
 mod tests {
-    use crate::object::Number;
     use crate::object::dict::keys::{COLORSPACE, EXT_G_STATE, FONT, PROC_SET};
     use crate::object::dict::{Dict, InlineImageDict};
     use crate::object::string;
+    use crate::object::{FromBytes, Number};
     use crate::object::{Name, ObjRef};
     use crate::reader::Reader;
     use crate::reader::{ReaderContext, ReaderExt};
@@ -1394,5 +1178,30 @@ mod tests {
 
         assert_eq!(dict.get_ref("GS2"), Some(ObjRef::new(14, 0)));
         assert_eq!(dict.get_ref("GS3"), Some(ObjRef::new(15, 0)));
+    }
+
+    #[test]
+    fn dict_repr() {
+        let dict = Dict::from_bytes(b"<< /Hi 34 >>").unwrap();
+
+        assert_eq!(
+            format!("{dict:?}"),
+            "Dict { \"Hi\": Number(Number(Integer(34))) }"
+        );
+    }
+
+    #[test]
+    fn display() {
+        let dict = Dict::from_bytes(b"<< /B [1   2] % comment\n /A << /X   true >> >>").unwrap();
+
+        assert_eq!(format!("{dict}"), "<< /A << /X true >> /B [1 2] >>");
+        assert_eq!(format!("{}", Dict::empty()), "<<>>");
+    }
+
+    #[test]
+    fn dict_with_unreadable_value() {
+        let dict = Dict::from_bytes(b"<< /A <<>>stream /B true >>").unwrap();
+        let _ = dict.entries().count();
+        let _ = format!("{dict:?}");
     }
 }

@@ -5,10 +5,13 @@ pub(crate) use std::collections::HashMap;
 pub(crate) use alloc::collections::BTreeMap as HashMap;
 
 #[cfg(feature = "std")]
-pub(crate) use rustc_hash::FxHashMap;
+pub(crate) use rustc_hash::{FxHashMap, FxHashSet};
 
 #[cfg(not(feature = "std"))]
 pub(crate) use alloc::collections::BTreeMap as FxHashMap;
+
+#[cfg(not(feature = "std"))]
+pub(crate) use alloc::collections::BTreeSet as FxHashSet;
 
 // Keep in sync with the implementation in `page`.
 #[cfg(feature = "std")]
@@ -80,8 +83,7 @@ pub(crate) trait RwLockExt<T> {
 
 #[cfg(feature = "std")]
 impl<T> RwLockExt<T> for RwLock<T> {
-    // PdfCraft patch: (#307) poisoned locks are recovered rather than unwrapped, and the
-    // non-blocking try_get/try_put (which repair asserted could not fail) become blocking.
+    // PdfCraft patch: (#307) poisoned locks are recovered rather than unwrapped.
     fn get(&self) -> RwLockReadGuard<'_, T> {
         self.read().unwrap_or_else(|poisoned| poisoned.into_inner())
     }

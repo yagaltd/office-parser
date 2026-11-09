@@ -4,20 +4,6 @@ use alloc::vec::Vec;
 use core::ops::Sub;
 use smallvec::{Array, SmallVec};
 
-pub(crate) trait OptionLog {
-    fn error_none(self, f: &str) -> Self;
-}
-
-impl<T> OptionLog for Option<T> {
-    fn error_none(self, _f: &str) -> Self {
-        self.or_else(|| {
-            error!("{_f}");
-
-            None
-        })
-    }
-}
-
 const SCALAR_NEARLY_ZERO: f32 = 1.0 / (1 << 12) as f32;
 
 /// A number of useful methods for f32 numbers.
@@ -139,8 +125,8 @@ pub(crate) fn findr_needle(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// Indices should be used in order. Usage of higher indices implies more memory
 /// usage (even if lower indices are not in use).
 ///
-/// The capacity is limited at 2^C - 1. Out-of-range indices return `None` (PdfCraft patch:
-/// upstream panics; #307 reaches this with object-stream slot numbers from the file).
+/// The capacity is limited at 2^C - 1. Calling `get_or_init` with a higher
+/// index will lead to a panic.
 pub(crate) struct SegmentList<T, const C: usize>([OnceLock<Box<[OnceLock<T>]>>; C]);
 
 impl<T, const C: usize> SegmentList<T, C> {
@@ -149,28 +135,32 @@ impl<T, const C: usize> SegmentList<T, C> {
     }
 
     pub(crate) fn get(&self, i: usize) -> Option<&T> {
-        let (s, k) = self.locate(i)?;
-        let segment = self.0.get(s as usize)?.get()?;
+        let (s, k) = self.locate(i);
+        let segment = self.0[s as usize].get()?;
         segment.get(k)?.get()
     }
 
     #[track_caller]
-    pub(crate) fn get_or_init(&self, i: usize, f: impl FnOnce() -> T) -> Option<&T> {
-        let (s, k) = self.locate(i)?;
-        let segment = self.0.get(s as usize)?.get_or_init(|| {
-            (0..2_usize.pow(s))
-                .map(|_| OnceLock::new())
-                .collect::<Vec<_>>()
-                .into_boxed_slice()
-        });
-        Some(segment.get(k)?.get_or_init(f))
+    pub(crate) fn get_or_init(&self, i: usize, f: impl FnOnce() -> T) -> &T {
+        let (s, k) = self.locate(i);
+        let segment = self
+            .0
+            .get(s as usize)
+            .expect("segment list is out of capacity")
+            .get_or_init(|| {
+                (0..2_usize.pow(s))
+                    .map(|_| OnceLock::new())
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice()
+            });
+        segment[k].get_or_init(f)
     }
 
-    fn locate(&self, i: usize) -> Option<(u32, usize)> {
-        let power = i.checked_add(2)?.checked_next_power_of_two()? / 2;
+    fn locate(&self, i: usize) -> (u32, usize) {
+        let power = (i + 2).next_power_of_two() / 2;
         let s = power.trailing_zeros();
         let k = i - ((1 << s) - 1);
-        Some((s, k))
+        (s, k)
     }
 }
 
@@ -194,16 +184,6 @@ mod tests {
         // i.e. we didn't overallocate.
         for s in 0..8 {
             assert!(e.0[s].get().unwrap().iter().all(|s| s.get().is_some()));
-        }
-    }
-
-    #[test]
-    fn segment_list_rejects_out_of_range_indices() {
-        let list = SegmentList::<u8, 2>::new();
-        assert_eq!(list.get_or_init(2, || 7), Some(&7));
-        for index in [3, 20, usize::MAX - 1, usize::MAX] {
-            assert_eq!(list.get(index), None);
-            assert_eq!(list.get_or_init(index, || 9), None);
         }
     }
 

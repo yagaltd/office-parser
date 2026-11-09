@@ -2713,40 +2713,39 @@ pub fn render_pages_png(bytes: &[u8], dpi: u32) -> Result<Vec<Vec<u8>>> {
 #[cfg(feature = "render-hayro")]
 fn render_pages_png_hayro(bytes: &[u8], dpi: u32) -> Result<Vec<Vec<u8>>> {
     use hayro::hayro_syntax::Pdf;
-    use hayro::{RenderCache, RenderSettings, render_into, render_size};
-    use std::io::Cursor;
+    use hayro::vello_cpu::color::palette::css::WHITE;
+    use hayro::{PixmapSettings, RenderCache, RenderSettings, render};
 
     let pdf = Pdf::new(bytes.to_vec())
         .map_err(|e| anyhow::anyhow!("hayro load: {e:?}"))?;
+    let scale = dpi as f32 / 72.0;
+    // PdfCraft-patched stack (hayro 0.9.0): the render cache is shared across pages; scale
+    // lives in PixmapSettings now. render() itself pre-clamps hostile page boxes to u16 sides
+    // and a 2^28-pixel budget before allocating (PdfCraft patch).
+    let cache = RenderCache::new();
+    let render_settings = RenderSettings::default();
+    let pixmap_settings = PixmapSettings {
+        x_scale: scale,
+        y_scale: scale,
+        bg_color: WHITE,
+    };
     let mut out = Vec::new();
-    for page in pdf.pages().iter() {
-        let (w_pt, h_pt) = page.render_dimensions();
-        let scale = dpi as f32 / 72.0;
-        let rs = RenderSettings {
-            x_scale: scale,
-            y_scale: scale,
-            ..Default::default()
-        };
-        let (w, h) = render_size(page, &rs);
-        let mut buf = vec![255u8; w as usize * h as usize * 4];
-        let cache = RenderCache::new();
-        render_into(
-            &page,
+    for (index, page) in pdf.pages().iter().enumerate() {
+        let rendered = render(
+            page,
             &cache,
             &hayro::hayro_interpret::InterpreterSettings::default(),
-            &rs,
-            &mut buf,
+            &render_settings,
+            &pixmap_settings,
         );
-        let img = image::RgbaImage::from_raw(w as u32, h as u32, buf)
-            .ok_or_else(|| anyhow::anyhow!("hayro render: bad buffer size"))?;
-        let mut png = Vec::new();
-        image::DynamicImage::ImageRgba8(img)
-            .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
-            .map_err(|e| anyhow::anyhow!("hayro png: {e}"))?;
+        let png = rendered
+            .into_png()
+            .map_err(|e| anyhow::anyhow!("hayro png page {index}: {e:?}"))?;
         out.push(png);
     }
     Ok(out)
 }
+
 
 pub fn render_pages_png_opts(bytes: &[u8], dpi: u32, clamp_budget: bool) -> Result<Vec<Vec<u8>>> {
     use std::process::Command;

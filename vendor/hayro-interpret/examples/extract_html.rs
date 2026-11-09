@@ -5,10 +5,10 @@
 //! should be some word/sentence merging algorithm in-place, but this is
 //! out-of-scope for this example.
 
-use hayro_interpret::font::Glyph;
+use hayro_interpret::font::GlyphRun;
 use hayro_interpret::{
-    BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache,
-    InterpreterSettings, Paint, PathDrawMode, SoftMask, interpret_page,
+    BlendMode, ClipPath, Context, Device, DrawMode, DrawProps, Image, ImageDrawProps,
+    InterpreterCache, InterpreterSettings, SoftMask, interpret_page,
 };
 use hayro_syntax::Pdf;
 
@@ -72,51 +72,48 @@ struct TextExtractor {
 
 /// Implement `Device` for `TextExtractor`. We extract Unicode text from glyphs.
 impl Device<'_> for TextExtractor {
-    fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
-
-    fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'_>, _: &PathDrawMode) {}
+    fn draw_path(&mut self, _: &BezPath, _: DrawProps<'_>, _: &DrawMode) {}
 
     fn push_clip_path(&mut self, _: &ClipPath) {}
 
-    fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
-
-    fn draw_glyph(
+    fn push_transparency_group(
         &mut self,
-        glyph: &Glyph<'_>,
-        transform: Affine,
-        glyph_transform: Affine,
-        _: &Paint<'_>,
-        _: &GlyphDrawMode,
+        _: f32,
+        _: Option<SoftMask<'_>>,
+        _: BlendMode,
+        _: bool,
+        _: bool,
     ) {
-        if let Some(unicode_char) = glyph.as_unicode() {
-            // Apply vertical flip transformation to combined transform
-            // to place origin at top-left corner.
-            let flip_transform = Affine::translate((0.0, self.dimensions.1 as f64))
-                * Affine::scale_non_uniform(1.0, -1.0);
-            let transform = flip_transform * transform * glyph_transform;
+    }
 
-            let point = Point::new(0.0, 0.0);
-            let position = transform * point;
+    fn draw_glyph_run(&mut self, glyph_run: &GlyphRun<'_, '_>, props: DrawProps<'_>, _: &DrawMode) {
+        for glyph in glyph_run.glyphs() {
+            if let Some(unicode_char) = glyph.as_unicode() {
+                // Apply vertical flip transformation to combined transform
+                // to place origin at top-left corner.
+                let flip_transform = Affine::translate((0.0, self.dimensions.1 as f64))
+                    * Affine::scale_non_uniform(1.0, -1.0);
+                let transform = flip_transform * props.transform * glyph.transform();
+                let position = transform * Point::ZERO;
 
-            writeln!(
-                self.text,
-                "<div style='position: absolute; color: black; left: {}px; top: {}px; font-size: {}pt'>{}</div>",
-                position.x, position.y, 6, match unicode_char {
-                    BfString::Char(c) => c.to_string(),
-                    BfString::String(s) => s
-                }
-            ).unwrap();
-        } else {
-            // Fallback for glyphs without Unicode mapping.
-            self.text.push('�');
+                writeln!(
+                    self.text,
+                    "<div style='position: absolute; color: black; left: {}px; top: {}px; font-size: {}pt'>{}</div>",
+                    position.x, position.y, 6, match unicode_char {
+                        BfString::Char(c) => c.to_string(),
+                        BfString::String(s) => s
+                    }
+                ).unwrap();
+            } else {
+                // Fallback for glyphs without Unicode mapping.
+                self.text.push('�');
+            }
         }
     }
 
-    fn pop_clip_path(&mut self) {}
+    fn pop_clip(&mut self) {}
 
     fn pop_transparency_group(&mut self) {}
 
-    fn draw_image(&mut self, _: Image<'_, '_>, _: Affine) {}
-
-    fn set_blend_mode(&mut self, _: BlendMode) {}
+    fn draw_image(&mut self, _: Image<'_, '_>, _: ImageDrawProps<'_>) {}
 }

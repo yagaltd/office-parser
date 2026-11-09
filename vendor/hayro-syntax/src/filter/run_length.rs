@@ -33,10 +33,6 @@ pub(crate) fn decode(data: &[u8], limit: usize) -> Option<Vec<u8>> {
         }
     }
 
-    // PdfCraft patch: output cut at the limit is reported, never dropped silently.
-    if decoded.len() >= limit {
-        warn!("run-length stream stopped at its decode limit of {limit} bytes");
-    }
     Some(decoded)
 }
 

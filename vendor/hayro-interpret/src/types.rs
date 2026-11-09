@@ -3,8 +3,9 @@ use crate::color::Color;
 use crate::pattern::Pattern;
 use crate::util::hash128;
 use crate::x_object::ImageXObject;
+use crate::x_object::soft_mask::SoftMask;
 use hayro_syntax::object::Stream;
-use kurbo::{BezPath, Cap, Join};
+use kurbo::{Affine, BezPath, Cap, Join};
 use smallvec::{SmallVec, smallvec};
 
 /// A clip path.
@@ -46,6 +47,13 @@ impl<'a, 'b> StencilImage<'a, 'b> {
         }
     }
 
+    /// Return the underlying stream object.
+    ///
+    /// This allows you to get access to the raw encoded image data, without doing any decoding.
+    pub fn stream(&self) -> &Stream<'b> {
+        self.image_xobject.stream()
+    }
+
     // These are hidden since clients are supposed to call get the
     // width/height from `LumaData` instead.
     #[doc(hidden)]
@@ -81,7 +89,7 @@ impl RasterImage<'_> {
         func: impl FnOnce(ImageData, Option<LumaData>),
         target_dimension: Option<(u32, u32)>,
     ) {
-        if let Some(decoded) = self.0.decoded_raster(target_dimension) {
+        if let Some(decoded) = self.0.decoded_image(target_dimension) {
             func(decoded.image, decoded.alpha);
         }
     }
@@ -268,24 +276,39 @@ impl CacheKey for Paint<'_> {
     }
 }
 
-/// The draw mode that should be used for a path.
+/// Properties for a painted drawing operation.
+#[derive(Clone)]
+pub struct DrawProps<'a> {
+    /// The transform.
+    pub transform: Affine,
+    /// The paint.
+    pub paint: Paint<'a>,
+    /// The soft mask.
+    pub soft_mask: Option<SoftMask<'a>>,
+    /// The blend mode.
+    pub blend_mode: BlendMode,
+}
+
+/// Properties for an image drawing operation.
+#[derive(Clone)]
+pub struct ImageDrawProps<'a> {
+    /// The transform.
+    pub transform: Affine,
+    /// The soft mask.
+    pub soft_mask: Option<SoftMask<'a>>,
+    /// The blend mode.
+    pub blend_mode: BlendMode,
+}
+
+/// The draw mode.
 #[derive(Clone, Debug)]
-pub enum PathDrawMode {
+pub enum DrawMode {
     /// Draw using a fill.
     Fill(FillRule),
     /// Draw using a stroke.
     Stroke(StrokeProps),
-}
-
-/// The draw mode that should be used for a glyph.
-#[derive(Clone, Debug)]
-pub enum GlyphDrawMode {
-    /// Draw using a fill.
-    Fill,
-    /// Draw using a stroke.
-    Stroke(StrokeProps),
-    /// PdfCraft patch: text that shapes a clip; report it without painting a glyph.
-    Clip,
+    /// Draw using both fill and stroke.
+    FillAndStroke(FillRule, StrokeProps),
     /// Invisible text (for text extraction but not visual rendering).
     Invisible,
 }
