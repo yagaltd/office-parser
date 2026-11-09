@@ -66,7 +66,8 @@ Parallel notes: TASK_2 (vendor/ + src/render.rs + Cargo.toml) and TASK_3 (`.work
 - **Testing strategy**: example-based
 - **What**: vendor/ = 0.9.0 copies of hayro, hayro-syntax, hayro-interpret, hayro-cmap + NEW hayro-font; re-apply the 10 families per the TASK 1 anchors (patch marks preserved, `PdfCraft patch:` convention); DELETE vendor dirs hayro-jbig2, hayro-postscript, vello_common, vello_cpu (registry serves; update `[patch.crates-io]` + workspace excludes); rewrite the glue in pdf.rs against render()/PixmapSettings; **re-baseline** any fixture-locked transcript diffs with per-fixture verdict records (decision 3).
 - **Verify**: `cargo build --features render-hayro` green; all 5 fixtures render non-blank rasters through hayro; parser matrix green post re-baseline; `ls vendor/` shows exactly hayro, hayro-syntax, hayro-interpret, hayro-cmap, hayro-font (+hayro-jbig2 etc. REMOVED).
-- **Status**: ⬜ PENDING
+- **context**: updated
+- **Status**: ✅ DONE (T2b branch merged 8f8f994; 90/0 hayro matrix; no re-baseline needed; verdict .workflows/reviews/task-2.md)
 
 ### TASK 3 (🟠): Bake-off harness + real-scans slot
 - **Agent**: worker
