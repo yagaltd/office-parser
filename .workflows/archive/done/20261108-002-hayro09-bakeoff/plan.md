@@ -2,7 +2,7 @@
 
 > Plan ID: 20261108-002
 > Created: 2026-11-09
-> Status: APPROVED (human 2026-11-09 — scope (b), flip rule, re-baseline (a), corpus (b))
+> Status: DONE (shipped 2026-11-09 — 6/6 tasks ok:true; review PASS, 10 findings fixed; archive 20261108-002-hayro09-bakeoff)
 
 ## Lifecycle
 - Plan ID assigned per archive count: 1 done entry + 0 superseded + 1 = **002**. Never reused.
