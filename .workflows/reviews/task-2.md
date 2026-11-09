@@ -23,3 +23,15 @@ Evidence:
 - cargo tree: 0 rusto crates; hayro-font present in the render-hayro graph.
 - Gate-side fixes recorded: hayro-ccitt?/std dropped (published 0.5.0 has
   no features table), merged over the worker branch cleanly.
+
+## Review addendum (bug-hunter-002, 2026-11-09)
+
+10 findings on the 002 diff — **all fixed pre-ship, committed c07a231**:
+P1-1 knockout-erase re-entrancy (one-line gate), P2-1 CMYK ink
+unsupported-on-image/pattern, P2-2 straight-alpha metadata, P2-3 cmap
+section resync (5 parsers), P2-4 dead pdfium sniff marker, P3-1 per-axis
+clamp, P3-3 device-space glyph extent, P3-4 decode-before-gate, P3-5 WER
+alignment doc. Accepted deviation: P3-2 clamp_budget threading (hayro's
+budget clamp is a safety bound; 200 dpi OCR never approaches it).
+Post-fix verification: check/build green, hayro non-blank ok, 90/0 +
+98/0 matrices, harness selfcheck 0.
