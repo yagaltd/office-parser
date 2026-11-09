@@ -158,6 +158,17 @@ impl<'a> BitWriter<'a> {
         }
     }
 
+    /// Fill `count` whole bytes with `byte`, from the current (byte-aligned) position.
+    pub fn fill_bytes(&mut self, byte: u8, count: usize) -> Option<()> {
+        debug_assert_eq!(self.cur_pos % 8, 0);
+
+        let start = self.cur_pos / 8;
+        let end = start + count;
+        self.data.get_mut(start..end)?.fill(byte);
+        self.cur_pos += count * 8;
+        Some(())
+    }
+
     /// Return the number of written bits.
     #[inline]
     pub fn cur_pos(&self) -> usize {

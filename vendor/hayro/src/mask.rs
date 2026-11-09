@@ -1,12 +1,18 @@
-use crate::{GlobalState, Renderer, convert_blend_mode, derive_settings};
+use crate::{GlobalState, Renderer, convert_blend_mode, derive_settings, knockout_blend_mode};
 use hayro_interpret::{BlendMode, CacheKey, MaskType, SoftMask};
-use kurbo::Rect;
+use kurbo::{Affine, BezPath, Rect};
 use vello_cpu::color::palette::css::BLACK;
 use vello_cpu::color::{AlphaColor, Srgb};
+use vello_cpu::peniko::Fill;
 use vello_cpu::{Mask, Pixmap, RenderSettings};
 
 impl Renderer<'_> {
     pub(super) fn apply_soft_mask(&mut self, mask: Option<&SoftMask<'_>>) {
+        // PdfCraft patch: an erase pass clears, it does not apply soft masks.
+        if self.erasing {
+            self.ctx.reset_mask();
+            return;
+        }
         let settings = *self.ctx.render_settings();
         let global = self.global;
         let mask = mask.map(|m| {
@@ -31,6 +37,7 @@ impl Renderer<'_> {
         opacity: f32,
         mask: Option<SoftMask<'_>>,
         blend_mode: BlendMode,
+        knockout: bool,
     ) {
         let settings = *self.ctx.render_settings();
         let global = self.global;
@@ -50,10 +57,40 @@ impl Renderer<'_> {
             }),
             None,
         );
+        // PdfCraft patch: the group's elements knock each other out (#2971).
+        self.knockout.push(knockout);
+        if knockout {
+            self.ctx.set_blend_mode(knockout_blend_mode());
+        }
     }
 
     pub(super) fn pop_transparency_group(&mut self) {
         self.ctx.pop_layer();
+        if !self.knockout.is_empty() {
+            // PdfCraft patch: restore the knockout blend mode of the enclosing group, if any.
+            if self.in_knockout() {
+                self.ctx.set_blend_mode(knockout_blend_mode());
+            }
+        }
+    }
+
+    /// PdfCraft patch: clear what the knockout group drew under `shape` (a transparent fill
+    /// with `Compose::Copy`, weighted by coverage) before a nested element drawn into a layer
+    /// of its own composites there, so the element replaces it.
+    pub(crate) fn knockout_erase_shape(&mut self, shape: &BezPath) {
+        if !self.in_knockout() || self.erasing {
+            return;
+        }
+        let old_transform = *self.ctx.transform();
+        let old_rule = *self.ctx.fill_rule();
+        self.ctx.set_transform(Affine::IDENTITY);
+        self.ctx.set_fill_rule(Fill::NonZero);
+        self.ctx.set_blend_mode(knockout_blend_mode());
+        self.ctx
+            .set_paint(AlphaColor::<Srgb>::new([0.0, 0.0, 0.0, 0.0]));
+        self.ctx.fill_path(shape);
+        self.ctx.set_fill_rule(old_rule);
+        self.ctx.set_transform(old_transform);
     }
 }
 

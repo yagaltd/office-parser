@@ -66,7 +66,10 @@ pub(crate) fn decode_content<'a>(stream: &Stream<'a>) -> Option<DecodedContent<'
         CONTENT_TRUNCATED.with(|truncated| truncated.set(true));
         return None;
     }
-    let data = stream.decoded_within(left).ok()?;
+    let data = stream
+        .decoded_within(&hayro_syntax::object::stream::ImageDecodeParams::default(), left)
+        .ok()?
+        .data;
     let held = match &data {
         Cow::Owned(v) => v.len(),
         Cow::Borrowed(_) => 0,
@@ -106,20 +109,11 @@ impl<'a> Default for InterpreterCache<'a> {
 
 impl<'a> InterpreterCache<'a> {
     /// Create a new interpreter cache.
-    pub     /// Create a new context.
-    pub fn new(
-        initial_transform: Affine,
-        bbox: Rect,
-        cache: &InterpreterCache<'a>,
-        xref: &'a XRef,
-        settings: InterpreterSettings,
-    ) -> Self {
-        let state = State::new(initial_transform);
-        // PdfCraft patch: a page (or other top-level content) starts with a fresh content budget.
-        CONTENT_LEFT.with(|c| c.set(MAX_PAGE_CONTENT));
-        CONTENT_TRUNCATED.with(|truncated| truncated.set(false));
-
-        Self::new_with(initial_transform, bbox, cache, xref, settings, state, 0)
+    pub fn new() -> Self {
+        Self {
+            font_cache: FontCache::new(),
+            object_cache: Cache::new(),
+        }
     }
 }
 
@@ -150,6 +144,9 @@ impl<'a> Context<'a> {
         settings: InterpreterSettings,
     ) -> Self {
         let state = State::new(initial_transform);
+        // PdfCraft patch: a page (or other top-level content) starts with a fresh content budget.
+        CONTENT_LEFT.with(|c| c.set(MAX_PAGE_CONTENT));
+        CONTENT_TRUNCATED.with(|truncated| truncated.set(false));
 
         Self::new_with(initial_transform, bbox, cache, xref, settings, state, 0)
     }

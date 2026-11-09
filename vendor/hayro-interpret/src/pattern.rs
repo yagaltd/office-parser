@@ -234,7 +234,8 @@ impl<'a> TilingPattern<'a> {
             self.nesting_depth,
         );
 
-        let decoded = self.stream.decoded_data().ok()?;
+        // PdfCraft patch: see `context::MAX_PAGE_CONTENT`.
+        let decoded = crate::context::decode_content(&self.stream)?;
         let iter = TypedIter::new(decoded.as_ref());
 
         let clip_path = ClipPath {

@@ -31,7 +31,8 @@ pub(crate) fn render_glyph<'a>(
     state.text_state = TextState::default();
 
     let program = glyph.glyph.program()?;
-    let decoded = program.decoded_data().ok()?;
+    // PdfCraft patch: see `context::MAX_PAGE_CONTENT`.
+    let decoded = crate::context::decode_content(&program)?;
     let iter = TypedIter::new(decoded.as_ref());
 
     let is_shape_glyph = {

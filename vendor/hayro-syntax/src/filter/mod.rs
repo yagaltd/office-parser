@@ -63,7 +63,7 @@ impl Filter {
         }
     }
 
-    pub(crate)     pub(crate) fn apply(
+    pub(crate) fn apply(
         &self,
         data: &[u8],
         params: &Dict<'_>,

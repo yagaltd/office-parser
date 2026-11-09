@@ -24,7 +24,6 @@ pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterRe
         resolve_palette_indices: false,
         strict: false,
         target_resolution: params.target_dimension,
-        cancel: None,
     };
 
     let image = hayro_jpeg2000::Image::new(data, &settings).ok()?;
@@ -53,7 +52,7 @@ pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterRe
     };
     let has_alpha = image.has_alpha();
     let mut decoder_context = hayro_jpeg2000::DecoderContext::default();
-    let bitmap = image.decode(&mut decoder_context).ok()?.data_u8().ok()?;
+    let bitmap = image.decode(&mut decoder_context).ok()?.data_u8();
 
     let (mut data, mut alpha) = if !has_alpha {
         (bitmap, None)

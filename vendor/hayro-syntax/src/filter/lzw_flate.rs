@@ -4,14 +4,13 @@ pub(crate) mod flate {
     use alloc::vec::Vec;
 
     /// PdfCraft patch: `limit` is the most bytes inflated (see `filter::decode_limit`).
-    pub(crate)     /// Decode a LZW-encoded stream.
+    /// Decode a flate-encoded stream.
     pub(crate) fn decode(data: &[u8], params: &Dict<'_>, limit: usize) -> Option<Vec<u8>> {
-        let early_change = params
-            .get::<u8>(EARLY_CHANGE)
-            .map(|e| e != 0)
-            .unwrap_or(true);
-        let decoded = decode_impl(data, early_change, limit)?;
-
+        let data = zlib_body(data).unwrap_or(data);
+        // Broken encoders can refer to data before the start, which should read as zeros.
+        let decoded = inflate(data, false, limit)
+            .or_else(|_| inflate(data, true, limit))
+            .unwrap_or_else(|partial| partial);
         predictor::apply(decoded, params)
     }
 
@@ -128,12 +127,12 @@ pub(crate) mod lzw {
     use alloc::vec::Vec;
 
     /// Decode a LZW-encoded stream.
-    pub(crate) fn decode(data: &[u8], params: &Dict<'_>) -> Option<Vec<u8>> {
+    pub(crate) fn decode(data: &[u8], params: &Dict<'_>, limit: usize) -> Option<Vec<u8>> {
         let early_change = params
             .get::<u8>(EARLY_CHANGE)
             .map(|e| e != 0)
             .unwrap_or(true);
-        let decoded = decode_impl(data, early_change)?;
+        let decoded = decode_impl(data, early_change, limit)?;
 
         predictor::apply(decoded, params)
     }
@@ -143,7 +142,7 @@ pub(crate) mod lzw {
     const MAX_ENTRIES: usize = 4096;
     const INITIAL_SIZE: u16 = 258;
 
-        fn decode_impl(data: &[u8], early_change: bool, limit: usize) -> Option<Vec<u8>> {
+    fn decode_impl(data: &[u8], early_change: bool, limit: usize) -> Option<Vec<u8>> {
         let mut table = Table::new(early_change);
         let mut bit_size = table.code_length();
         let mut reader = BitReader::new(data);

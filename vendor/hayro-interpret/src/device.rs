@@ -45,168 +45,34 @@ pub trait Device<'a> {
     fn draw_rect(&mut self, rect: &Rect, props: DrawProps<'a>, draw_mode: &DrawMode) {
         self.draw_path(&rect.to_path(0.1), props, draw_mode);
     }
+    /// PdfCraft patch: whether a transparency group drawn now is an element of a knockout
+    /// group that the device wants cleared under the group's shape first. If so the
+    /// interpreter draws the group's content once between `begin_knockout_erase` and
+    /// `end_knockout_erase`, in which every paint clears what is under its shape instead of
+    /// painting, and then draws the group as usual, in a layer of its own.
+    fn knockout_erase_wanted(&mut self) -> bool {
+        false
+    }
+    /// PdfCraft patch: see `knockout_erase_wanted`.
+    fn begin_knockout_erase(&mut self) {}
+    /// PdfCraft patch: see `knockout_erase_wanted`.
+    fn end_knockout_erase(&mut self) {}
+    /// PdfCraft patch: draw the contents of an isolated transparency group that blends in
+    /// `DeviceCMYK` (ISO 32000-2 §11.3.4), already inside the layer it is composited
+    /// through. Return `true` when the device drew them; on `false` (the default) the
+    /// interpreter draws the contents into the device as for any other group.
+    fn draw_isolated_cmyk_group(&mut self, _group: &CmykGroup<'a, '_>) -> bool {
+        false
+    }
+    /// PdfCraft patch: an isolated transparency group that names a blending colour space
+    /// other than `DeviceCMYK` is about to be drawn. A device drawing an enclosing group in
+    /// CMYK can no longer draw that group right, since this one blends in its own space.
+    fn group_blends_outside_device_cmyk(&mut self) {}
     /// Called at the beginning of a marked content sequence (BMC/BDC).
     ///
     /// The tag is the marked content tag (e.g. b"P", b"Span"). The properties are the property list
     /// dictionary.
-        pub(crate) fn draw(
-        &self,
-        resources: &Resources<'a>,
-        context: &mut Context<'a>,
-        device: &mut impl Device<'a>,
-    ) {
-        if !context.ocg_state.is_visible() {
-            return;
-        }
-
-        if !context.begin_nested_interpretation() {
-            return;
-        }
-
-        let has_oc = xobject_oc(&self.dict, context);
-        if !context.ocg_state.is_visible() {
-            if has_oc {
-                context.ocg_state.end_marked_content();
-            }
-            context.end_nested_interpretation();
-            return;
-        }
-
-        let iter = TypedIter::new(self.decoded.as_ref());
-
-        context.path_mut().truncate(0);
-        context.save_state();
-        context.pre_concat_affine(self.matrix);
-        context.push_root_transform();
-
-        // PdfCraft patch: a transparency group that is neither isolated nor knockout composites
-        // its elements with the backdrop already on the page (§11.4.7), so when it is entered at
-        // full opacity with no soft mask and Normal blending there is nothing for a layer of its
-        // own to add, and drawing straight onto the page is the exact result. A layer here was
-        // wrong, not just slower: a blend mode inside the group saw the layer's transparent
-        // backdrop instead of the content beneath, and the layer then covered the page as an
-        // opaque block. An isolated group starts from a blank backdrop by definition, and a
-        // knockout group or one entered at partial opacity, under a soft mask or with a blend
-        // mode keeps its layer.
-        let entered_plainly = {
-            let state = context.fill_paint();
-            let stroke = context.stroke_paint();
-            state.alpha >= 1.0
-                && stroke.alpha >= 1.0
-                && context.compositing().soft_mask.is_none()
-                && context.compositing().blend_mode == crate::BlendMode::Normal
-        };
-        let own_layer = self.is_transparency_group && (self.isolated || self.knockout || !entered_plainly);
-
-        // PdfCraft patch: a group drawn as an element of a knockout group replaces what that
-        // group drew under its shape. The shape is cleared by drawing the group's content once
-        // in the device's erase mode; the group then composites over the cleared area in a
-        // layer of its own.
-        let knockout_element = self.is_transparency_group && device.knockout_erase_wanted();
-        if knockout_element {
-            context.save_state();
-            device.begin_knockout_erase();
-            device.push_clip_path(&ClipPath {
-                path: context.ctm()
-                    * Rect::new(
-                        self.bbox[0] as f64,
-                        self.bbox[1] as f64,
-                        self.bbox[2] as f64,
-                        self.bbox[3] as f64,
-                    )
-                    .to_path(0.1),
-                fill: FillRule::NonZero,
-            });
-            interpret(
-                iter.clone(),
-                self.resources.as_ref().unwrap_or(resources),
-                context,
-                device,
-            );
-            device.pop_clip();
-            device.end_knockout_erase();
-            context.restore_state(device);
-            context.path_mut().truncate(0);
-        }
-
-        if own_layer {
-            device.push_transparency_group(
-                context.fill_paint().alpha,
-                std::mem::take(&mut context.compositing_mut().soft_mask),
-                std::mem::take(&mut context.compositing_mut().blend_mode),
-                self.isolated,
-                self.knockout,
-            );
-
-            context.fill_paint_mut().alpha = 1.0;
-            context.stroke_paint_mut().alpha = 1.0;
-        }
-
-        // PdfCraft patch: an isolated group that names another blending space blends in that
-        // space (§11.3.4); a device drawing an enclosing group in CMYK is told, so it can
-        // decline that group. A non-isolated group's /CS is ignored: it blends in its parent's
-        // space (ISO 32000-2 Table 145, CS).
-        if self.is_transparency_group
-            && self.isolated
-            && names_a_blending_space(&self.dict)
-            && !blends_in_device_cmyk(&self.dict)
-        {
-            device.group_blends_outside_device_cmyk();
-        }
-
-        // PdfCraft patch: an isolated group blending in DeviceCMYK starts from a backdrop of
-        // its own, so a device able to blend in CMYK computes its interior apart and composites
-        // the result through the layer pushed above (see `cmyk_group`). Knockout groups are
-        // left out: their elements composite with the group's initial backdrop, not with each
-        // other.
-        let blended_in_cmyk = own_layer
-            && self.isolated
-            && !self.knockout
-            && blends_in_device_cmyk(&self.dict)
-            && device.draw_isolated_cmyk_group(&CmykGroup::new(
-                self,
-                self.resources.as_ref().unwrap_or(resources),
-                context,
-            ));
-
-        if !blended_in_cmyk {
-            device.push_clip_path(&ClipPath {
-                path: context.ctm()
-                    * Rect::new(
-                        self.bbox[0] as f64,
-                        self.bbox[1] as f64,
-                        self.bbox[2] as f64,
-                        self.bbox[3] as f64,
-                    )
-                    .to_path(0.1),
-                fill: FillRule::NonZero,
-            });
-
-            interpret(
-                iter,
-                self.resources.as_ref().unwrap_or(resources),
-                context,
-                device,
-            );
-
-            device.pop_clip();
-        }
-
-        if own_layer {
-            device.pop_transparency_group();
-        }
-
-        context.pop_root_transform();
-        context.restore_state(device);
-
-        if has_oc {
-            context.ocg_state.end_marked_content();
-        }
-
-        context.end_nested_interpretation();
-    }
-
-fn begin_marked_content(&mut self, _tag: &[u8], _properties: Option<&Dict<'_>>) {}
+    fn begin_marked_content(&mut self, _tag: &[u8], _properties: Option<&Dict<'_>>) {}
     /// Called at the end of a marked content sequence (EMC).
     fn end_marked_content(&mut self) {}
 }

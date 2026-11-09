@@ -253,7 +253,7 @@ impl<'a> Page<'a> {
     }
 
     /// Return the decoded content stream of the page.
-    pub     /// Return the decoded content stream of the page.
+    /// Return the decoded content stream of the page.
     pub fn page_stream(&self) -> Option<&[u8]> {
         // PdfCraft patch: the most bytes one page's decoded /Contents may hold. Every stream is
         // already capped by `MAX_DECODED_STREAM`; the total is capped here so a page with many

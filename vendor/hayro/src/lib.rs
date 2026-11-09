@@ -63,6 +63,7 @@ use vello_cpu::peniko::{Compose, Fill, Mix};
 use vello_cpu::{Mask, Pixmap, RenderContext, peniko};
 
 mod clip;
+mod cmyk;
 mod glyph;
 mod glyph_cache;
 mod image;
@@ -107,6 +108,12 @@ pub(crate) struct Renderer<'a> {
     pub(crate) inside_pattern: bool,
     pub(crate) soft_mask_cache: FxHashMap<u128, Mask>,
     pub(crate) in_type3_glyph: bool,
+    // PdfCraft patch: knockout machinery (see `set_knockout`) and the ink pass of a group
+    // blending in DeviceCMYK (see `cmyk`).
+    pub(crate) knockout: Vec<bool>,
+    pub(crate) erasing: bool,
+    pub(crate) erase_groups: usize,
+    pub(crate) ink: cmyk::InkState,
 }
 
 impl<'r> Renderer<'r> {
@@ -117,12 +124,21 @@ impl<'r> Renderer<'r> {
             inside_pattern: false,
             soft_mask_cache: FxHashMap::default(),
             in_type3_glyph: false,
+            knockout: Vec::new(),
+            erasing: false,
+            erase_groups: 0,
+            ink: cmyk::InkState::default(),
         }
     }
 
     fn misses_target(&self, bbox: Rect) -> bool {
         let target = Rect::new(0.0, 0.0, self.ctx.width() as f64, self.ctx.height() as f64);
         !bbox.overlaps(target)
+    }
+
+    // PdfCraft patch: whether the innermost transparency group is a knockout group.
+    pub(crate) fn in_knockout(&self) -> bool {
+        self.knockout.last().copied().unwrap_or(false)
     }
 
     fn child_context(&self, width: u16, height: u16) -> RenderContext {
@@ -134,16 +150,27 @@ impl<'r> Renderer<'r> {
 
     fn apply_draw_props(&mut self, props: &DrawProps<'_>) {
         self.ctx.set_transform(props.transform);
+        // PdfCraft patch: inside a knockout group every element replaces what it covers; in an
+        // erase pass it clears what is under its shape instead of painting.
+        if self.erasing {
+            self.ctx.set_blend_mode(knockout_blend_mode());
+        } else if self.in_knockout() {
+            self.ctx.set_blend_mode(knockout_blend_mode());
+        } else {
+            self.ctx.set_blend_mode(convert_blend_mode(props.blend_mode));
+        }
         self.apply_soft_mask(props.soft_mask.as_ref());
-        self.ctx
-            .set_blend_mode(convert_blend_mode(props.blend_mode));
     }
 
     fn apply_image_props(&mut self, props: &ImageDrawProps<'_>) {
         self.ctx.set_transform(props.transform);
+        // PdfCraft patch: see `apply_draw_props`.
+        if self.erasing || self.in_knockout() {
+            self.ctx.set_blend_mode(knockout_blend_mode());
+        } else {
+            self.ctx.set_blend_mode(convert_blend_mode(props.blend_mode));
+        }
         self.apply_soft_mask(props.soft_mask.as_ref());
-        self.ctx
-            .set_blend_mode(convert_blend_mode(props.blend_mode));
     }
 }
 
@@ -165,10 +192,17 @@ impl<'a, 'r> Device<'a> for Renderer<'r> {
         opacity: f32,
         mask: Option<SoftMask<'a>>,
         blend_mode: BlendMode,
-        _: bool,
-        _: bool,
+        isolated: bool,
+        knockout: bool,
     ) {
-        Self::push_transparency_group(self, opacity, mask, blend_mode);
+        // PdfCraft patch: nothing is layered in a knockout erase pass.
+        if self.erasing {
+            self.erase_groups += 1;
+            return;
+        }
+        let _ = isolated; // PdfCraft patch: group layers here already start from a blank
+                          // backdrop, which is the isolated behaviour.
+        Self::push_transparency_group(self, opacity, mask, blend_mode, knockout);
     }
 
     fn pop_clip(&mut self) {
@@ -176,7 +210,39 @@ impl<'a, 'r> Device<'a> for Renderer<'r> {
     }
 
     fn pop_transparency_group(&mut self) {
+        // PdfCraft patch: nothing is layered in a knockout erase pass.
+        if self.erasing && self.erase_groups > 0 {
+            self.erase_groups -= 1;
+            return;
+        }
+        self.knockout.pop();
+
         Self::pop_transparency_group(self);
+    }
+
+    fn draw_isolated_cmyk_group(&mut self, group: &hayro_interpret::CmykGroup<'a, '_>) -> bool {
+        Self::draw_isolated_cmyk_group(self, group)
+    }
+
+    fn group_blends_outside_device_cmyk(&mut self) {
+        Self::group_blends_outside_device_cmyk(self)
+    }
+
+    fn knockout_erase_wanted(&mut self) -> bool {
+        self.in_knockout()
+    }
+
+    fn begin_knockout_erase(&mut self) {
+        self.erasing = true;
+        self.erase_groups = 0;
+    }
+
+    fn end_knockout_erase(&mut self) {
+        self.erasing = false;
+        self.erase_groups = 0;
+        if self.in_knockout() {
+            self.ctx.set_blend_mode(knockout_blend_mode());
+        }
     }
 
     fn draw_path(&mut self, path: &BezPath, props: DrawProps<'a>, draw_mode: &DrawMode) {
@@ -285,14 +351,40 @@ pub fn render<'a>(
     pixmap_settings: &PixmapSettings,
 ) -> Pixmap {
     let (width, height) = page.render_dimensions();
+    // PdfCraft patch: the pixel dimensions are pre-clamped in u32 before the u16 casts, so a
+    // hostile page box cannot produce a 65535 × 65535 canvas: the scales are lowered until the
+    // output fits both the backend's sides and a 2^28-pixel budget (the renderer's image cap).
+    const MAX_RENDER_PIXELS: u64 = 1 << 28;
+    let mut x_scale = pixmap_settings.x_scale;
+    let mut y_scale = pixmap_settings.y_scale;
+    if x_scale.is_finite() && y_scale.is_finite() && x_scale > 0.0 && y_scale > 0.0 {
+        let fit_side = |s: f32| {
+            let max = u64::from(u16::MAX);
+            if (height.max(0.0) as f64 * s as f64) as u64 > max {
+                max as f32 / height.max(1.0) as f32
+            } else {
+                s
+            }
+        };
+        x_scale = fit_side(x_scale);
+        y_scale = fit_side(y_scale);
+        let pixels = (width.max(0.0) as f64 * x_scale as f64) as u64
+            * (height.max(0.0) as f64 * y_scale as f64) as u64;
+        if pixels > MAX_RENDER_PIXELS {
+            let shrink = (MAX_RENDER_PIXELS as f64 / pixels.max(1) as f64).sqrt();
+            x_scale *= shrink as f32;
+            y_scale *= shrink as f32;
+        }
+    } else {
+        x_scale = 0.0;
+        y_scale = 0.0;
+    }
     let mut ctx = RenderContext::new(
-        (width * pixmap_settings.x_scale) as u16,
-        (height * pixmap_settings.y_scale) as u16,
+        (width.max(0.0) * x_scale) as u16,
+        (height.max(0.0) * y_scale) as u16,
     );
-    let transform = Affine::scale_non_uniform(
-        pixmap_settings.x_scale as f64,
-        pixmap_settings.y_scale as f64,
-    ) * page.initial_transform(true).to_kurbo();
+    let transform = Affine::scale_non_uniform(x_scale as f64, y_scale as f64)
+        * page.initial_transform(true).to_kurbo();
     render_into(
         page,
         cache,
@@ -406,6 +498,18 @@ pub(crate) fn derive_settings(settings: &vello_cpu::RenderSettings) -> vello_cpu
         num_threads: 0,
         ..*settings
     }
+}
+
+/// PdfCraft patch: inside a knockout group every element replaces what it covers: elements are
+/// drawn with `Compose::Copy`, which (weighted by coverage) replaces what earlier elements drew
+/// where the element's shape is, so each element composites with the group's initial backdrop
+/// (transparent: the non-isolated approximation every group layer here already makes) instead of
+/// with the elements before it. Against a transparent backdrop the element's own blend mode has
+/// nothing to blend with, so the mix is Normal. This covers paths, strokes, glyph outlines,
+/// images and shadings drawn directly; elements drawn into a layer of their own are preceded by
+/// a knockout erase pass (see `Device::begin_knockout_erase`).
+pub(crate) fn knockout_blend_mode() -> peniko::BlendMode {
+    peniko::BlendMode::new(Mix::Normal, Compose::Copy)
 }
 
 fn convert_fill_rule(fill_rule: FillRule) -> Fill {
