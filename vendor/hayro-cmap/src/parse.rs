@@ -15,7 +15,7 @@ struct Context<F> {
     get_cmap: F,
 }
 
-pub(crate) pub(crate) fn parse_inner<'a>(
+pub(crate) fn parse_inner<'a>(
     data: &[u8],
     get_cmap: impl Fn(CMapName<'_>) -> Option<&'a [u8]> + Clone + 'a,
     depth: u32,

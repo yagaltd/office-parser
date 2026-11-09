@@ -28,8 +28,6 @@ pub(crate) mod stack;
 pub(crate) mod state;
 pub(crate) mod text;
 
-const ANNOTATION_HIDDEN: u32 = 1 << 1;
-const ANNOTATION_NO_VIEW: u32 = 1 << 5;
 const ANNOTATION_INVISIBLE: u32 = 1 << 0;
 const ANNOTATION_HIDDEN: u32 = 1 << 1;
 const ANNOTATION_NO_ROTATE: u32 = 1 << 4;
@@ -148,7 +146,6 @@ pub enum InterpreterWarning {
 }
 
 /// interpret the contents of the page and render them into the device.
-pub /// interpret the contents of the page and render them into the device.
 pub fn interpret_page<'a>(
     page: &Page<'a>,
     context: &mut Context<'a>,

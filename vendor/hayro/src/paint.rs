@@ -18,12 +18,23 @@ impl Renderer<'_> {
         path_bbox: impl Fn() -> Rect,
         is_stroke: bool,
     ) -> Option<BezPath> {
+        // PdfCraft patch: in a knockout erase pass every paint clears what is under its shape
+        // instead of painting: the path region is identical, only the paint differs.
+        if self.erasing {
+            self.ctx.set_paint_transform(Affine::IDENTITY);
+            self.ctx
+                .set_paint(AlphaColor::<Srgb>::new([0.0, 0.0, 0.0, 0.0]));
+            return None;
+        }
+
         let mut paint_transform = Affine::IDENTITY;
         let mut clip_path = None;
 
         let paint: PaintType = match paint.clone() {
             Paint::Color(c) => {
-                let c = c.to_rgba().to_rgba8();
+                // PdfCraft patch: in an ink pass of a DeviceCMYK group a colour paints its
+                // pass's ink; with no pass under way the colour is drawn unchanged.
+                let c = self.ink.paint(&c).to_rgba8();
                 AlphaColor::from_rgba8(c[0], c[1], c[2], c[3]).into()
             }
             Paint::Pattern(p) => {

@@ -2,7 +2,7 @@ use hayro_syntax::object::dict::keys::{BASE_STATE, D, OCGS, OCMD, OCPROPERTIES, 
 use hayro_syntax::object::{Array, Dict, MaybeRef, Name, Object, ObjectIdentifier};
 use std::collections::HashSet;
 
-pub(crate) pub(crate) struct OcgState {
+pub(crate) struct OcgState {
     inactive_ocgs: HashSet<ObjectIdentifier>,
     /// PdfCraft patch: every group the document lists in `/OCProperties /OCGs`, so a
     /// visibility expression naming anything else is known to be malformed.
@@ -10,7 +10,8 @@ pub(crate) pub(crate) struct OcgState {
     visibility_stack: Vec<bool>,
 }
 
-        fn dummy() -> Self {
+impl OcgState {
+    fn dummy() -> Self {
         Self {
             inactive_ocgs: HashSet::default(),
             known_ocgs: HashSet::default(),
@@ -18,17 +19,16 @@ pub(crate) pub(crate) struct OcgState {
         }
     }
 
-fn from_catalog(catalog: &Dict<'_>) ->         Self {
-            inactive_ocgs: inactive,
-            known_ocgs: known,
-            visibility_stack: Vec::new(),
+    pub(crate) fn from_catalog(catalog: &Dict<'_>) -> Self {
+        let Some(oc_properties) = catalog.get::<Dict<'_>>(OCPROPERTIES) else {
+            return Self::dummy();
         };
 
         let Some(config) = oc_properties.get::<Dict<'_>>(D) else {
             return Self::dummy();
         };
 
-                let mut inactive = HashSet::new();
+        let mut inactive = HashSet::new();
         // PdfCraft patch: the groups the document declares.
         let known: HashSet<ObjectIdentifier> = oc_properties
             .get::<Array<'_>>(OCGS)
@@ -76,6 +76,7 @@ fn from_catalog(catalog: &Dict<'_>) ->         Self {
 
         Self {
             inactive_ocgs: inactive,
+            known_ocgs: known,
             visibility_stack: Vec::new(),
         }
     }
@@ -87,7 +88,6 @@ fn from_catalog(catalog: &Dict<'_>) ->         Self {
     }
 
     pub(crate) fn begin_ocmd(&mut self, ocmd: &Dict<'_>) {
-    pub(crate) fn begin_ocmd(&mut self, ocmd: &Dict<'_>) {
         // PdfCraft patch: a visibility expression takes precedence over /OCGs and /P
         // (ISO 32000-2 §8.11.2.2); a malformed one is ignored and they decide instead.
         if let Some(visible) = ocmd
@@ -98,9 +98,6 @@ fn from_catalog(catalog: &Dict<'_>) ->         Self {
             self.visibility_stack.push(visible);
             return;
         }
-
-        let policy = ocmd
-// … rest of the upstream body unchanged …
 
         let policy = ocmd
             .get::<Name<'_>>(P)
@@ -133,27 +130,6 @@ fn from_catalog(catalog: &Dict<'_>) ->         Self {
         let visible = self.is_visible() && is_active;
         self.visibility_stack.push(visible);
     }
-
-    pub(crate) fn begin_ocg(&mut self, props: &Dict<'_>, ref_id: ObjectIdentifier) {
-        match props.get::<Name<'_>>(TYPE).as_deref() {
-            Some(OCMD) => self.begin_ocmd(props),
-            _ => self.begin_single_oc(ref_id),
-        }
-    }
-
-    pub(crate) fn begin_marked_content(&mut self) {
-        let visible = self.is_visible();
-        self.visibility_stack.push(visible);
-    }
-
-    pub(crate) fn end_marked_content(&mut self) {
-        self.visibility_stack.pop();
-    }
-
-    pub(crate) fn is_visible(&self) -> bool {
-        self.visibility_stack.last().copied().unwrap_or(true)
-    }
-}
 
     /// PdfCraft patch: evaluate a visibility expression (`/VE`, PDF 1.6): `[/And e…]`,
     /// `[/Or e…]` or `[/Not e]`, each `e` an optional content group (by reference) or a nested
@@ -196,6 +172,26 @@ fn from_catalog(catalog: &Dict<'_>) ->         Self {
         }
     }
 
+    pub(crate) fn begin_ocg(&mut self, props: &Dict<'_>, ref_id: ObjectIdentifier) {
+        match props.get::<Name<'_>>(TYPE).as_deref() {
+            Some(OCMD) => self.begin_ocmd(props),
+            _ => self.begin_single_oc(ref_id),
+        }
+    }
+
+    pub(crate) fn begin_marked_content(&mut self) {
+        let visible = self.is_visible();
+        self.visibility_stack.push(visible);
+    }
+
+    pub(crate) fn end_marked_content(&mut self) {
+        self.visibility_stack.pop();
+    }
+
+    pub(crate) fn is_visible(&self) -> bool {
+        self.visibility_stack.last().copied().unwrap_or(true)
+    }
+}
 
 impl Default for OcgState {
     fn default() -> Self {
@@ -203,10 +199,10 @@ impl Default for OcgState {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 /// PdfCraft patch: how deep visibility expressions may nest; deeper ones are malformed.
 const MAX_VISIBILITY_EXPRESSION_DEPTH: usize = 32;
 
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 enum BaseState {
     On,
     Off,

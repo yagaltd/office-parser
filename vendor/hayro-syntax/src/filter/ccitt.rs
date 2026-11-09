@@ -39,7 +39,6 @@ pub(crate) fn decode(
             EncodingMode::Group3_2D
         },
         strict: false,
-        cancel: None,
     };
     // The value that pixels which are white in the encoding are written as.
     let white: u8 = if params.get::<bool>(BLACK_IS_1).unwrap_or(false) {
@@ -108,7 +107,8 @@ pub(crate) fn decode(
             last_byte_mask: 0xFF_u8 << ((8 - columns % 8) % 8),
             decoded_rows: 0,
         };
-        let result = hayro_ccitt::decode(data, &mut decoder, &settings);
+        let mut context = hayro_ccitt::DecoderContext::new(settings);
+        let result = hayro_ccitt::decode(data, &mut decoder, &mut context);
 
         // If we decoded at least one row, let's be lenient and return what we got.
         // See also 0001763.pdf.
@@ -155,7 +155,8 @@ pub(crate) fn decode(
             white,
             decoded_rows: 0,
         };
-        let result = hayro_ccitt::decode(data, &mut decoder, &settings);
+        let mut context = hayro_ccitt::DecoderContext::new(settings);
+        let result = hayro_ccitt::decode(data, &mut decoder, &mut context);
 
         if result.is_err() && decoder.decoded_rows == 0 {
             return None;

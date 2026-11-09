@@ -189,8 +189,6 @@ impl<'a> Stream<'a> {
 
     /// Return the decoded data of the stream, and return image metadata
     /// if available.
-    pub     /// Return the decoded data of the stream, and return image metadata
-    /// if available.
     pub fn decoded_image(
         &self,
         image_params: &ImageDecodeParams,

@@ -9,10 +9,9 @@ use hayro_syntax::object::Stream;
 use hayro_syntax::object::dict::keys::*;
 use hayro_syntax::page::Resources;
 use kurbo::{Affine, Rect, Shape};
-use std::borrow::Cow;
 
 pub(crate) struct FormXObject<'a> {
-    pub(crate) decoded: Cow<'a, [u8]>,
+    pub(crate) decoded: crate::context::DecodedContent<'a>,
     pub(crate) matrix: Affine,
     pub(crate) bbox: [f32; 4],
     is_transparency_group: bool,
@@ -26,7 +25,8 @@ impl<'a> FormXObject<'a> {
     pub(crate) fn new(stream: &Stream<'a>) -> Option<Self> {
         let dict = stream.dict();
 
-        let decoded = stream.decoded_data().ok()?;
+        // PdfCraft patch: see `context::MAX_PAGE_CONTENT`.
+        let decoded = crate::context::decode_content(stream)?;
         let resources = dict.get(RESOURCES).map(Resources::new);
 
         let matrix = Affine::new(
@@ -54,7 +54,7 @@ impl<'a> FormXObject<'a> {
         })
     }
 
-    pub(crate)     pub(crate) fn draw(
+    pub(crate) fn draw(
         &self,
         resources: &Resources<'a>,
         context: &mut Context<'a>,

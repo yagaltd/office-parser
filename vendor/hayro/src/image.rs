@@ -1,11 +1,12 @@
-use crate::Renderer;
+use crate::{Renderer, knockout_blend_mode};
 use fearless_simd::{Level, Select, Simd, SimdBase, SimdInto, mask8x32, u8x32, u16x16};
 use hayro_interpret::util::x_y_advances;
 use hayro_interpret::{FillRule, ImageData, ImageDrawProps, LumaData, Paint, RgbData};
-use kurbo::{Affine, Rect};
+use kurbo::{Affine, Rect, Shape};
 use pic_scale::{
     ImageSize, ImageStore, ImageStoreMut, PicScaleError, Resampling, ResamplingFunction, Scaler,
 };
+use std::mem::size_of;
 use std::sync::Arc;
 use vello_cpu::peniko::{Compose, Fill, ImageQuality, ImageSampler, Mix};
 use vello_cpu::{Image, ImageSource, Mask, PixelMetadata, Pixmap, peniko};
@@ -18,6 +19,128 @@ use vello_cpu::{Image, ImageSource, Mask, PixelMetadata, Pixmap, peniko};
 // to clamp, we instead use Hermite, which has similar quality but doesn't
 // have this problem.
 pub(super) const RESAMPLING_FUNCTION: ResamplingFunction = ResamplingFunction::Hermite;
+
+// PdfCraft patch: largest image drawn, in pixels (2^28 ≈ 268 MP, well above real page images).
+const MAX_IMAGE_PIXELS: u64 = 1 << 28;
+
+// PdfCraft patch: source axes allowed into resampling planning. Unlike the final pixmap,
+// sources need not fit u16: a 65536-pixel strip can safely shrink to a 16-pixel image.
+const MAX_RESAMPLING_SOURCE_SIDE: u32 = 1 << 20;
+const MAX_RESAMPLING_PLAN_BYTES: usize = 128 << 20;
+
+/// PdfCraft patch: source, intermediate and RGBA byte lengths, independent of backend sides.
+fn source_byte_len(width: u32, height: u32, channels: usize, max_pixels: u64) -> Option<usize> {
+    if width == 0 || height == 0 || !matches!(channels, 1 | 3 | 4) {
+        return None;
+    }
+    let pixels = u64::from(width).checked_mul(u64::from(height))?;
+    if pixels > max_pixels {
+        return None;
+    }
+    let pixels = usize::try_from(pixels).ok()?;
+    let rgba_len = pixels.checked_mul(4)?;
+    if rgba_len > isize::MAX as usize {
+        return None;
+    }
+    pixels.checked_mul(channels)
+}
+
+/// PdfCraft patch: only final pixmaps/padded glyphs need to fit the backend's u16 sides.
+fn image_byte_len(width: u32, height: u32, channels: usize, max_pixels: u64) -> Option<usize> {
+    if width > u32::from(u16::MAX) || height > u32::from(u16::MAX) {
+        return None;
+    }
+    source_byte_len(width, height, channels, max_pixels)
+}
+
+/// PdfCraft patch: conservative resampling planning work for one axis in PicScale 0.7.12. Its
+/// four-tap kernels grow on downscaling. Include float/32-aligned i16 weights, temporary
+/// float/f64/usize tap arrays and two copies of the bounds. This is a size estimate, not a
+/// fallible reserve inside PicScale or a bound on total renderer memory.
+fn filter_plan_bytes(source: u32, target: u32) -> Option<usize> {
+    if source == target {
+        return Some(0);
+    }
+    let (source, target) = (usize::try_from(source).ok()?, usize::try_from(target).ok()?);
+    if target == 0 {
+        return None;
+    }
+    let taps = source.checked_mul(4)?.div_ceil(target).max(4);
+    let aligned_taps = taps.div_ceil(32).checked_mul(32)?;
+    let float_weights = taps.checked_mul(target)?.checked_mul(size_of::<f32>())?;
+    let fixed_weights = aligned_taps
+        .checked_mul(target)?
+        .checked_mul(size_of::<i16>())?;
+    let tap_scratch = taps.checked_mul(size_of::<f32>() + size_of::<f64>() + size_of::<usize>())?;
+    let bounds = target.checked_mul(4)?.checked_mul(size_of::<usize>())?;
+    float_weights
+        .checked_add(fixed_weights)?
+        .checked_add(tap_scratch)?
+        .checked_add(bounds)
+}
+
+/// PdfCraft patch: alpha-aware RGBA plans also need source-sized premultiplication scratch.
+/// Bound the combined scratch before planning, including a conservative crossed intermediate
+/// (or four rows for a short target) when both convolution axes change.
+fn resampling_scratch_byte_len(
+    source: (u32, u32),
+    target: (u32, u32),
+    channels: usize,
+    max_pixels: u64,
+) -> Option<usize> {
+    if source == target {
+        return Some(0);
+    }
+    let alpha = if channels == 4 {
+        source_byte_len(source.0, source.1, channels, max_pixels)?
+    } else {
+        0
+    };
+    let filter = if source.0 != target.0 && source.1 != target.1 {
+        source_byte_len(source.0, target.1.max(4), channels, max_pixels)?
+    } else {
+        0
+    };
+    let len = alpha.checked_add(filter)?;
+    let limit = max_pixels.saturating_mul(4).min(isize::MAX as u64);
+    if u64::try_from(len).ok()? > limit {
+        return None;
+    }
+    Some(len)
+}
+
+/// PdfCraft patch: validate output, crossed intermediate and filter-work bounds before planning.
+/// Source width × target height also bounds PicScale's smaller single-threaded four-row scratch.
+fn resampling_byte_len(
+    source: (u32, u32),
+    target: (u32, u32),
+    channels: usize,
+    data_len: usize,
+    max_pixels: u64,
+) -> Option<usize> {
+    if source_byte_len(source.0, source.1, channels, max_pixels)? != data_len {
+        return None;
+    }
+    let target_len = image_byte_len(target.0, target.1, channels, max_pixels)?;
+    resampling_scratch_byte_len(source, target, channels, max_pixels)?;
+    source_byte_len(source.0, target.1, channels, max_pixels)?;
+    if source.0 > MAX_RESAMPLING_SOURCE_SIDE || source.1 > MAX_RESAMPLING_SOURCE_SIDE {
+        return None;
+    }
+    let plan_bytes = filter_plan_bytes(source.0, target.0)?
+        .checked_add(filter_plan_bytes(source.1, target.1)?)?;
+    if plan_bytes > MAX_RESAMPLING_PLAN_BYTES {
+        return None;
+    }
+    Some(target_len)
+}
+
+/// PdfCraft patch: allocation failures in image conversion/resampling keep the renderer alive.
+fn image_buffer(len: usize) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(len).ok()?;
+    Some(out)
+}
 
 #[derive(Clone, Copy)]
 enum ImagePixelFormat {
@@ -85,6 +208,18 @@ impl Renderer<'_> {
         let img_width = image_data.width();
         let img_height = image_data.height();
         let image_transform = *self.ctx.transform();
+        // PdfCraft patch: this element composites through layers of its own, which cannot be
+        // copied; clear what the knockout group drew under the image's placement first.
+        if self.in_knockout() && !self.erasing {
+            let rect = Rect::new(
+                0.0,
+                0.0,
+                f64::from(image_data.width()),
+                f64::from(image_data.height()),
+            );
+            let outline = image_transform * rect.to_path(0.1);
+            self.knockout_erase_shape(&outline);
+        }
         let mask_transform = image_transform
             * Affine::scale_non_uniform(
                 img_width as f64 / alpha_data.width as f64,
@@ -121,6 +256,21 @@ impl Renderer<'_> {
 
     fn draw_image(&mut self, image_data: impl Into<RenderImageData>, alpha_data: Option<LumaData>) {
         let image_data = image_data.into();
+        // PdfCraft patch: in a knockout erase pass an image clears its placement rectangle
+        // instead of painting.
+        if self.erasing {
+            let cur_transform = *self.ctx.transform();
+            let rect = Rect::new(
+                0.0,
+                0.0,
+                f64::from(image_data.width()),
+                f64::from(image_data.height()),
+            );
+            let outline = cur_transform * rect.to_path(0.1);
+            self.ctx.set_blend_mode(knockout_blend_mode());
+            self.knockout_erase_shape(&outline);
+            return;
+        }
         let cur_transform = *self.ctx.transform();
         let mut additional_transform = Affine::IDENTITY;
 
@@ -178,22 +328,27 @@ impl Renderer<'_> {
             let alpha_data = if !needs_resize {
                 alpha.data
             } else {
-                let resized_alpha = resize_image_data(
+                // PdfCraft patch: on failure retain the source alpha.
+                match resize_image_data(
                     &self.global.scaler,
-                    alpha.data,
+                    alpha.data.clone(),
                     img_width,
                     img_height,
                     new_width,
                     new_height,
                     ImagePixelFormat::Luma,
-                );
-                additional_transform = Affine::scale_non_uniform(
-                    img_width as f64 / new_width as f64,
-                    img_height as f64 / new_height as f64,
-                );
-                img_width = new_width;
-                img_height = new_height;
-                resized_alpha
+                ) {
+                    Some(resized_alpha) => {
+                        additional_transform = Affine::scale_non_uniform(
+                            img_width as f64 / new_width as f64,
+                            img_height as f64 / new_height as f64,
+                        );
+                        img_width = new_width;
+                        img_height = new_height;
+                        resized_alpha
+                    }
+                    None => alpha.data,
+                }
             };
 
             let [r, g, b] = solid.color;
@@ -210,22 +365,27 @@ impl Renderer<'_> {
             let luma_data = if !needs_resize {
                 luma.data
             } else {
-                let resized = resize_image_data(
+                // PdfCraft patch: on failure retain the source luma.
+                match resize_image_data(
                     &self.global.scaler,
-                    luma.data,
+                    luma.data.clone(),
                     img_width,
                     img_height,
                     new_width,
                     new_height,
                     ImagePixelFormat::Luma,
-                );
-                additional_transform = Affine::scale_non_uniform(
-                    img_width as f64 / new_width as f64,
-                    img_height as f64 / new_height as f64,
-                );
-                img_width = new_width;
-                img_height = new_height;
-                resized
+                ) {
+                    Some(resized) => {
+                        additional_transform = Affine::scale_non_uniform(
+                            img_width as f64 / new_width as f64,
+                            img_height as f64 / new_height as f64,
+                        );
+                        img_width = new_width;
+                        img_height = new_height;
+                        resized
+                    }
+                    None => luma.data,
+                }
             };
 
             let mut out = vec![0; luma_data.len() * 4];
@@ -246,65 +406,104 @@ impl Renderer<'_> {
                     .flat_map(|(g, a)| [*g, *g, *g, *a])
                     .collect::<Vec<_>>()
             } else {
-                let resized = downscale_with_alpha::<1>(
+                // PdfCraft patch: on failure expand at the source resolution instead.
+                match downscale_with_alpha::<1>(
                     self.global.level,
                     &self.global.scaler,
-                    luma.data,
-                    alpha.data,
+                    luma.data.clone(),
+                    alpha.data.clone(),
                     img_width,
                     img_height,
                     new_width,
                     new_height,
-                );
-                additional_transform = Affine::scale_non_uniform(
-                    img_width as f64 / new_width as f64,
-                    img_height as f64 / new_height as f64,
-                );
-                img_width = new_width;
-                img_height = new_height;
-                needs_premultiplication = false;
-                resized
+                ) {
+                    Some(resized) => {
+                        additional_transform = Affine::scale_non_uniform(
+                            img_width as f64 / new_width as f64,
+                            img_height as f64 / new_height as f64,
+                        );
+                        img_width = new_width;
+                        img_height = new_height;
+                        needs_premultiplication = false;
+                        resized
+                    }
+                    None => luma
+                        .data
+                        .iter()
+                        .zip(&alpha.data)
+                        .flat_map(|(g, a)| [*g, *g, *g, *a])
+                        .collect::<Vec<_>>(),
+                }
             }
         } else if matches!(&image_data, RenderImageData::Rgb(_)) && needs_resize {
             let RenderImageData::Rgb(rgb) = image_data else {
                 unreachable!()
             };
 
+            // PdfCraft patch: on failure expand at the source resolution instead.
             let resized = if let Some(alpha) = alpha_data {
-                needs_premultiplication = false;
-                downscale_with_alpha::<3>(
+                match downscale_with_alpha::<3>(
                     self.global.level,
                     &self.global.scaler,
-                    rgb.data,
-                    alpha.data,
+                    rgb.data.clone(),
+                    alpha.data.clone(),
                     img_width,
                     img_height,
                     new_width,
                     new_height,
-                )
+                ) {
+                    Some(resized) => {
+                        needs_premultiplication = false;
+                        additional_transform = Affine::scale_non_uniform(
+                            img_width as f64 / new_width as f64,
+                            img_height as f64 / new_height as f64,
+                        );
+                        img_width = new_width;
+                        img_height = new_height;
+                        resized
+                    }
+                    None => rgb
+                        .data
+                        .as_chunks::<3>()
+                        .0
+                        .iter()
+                        .zip(&alpha.data)
+                        .flat_map(|(rgb, a)| [rgb[0], rgb[1], rgb[2], *a])
+                        .collect::<Vec<_>>(),
+                }
             } else {
-                let resized = resize_image_data(
+                match resize_image_data(
                     &self.global.scaler,
-                    rgb.data,
+                    rgb.data.clone(),
                     img_width,
                     img_height,
                     new_width,
                     new_height,
                     ImagePixelFormat::Rgb,
-                );
-                resized
-                    .as_chunks::<3>()
-                    .0
-                    .iter()
-                    .flat_map(|rgb| [rgb[0], rgb[1], rgb[2], 255])
-                    .collect::<Vec<_>>()
+                ) {
+                    Some(resized) => {
+                        additional_transform = Affine::scale_non_uniform(
+                            img_width as f64 / new_width as f64,
+                            img_height as f64 / new_height as f64,
+                        );
+                        img_width = new_width;
+                        img_height = new_height;
+                        resized
+                            .as_chunks::<3>()
+                            .0
+                            .iter()
+                            .flat_map(|rgb| [rgb[0], rgb[1], rgb[2], 255])
+                            .collect::<Vec<_>>()
+                    }
+                    None => rgb
+                        .data
+                        .as_chunks::<3>()
+                        .0
+                        .iter()
+                        .flat_map(|rgb| [rgb[0], rgb[1], rgb[2], 255])
+                        .collect::<Vec<_>>(),
+                }
             };
-            additional_transform = Affine::scale_non_uniform(
-                img_width as f64 / new_width as f64,
-                img_height as f64 / new_height as f64,
-            );
-            img_width = new_width;
-            img_height = new_height;
             resized
         } else {
             let (rgb_data, alpha_data) = match image_data {
@@ -345,23 +544,28 @@ impl Renderer<'_> {
             } else {
                 premultiply_rgba(self.global.level, &mut rgba_data);
 
-                needs_premultiplication = false;
-                let resized = resize_image_data(
+                // PdfCraft patch: on failure keep the premultiplied source pixels.
+                match resize_image_data(
                     &self.global.scaler,
-                    rgba_data,
+                    rgba_data.clone(),
                     img_width,
                     img_height,
                     new_width,
                     new_height,
                     ImagePixelFormat::PremultipliedRgba,
-                );
-                additional_transform = Affine::scale_non_uniform(
-                    img_width as f64 / new_width as f64,
-                    img_height as f64 / new_height as f64,
-                );
-                img_width = new_width;
-                img_height = new_height;
-                resized
+                ) {
+                    Some(resized) => {
+                        needs_premultiplication = false;
+                        additional_transform = Affine::scale_non_uniform(
+                            img_width as f64 / new_width as f64,
+                            img_height as f64 / new_height as f64,
+                        );
+                        img_width = new_width;
+                        img_height = new_height;
+                        resized
+                    }
+                    None => rgba_data,
+                }
             }
         };
 
@@ -410,7 +614,7 @@ impl Renderer<'_> {
         );
     }
 
-    fn draw_pixmap(&mut self, pixmap: Arc<Pixmap>, quality: ImageQuality, transform: Affine) {
+    pub(crate) fn draw_pixmap(&mut self, pixmap: Arc<Pixmap>, quality: ImageQuality, transform: Affine) {
         let (width, height) = (pixmap.width(), pixmap.height());
         let image = Image {
             image: ImageSource::Pixmap(pixmap),
@@ -593,7 +797,7 @@ fn resize_image_data(
     new_width: u32,
     new_height: u32,
     pixel_format: ImagePixelFormat,
-) -> Vec<u8> {
+) -> Option<Vec<u8>> {
     match pixel_format {
         ImagePixelFormat::Luma => resize_image_data_impl::<1>(
             scaler,
@@ -629,6 +833,8 @@ fn resize_image_data(
     }
 }
 
+/// PdfCraft patch: image dimensions are validated and buffers reserved before planning; any
+/// failure hands the owned input back, so the caller may retain the valid source.
 fn resize_image_data_impl<const N: usize>(
     scaler: &Scaler,
     data: Vec<u8>,
@@ -637,18 +843,32 @@ fn resize_image_data_impl<const N: usize>(
     new_width: u32,
     new_height: u32,
     plan: impl FnOnce(&Scaler, ImageSize, ImageSize) -> Result<Arc<Resampling<u8, N>>, PicScaleError>,
-) -> Vec<u8> {
-    let source_size = ImageSize::new(src_width as usize, src_height as usize);
-    let target_size = ImageSize::new(new_width as usize, new_height as usize);
-    let src =
-        ImageStore::<u8, N>::from_slice(&data, src_width as usize, src_height as usize).unwrap();
-    let mut out = vec![0; new_width as usize * new_height as usize * N];
-    let mut dst =
-        ImageStoreMut::<u8, N>::from_slice(&mut out, new_width as usize, new_height as usize)
-            .unwrap();
-    let plan = plan(scaler, source_size, target_size).unwrap();
-    plan.resample(&src, &mut dst).unwrap();
-    out
+) -> Option<Vec<u8>> {
+    let resized = (|| {
+        let len = resampling_byte_len(
+            (src_width, src_height),
+            (new_width, new_height),
+            N,
+            data.len(),
+            MAX_IMAGE_PIXELS,
+        )?;
+        let source_size = ImageSize::new(src_width as usize, src_height as usize);
+        let target_size = ImageSize::new(new_width as usize, new_height as usize);
+        let src =
+            ImageStore::<u8, N>::from_slice(&data, src_width as usize, src_height as usize).ok()?;
+        let plan = plan(scaler, source_size, target_size).ok()?;
+        let mut out = image_buffer(len)?;
+        out.resize(len, 0);
+        let mut dst = ImageStoreMut::<u8, N>::from_slice(
+            &mut out,
+            new_width as usize,
+            new_height as usize,
+        )
+        .ok()?;
+        plan.resample(&src, &mut dst).ok()?;
+        Some(out)
+    })();
+    resized
 }
 
 fn downscale_with_alpha<const N: usize>(
@@ -660,7 +880,7 @@ fn downscale_with_alpha<const N: usize>(
     src_height: u32,
     new_width: u32,
     new_height: u32,
-) -> Vec<u8> {
+) -> Option<Vec<u8>> {
     premultiply_with_alpha::<N>(level, &mut color, &alpha);
 
     let color_format = if N == 1 {
@@ -676,7 +896,7 @@ fn downscale_with_alpha<const N: usize>(
         new_width,
         new_height,
         color_format,
-    );
+    )?;
     let alpha = resize_image_data(
         scaler,
         alpha,
@@ -685,19 +905,21 @@ fn downscale_with_alpha<const N: usize>(
         new_width,
         new_height,
         ImagePixelFormat::Luma,
-    );
+    )?;
 
-    color
-        .as_chunks::<N>()
-        .0
-        .iter()
-        .zip(alpha)
-        .flat_map(|(pixel, a)| match pixel.as_slice() {
-            [g] => [*g, *g, *g, a],
-            [r, g, b] => [*r, *g, *b, a],
-            _ => unreachable!(),
-        })
-        .collect()
+    Some(
+        color
+            .as_chunks::<N>()
+            .0
+            .iter()
+            .zip(alpha)
+            .flat_map(|(pixel, a)| match pixel.as_slice() {
+                [g] => [*g, *g, *g, a],
+                [r, g, b] => [*r, *g, *b, a],
+                _ => unreachable!(),
+            })
+            .collect(),
+    )
 }
 
 fn premultiply_with_alpha<const N: usize>(level: Level, color: &mut [u8], alpha: &[u8]) {

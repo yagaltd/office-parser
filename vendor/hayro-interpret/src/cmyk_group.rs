@@ -14,8 +14,8 @@
 use crate::context::{Context, InterpreterCache};
 use crate::device::Device;
 use crate::interpret::state::State;
-use crate::interpreter_settings::InterpreterSettings;
-use crate::x_object::form::FormXObject;
+use crate::InterpreterSettings;
+use crate::x_object::FormXObject;
 use hayro_syntax::content::TypedIter;
 use hayro_syntax::object::dict::keys::{CS, GROUP};
 use hayro_syntax::object::{Dict, Name};

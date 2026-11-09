@@ -206,7 +206,31 @@ impl Renderer<'_> {
         }
     }
 
+    /// PdfCraft patch: the device-space box a glyph run paints (the union of its glyphs'
+    /// outline boxes under the run's transforms). A run that misses the canvas is skipped.
+    fn run_bbox(&self, glyph_run: &GlyphRun<'_, '_>, transform: Affine) -> Rect {
+        glyph_run
+            .glyphs()
+            .iter()
+            .filter_map(|glyph| {
+                let Glyph::Outline(outline) = &**glyph else {
+                    return None;
+                };
+                let path = self.cached_outline(outline, outline.identifier().cache_key());
+                let combined = transform * glyph.transform();
+                Some(combined.transform_rect_bbox(path.bounding_box()))
+            })
+            .reduce(|a, b| a.union(b))
+            .unwrap_or(Rect::ZERO)
+    }
+
     fn fill_outline_run(&mut self, glyph_run: &GlyphRun<'_, '_>, props: &DrawProps<'_>) {
+        // PdfCraft patch: skip runs that miss the canvas (see `run_bbox`).
+        let run_bbox = self.run_bbox(glyph_run, props.transform);
+        if self.misses_target(run_bbox) {
+            return;
+        }
+
         match &props.paint {
             Paint::Color(color) => {
                 let color = color.to_rgba().to_rgba8();
@@ -250,6 +274,18 @@ impl Renderer<'_> {
         props: &DrawProps<'_>,
         stroke_props: &StrokeProps,
     ) {
+        // PdfCraft patch: skip runs that miss the canvas; the paint's reach past the outlines
+        // is half the (miter-limited) stroke width, grown for flattening slack.
+        let extent = f64::from(stroke_props.line_width)
+            * f64::from(stroke_props.miter_limit.max(1.42))
+            * 0.5
+            + 1.0;
+        if self.misses_target(
+            self.run_bbox(glyph_run, props.transform).inflate(extent, extent),
+        ) {
+            return;
+        }
+
         match &props.paint {
             Paint::Color(_) => {
                 let clip_path = self.begin_stroke_run(props, stroke_props, Rect::ZERO);

@@ -568,6 +568,11 @@ impl PartitionedRanges {
         self.buckets.get(idx).map(|v| v.as_slice())
     }
 
+    // PdfCraft patch: whether no range was added to any bucket.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.buckets.iter().all(Vec::is_empty)
+    }
+
     pub(crate) fn sort(&mut self) {
         for bucket in &mut self.buckets {
             bucket.sort_by_key(|a| a.range.start);

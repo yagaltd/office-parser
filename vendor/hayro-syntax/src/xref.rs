@@ -766,35 +766,7 @@ fn prev_offset(data: &[u8], trailer: &Dict<'_>, own: &XrefMap) -> Option<usize> 
         _ => None,
     };
 
-    usize::try_from(held.unwrap_or(r.obj_number)).ok()
-}
-
-/// The offset of the previous xref section (`Prev`).
-// PdfCraft patch: (#2366) some writers give `Prev` as a reference `N G R`. When this section's
-// own entries (`own`) place that object and it holds an offset (iText's `indirectPrev.pdf`), that
-// is the offset; otherwise its object number is (tiff2pdf, in JHOVE's PDF-HUL-157 files), as
-// other readers take it.
-fn prev_offset(data: &[u8], trailer: &Dict<'_>, own: &XrefMap) -> Option<usize> {
-    if let Some(prev) = trailer.get::<i32>(PREV) {
-        return usize::try_from(prev).ok();
-    }
-
-    let r = trailer.get_ref(PREV)?;
-    let id = ObjectIdentifier::new(r.obj_number, r.gen_number);
-    let held = match own.get(&id) {
-        Some(EntryType::Normal(at)) => {
-            let mut reader = Reader::new(data);
-            reader.jump(*at);
-            reader
-                .read_with_context::<IndirectObject<i32>>(&ReaderContext::dummy())
-                .filter(|o| o.id() == &id)
-                .map(|o| o.get())
-                .filter(|p| *p >= 0)
-        }
-        _ => None,
-    };
-
-    usize::try_from(held.unwrap_or(r.obj_number)).ok()
+    usize::try_from(held.map(i64::from).unwrap_or_else(|| i64::from(r.obj_number))).ok()
 }
 
 /// Maximum number of allowed xref `Prev` pointers before we abort.
@@ -848,8 +820,6 @@ impl Readable<'_> for SubsectionHeader {
     }
 }
 
-/// Populate the xref table, and return the trailer dict.
-/// Populate the xref table, and return the trailer dict.
 /// Populate the xref table, and return the trailer dict.
 fn populate_from_xref_table<'a>(
     data: &'a [u8],
@@ -923,6 +893,14 @@ fn populate_from_xref_stream<'a>(
     let mut own = XrefMap::default();
     let mut xref_reader = Reader::new(xref_data.as_ref());
 
+    let size = stream.dict().get::<u32>(SIZE)?;
+
+    let [f1_len, f2_len, f3_len] = stream.dict().get::<[u8; 3]>(W)?;
+
+    if f2_len == 0 || f2_len > size_of::<u64>() as u8 {
+        return None;
+    }
+
     if let Some(arr) = stream.dict().get::<Array<'_>>(INDEX) {
         let iter = arr.iter::<(u32, u32)>();
 
@@ -938,7 +916,15 @@ fn populate_from_xref_stream<'a>(
             )?;
         }
     } else {
-        xref_stream_subsection(&mut xref_reader, 0, size, f1_len, f2_len, f3_len, &mut own)?;
+        xref_stream_subsection(
+            &mut xref_reader,
+            0,
+            size,
+            f1_len,
+            f2_len,
+            f3_len,
+            &mut own,
+        )?;
     }
 
     if let Some(prev) = prev_offset(data, stream.dict(), &own) {
@@ -947,45 +933,6 @@ fn populate_from_xref_stream<'a>(
     }
 
     insert_map.extend(own);
-
-    Some(stream.dict().data())
-
-    let size = stream.dict().get::<u32>(SIZE)?;
-
-    let [f1_len, f2_len, f3_len] = stream.dict().get::<[u8; 3]>(W)?;
-
-    if f2_len == 0 || f2_len > size_of::<u64>() as u8 {
-        return None;
-    }
-
-    let xref_data = stream.decoded_data().ok()?;
-    let mut xref_reader = Reader::new(xref_data.as_ref());
-
-    if let Some(arr) = stream.dict().get::<Array<'_>>(INDEX) {
-        let iter = arr.iter::<(u32, u32)>();
-
-        for (start, num_elements) in iter {
-            xref_stream_subsection(
-                &mut xref_reader,
-                start,
-                num_elements,
-                f1_len,
-                f2_len,
-                f3_len,
-                insert_map,
-            )?;
-        }
-    } else {
-        xref_stream_subsection(
-            &mut xref_reader,
-            0,
-            size,
-            f1_len,
-            f2_len,
-            f3_len,
-            insert_map,
-        )?;
-    }
 
     Some(stream.dict().data())
 }
