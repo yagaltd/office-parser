@@ -121,7 +121,10 @@ and `tests/docx_marks.rs`.
   from `INDRA_OCR_MODEL_DIR` or the HF cache; pin: Indra `v3.1.1`).
   Rust + pdfium only, no Python; optional pure-Rust backends: rten
   runtime (`ocr-rten` + `INDRA_RUNTIME=rten`) and hayro renderer
-  (`render-hayro` + `OFFICE_PARSER_RENDERER=hayro`); table-structure
+  (`render-hayro` + `OFFICE_PARSER_RENDERER=hayro`; the vendored stack is
+  upstream hayro 0.9.0 + hardening patches — pdfium stays the measured
+  default, hayro is rule-equivalent at 300 dpi scans and the fallback of
+  last resort); table-structure
   recognition (`<table>` markup + cell geometry on OCR'd pages, own
   PaddleOCR SLANet port over the rten runtime) is an opt-in
   (`ocr-table-structure` + `OFFICE_PARSER_TABLE_MODEL`, model

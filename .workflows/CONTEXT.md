@@ -43,6 +43,22 @@ avoid implementation trivia.
 
 ## Rulings
 
+### Renderer default ruling (plan 20261108-002, 2026-11-09)
+
+**pdfium stays the default OCR renderer; hayro remains the opt-in/fallback**
+(`render-hayro` + `OFFICE_PARSER_RENDERER=hayro`). Evidence (bake-off,
+`.workflows/spikes/render-bakeoff/report-*.md`): WER on the seeded dense
+2-column synthetic corpus — 150 dpi: pdfium 0.6683 vs hayro 0.6964
+(+2.81pt); 300 dpi: 0.6734 vs 0.6824 (+0.90pt, inside the 1pt flip rule);
+pdfium ~6% faster end-to-end. The flip rule (WER(hayro) <= WER(pdfium)
++ 1pt) is satisfied only at office-grade density; degraded scans keep a
+real pdfium edge, and degraded scans are why the OCR path exists.
+Revisit-when: upstream hayro lands knockout/blending group passes, the
+WER gap closes at 150 dpi, or the deployment corpus standardizes on
+>= 300 dpi scans. The vendored stack is upgraded to 0.9.0 + 10 hardening
+families regardless (that work is independent of which engine is default).
+
+
 Verbatim human decisions for this feature. Specs touching these quote them.
 
 - **2026-11-08 — dependencies:** *"i agree with your recommendation for both"*, resolving:

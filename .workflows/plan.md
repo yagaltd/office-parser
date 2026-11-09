@@ -86,7 +86,8 @@ Parallel notes: TASK_2 (vendor/ + src/render.rs + Cargo.toml) and TASK_3 (`.work
 - **Depends on**: TASK 2, TASK 3
 - **Wave**: 2
 - **What**: Read the bake-off report. Apply rule 2: flip default to hayro iff WER(hayro) ≤ WER(pdfium) + 1pt AND re-baselined tests green. Decision recorded in the plan (STATUS line under this task).
-- **Status**: ⬜ PENDING
+- **context**: no changes
+- **Status**: ✅ DONE (human 2026-11-09: STAY — rule NOT satisfied at 150 dpi (+2.81pt); flip declined. verdict .workflows/reviews/task-4.md)
 
 ### TASK 5 (🟡): Execute the renderer-default decision
 - **Agent**: worker
@@ -97,7 +98,8 @@ Parallel notes: TASK_2 (vendor/ + src/render.rs + Cargo.toml) and TASK_3 (`.work
 - **Testing strategy**: example-based
 - **What**: If flip: `render-pages` default order becomes hayro → pdfium (fallback); OFFICE_PARSER_RENDERER still overrides both ways; docs updated in the same change. If stay: the report + decision documented in CONTEXT.md §Rulings. Conditional contract — finalized after TASK 4.
 - **Verify**: `cargo test --features pdf,ocr-indra-native,render-hayro,render-pdfium` green; the rendered-output A/B on fixtures matches the decision.
-- **Status**: ⬜ PENDING
+- **context**: no changes
+- **Status**: ✅ DONE (stay branch: ruling in CONTEXT.md §Rulings with numbers + revisit-when; zero code change — pdfium default untouched)
 
 ### TASK 6 (⚪): Docs sweep
 - **Agent**: worker

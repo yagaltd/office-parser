@@ -49,3 +49,12 @@
 - Slide snapshot image generation is not currently implemented.
 - Chart tables depend on cached values embedded by source apps.
 - Complex visuals (SmartArt, hand-drawn diagrams) are intentionally not fully interpreted.
+
+## OCR renderers
+
+Image-only pages are rasterized for OCR by pdfium (`render-pdfium`, the
+measured default) with the pure-Rust hayro stack as opt-in/fallback
+(`render-hayro` + `OFFICE_PARSER_RENDERER=hayro`). A seeded WER bake-off
+(plan 20261108-002) kept pdfium as default: WER 0.6683 vs hayro 0.6964 on
+150 dpi scans, 0.6734 vs 0.6824 at 300 dpi. See `docs/quality.md` for the
+quality pipeline.

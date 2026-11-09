@@ -1,5 +1,21 @@
 ## Unreleased
 
+### Plan 20261108-002: vendored hayro upgraded to 0.9.0; renderer default re-measured (pdfium stays)
+
+- The vendored hayro stack moved from the PdfCraft 0.7.x patches to
+  upstream 0.9.0 (hayro/hayro-syntax/hayro-interpret/hayro-cmap +
+  hayro-font), with the ten still-needed hardening families ported onto
+  the restructured tree (content budgets, allocation caps, lenient cmap,
+  Prev-as-reference, sync poison recovery, decode limits, knockout/CMYK
+  group passes, annotation flags, OCG /VE, offscreen skips). The four
+  stale unwired vendor dirs are gone; crates.io serves jbig2 0.4.0 /
+  postscript 0.2.0 / ccitt / jpeg2000.
+- A seeded WER bake-off (`report-*.md`, 30 pages, exact ground truth)
+  kept pdfium as the default OCR renderer: WER 0.6683 vs hayro 0.6964 at
+  150 dpi, 0.6734 vs 0.6824 at 300 dpi — hayro is rule-equivalent only at
+  office-grade density. `OFFICE_PARSER_RENDERER=hayro` still opts in.
+- Ruling + revisit-when: `.workflows/CONTEXT.md` §Rulings.
+
 ### Plan 20261108-001: per-page PDF quality, XY-Cut reading order, OcrPage rich fields
 
 - Per-page `PageTextQuality` in `metadata.page_quality` (JSON mirror
