@@ -181,12 +181,6 @@ def draw_image_only_pdf(pngs: list[Path], out_pdf: Path) -> None:
     # (os.urandom) — normalize it so byte-determinism holds (the selfcheck
     # asserts identical sha256 across runs; words.json already is).
     data = Path(out_pdf).read_bytes()
-    data = re.sub(rb"/ID\s*\[\s*<[0-9A-Fa-f]+>\s*<[0-9A-Fa-f]+>\s*\]",
-                  b"/ID [<0123456789ABCDEF0123456789ABCDEF> <0123456789ABCDEF0123456789ABCDEF>]",
-                  data)
-    # reportlab also randomizes internal resource names (FormXob.<hex32>)
-    data = re.sub(rb"([A-Za-z]+Xob)\.[0-9a-f]{16,}", rb"\1.normalized", data)
-    Path(out_pdf).write_bytes(data)
 
 
 def main(argv=None) -> int:
@@ -213,6 +207,7 @@ def main(argv=None) -> int:
     col_width = (PAGE_W - 2 * MARGIN - GUTTER) / 2.0
     lines_per_col = int((PAGE_H - TOP_MARGIN - BOTTOM_MARGIN) // LEADING)
 
+    random.seed(args.seed)  # reportlab draws FormXob names from the GLOBAL random module
     rng = random.Random(args.seed)
     pages = [page_columns(rng, col_width, lines_per_col)
              for _ in range(args.pages)]
