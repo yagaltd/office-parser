@@ -106,7 +106,8 @@ Parallel notes: TASK_2 (vendor/ + src/render.rs + Cargo.toml) and TASK_3 (`.work
 - **Depends on**: TASK 5
 - **Wave**: 4
 - **What**: README renderer paragraph (default, bake-off numbers, hayro-font note), docs/formats.md renderer notes, CHANGELOG entry with Plan ID 20261108-002.
-- **Status**: ⬜ PENDING
+- **context**: updated
+- **Status**: ✅ DONE (README renderer paragraph + formats.md OCR-renderer section + CHANGELOG Plan-ID entry)
 
 (No verify/quality tasks: `/next` verdict-gates every task; `/review` is the final gate at SHIP.)
 
