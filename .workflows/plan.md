@@ -54,7 +54,7 @@ Parallel notes: TASK_2 (vendor/ + src/render.rs + Cargo.toml) and TASK_3 (`.work
 - **Wave**: 0
 - **What**: For each of the 10 still-needed families (list in the research report), pin the exact 0.9.0 file/function anchors in /tmp/hayro-upstream (or a fresh clone) where the port lands — renderer.rs split into 8 modules, fonts in hayro-font. Also: the exact new render API surface for the glue rewrite (PixmapSettings, render(), RenderCache changes), and the registry hayro-jbig2 0.4.0 / hayro-postscript 0.2.0 API check (do they satisfy what our unwired vendored copies provided?). Findings to `.workflows/scout/20261108-002.md`.
 - **Verify**: `.workflows/scout/20261108-002.md` exists; every family has ≥1 file:line anchor; glue section lists the new signatures.
-- **Status**: ⬜ PENDING
+- **Status**: ✅ DONE (gate persisted .workflows/scout/20261108-002.md; anchors for all 10 families + glue spec + registry check incl. offline gap)
 
 ### TASK 2 (🔴): Upgrade vendored stack to 0.9.0
 - **Agent**: worker
