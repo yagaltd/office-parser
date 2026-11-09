@@ -77,7 +77,8 @@ Parallel notes: TASK_2 (vendor/ + src/render.rs + Cargo.toml) and TASK_3 (`.work
 - **Testing strategy**: example-based
 - **What**: `.workflows/spikes/render-bakeoff/`: (1) seeded dense-scan generator (formalize the reportlab→pdftoppm→drawImage flow, N pages configurable, exact ground-truth words.json emitted); (2) WER scorer (generated ground truth vs OCR transcript); (3) A/B runner: pdfium vs hayro over the synthetic corpus + the 5 fixtures + `.workflows/spikes/render-bakeoff/real-scans/` drop-in (any PDFs placed there are scored with char/word-delta, no WER claim); (4) markdown report table. CARGO_BUILD_JOBS=4 respected; measurement-only — no src/ changes, no CI wiring.
 - **Verify**: harness runs end-to-end (both renderers × corpus), WER + delta table produced, real-scans slot demonstrably scored (≥1 scan present — the human drops them in).
-- **Status**: ⬜ PENDING
+- **Status**: ✅ DONE (gate: harness applied from the store event, WER selfcheck 9/9, runner --selfcheck exit 0 after two gate fixes — reportlab /ID+XMP byte noise normalized to rasterized-content hashes, path-hash bug; report.md generated at the T2 gate for TASK 4)
+- **context**: no changes
 
 ### TASK 4 (🔴): HUMAN — bake-off verdict + flip decision
 - **Agent**: human
