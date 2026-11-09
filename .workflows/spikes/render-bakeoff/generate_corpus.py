@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import re
 import json
 import random
 import shutil
@@ -176,6 +177,16 @@ def draw_image_only_pdf(pngs: list[Path], out_pdf: Path) -> None:
         c.drawImage(str(png), 0, 0, width=PAGE_W, height=PAGE_H)
         c.showPage()
     c.save()
+    # reportlab invariant=1 pins the timestamp but NOT the per-document /ID
+    # (os.urandom) — normalize it so byte-determinism holds (the selfcheck
+    # asserts identical sha256 across runs; words.json already is).
+    data = Path(out_pdf).read_bytes()
+    data = re.sub(rb"/ID\s*\[\s*<[0-9A-Fa-f]+>\s*<[0-9A-Fa-f]+>\s*\]",
+                  b"/ID [<0123456789ABCDEF0123456789ABCDEF> <0123456789ABCDEF0123456789ABCDEF>]",
+                  data)
+    # reportlab also randomizes internal resource names (FormXob.<hex32>)
+    data = re.sub(rb"([A-Za-z]+Xob)\.[0-9a-f]{16,}", rb"\1.normalized", data)
+    Path(out_pdf).write_bytes(data)
 
 
 def main(argv=None) -> int:

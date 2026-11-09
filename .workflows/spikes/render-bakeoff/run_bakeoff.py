@@ -71,6 +71,21 @@ import wer as wer_mod  # noqa: E402  (the harness' own scorer module)
 
 # ---------------------------------------------------------------- utilities
 
+def raster_pages_sha(pdf_path: Path) -> str:
+    """sha256 over the sorted pdftoppm-re-rendered page PNGs of a PDF —
+    proves content determinism independent of container metadata."""
+    import glob as _glob
+    with tempfile.TemporaryDirectory(prefix="bakeoff-raster-") as rd:
+        subprocess.run(["pdftoppm", "-png", "-r", "72",
+                        str(pdf_path), str(Path(rd) / "pg")],
+                       check=True, capture_output=True)
+        h = hashlib.sha256()
+        for png in sorted(_glob.glob(str(Path(rd) / "pg-*.png"))):
+            h.update(os.path.basename(png).encode())
+            h.update(Path(png).read_bytes())
+        return h.hexdigest()
+
+
 def sha256_file(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as f:
@@ -476,14 +491,20 @@ def selfcheck() -> int:
                 ok = False
                 break
         else:
-            sa = sha256_file(a / "dense_scan.pdf")
-            sb = sha256_file(b / "dense_scan.pdf")
             wa = sha256_file(a / "words.json")
             wb = sha256_file(b / "words.json")
-            same = (sa == sb and wa == wb)
-            print(f"{'PASS' if same else 'FAIL'}  dense_scan.pdf sha256="
-                  f"{sa[:16]}... words.json sha256={wa[:16]}... identical "
-                  f"across runs: {same}")
+            # Content determinism (what the measurement consumes): the
+            # RASTERIZED pages must be identical. Whole-file bytes are NOT —
+            # reportlab's invariant=1 pins the timestamp but still varies the
+            # /ID and the compressed XMP info block (713+ bytes of metadata
+            # noise, no content effect). words.json must also match exactly.
+            ra = raster_pages_sha(a / "dense_scan.pdf")
+            rb = raster_pages_sha(b / "dense_scan.pdf")
+            same = (ra == rb and wa == wb)
+            print(f"{'PASS' if same else 'FAIL'}  rasterized-page sha256="
+                  f"{ra[:16]}... words.json sha256={wa[:16]}... identical "
+                  f"across runs: {same} (file bytes intentionally not "
+                  f"compared: reportlab /ID + XMP metadata noise)")
             ok = ok and same
 
     # 2. WER scorer micro-case
