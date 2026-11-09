@@ -51,7 +51,7 @@ GUTTER = 20.0                # pt between the two columns
 FONT = "Helvetica"
 FONT_SIZE = 8.0              # pt
 LEADING = 9.6                # pt between baselines
-DPI = 150
+DPI = 150  # default raster density; override with --dpi
 
 DEFAULT_SEED = 42
 DEFAULT_PAGES = 10
@@ -158,9 +158,9 @@ def draw_text_layer_pdf(path: Path, pages: list) -> None:
     c.save()
 
 
-def rasterize(text_pdf: Path, tmp: Path, expected_pages: int) -> list[Path]:
+def rasterize(text_pdf: Path, tmp: Path, expected_pages: int, dpi: int = DPI) -> list[Path]:
     subprocess.run(
-        ["pdftoppm", "-png", "-r", str(DPI), str(text_pdf), str(tmp / "page")],
+        ["pdftoppm", "-png", "-r", str(dpi), str(text_pdf), str(tmp / "page")],
         check=True,
     )
     pngs = sorted(tmp.glob("page-*.png"))  # zero-padded names sort correctly
@@ -190,6 +190,8 @@ def main(argv=None) -> int:
                     help="RNG seed (default 42; same seed = byte-identical corpus)")
     ap.add_argument("--pages", type=int, default=DEFAULT_PAGES,
                     help="page count (default 10)")
+    ap.add_argument("--dpi", type=int, default=DPI,
+                     help="raster density of the synthetic scans (default 150)")
     ap.add_argument("--out-dir",
                     default=str(Path(__file__).resolve().parent),
                     help="output dir for dense_scan.pdf + words.json")
@@ -222,7 +224,7 @@ def main(argv=None) -> int:
     try:
         text_pdf = tmp / "text-layer.pdf"
         draw_text_layer_pdf(text_pdf, pages)
-        pngs = rasterize(text_pdf, tmp, args.pages)
+        pngs = rasterize(text_pdf, tmp, args.pages, dpi=args.dpi)
         out_pdf = out_dir / "dense_scan.pdf"
         draw_image_only_pdf(pngs, out_pdf)
     finally:
@@ -233,7 +235,7 @@ def main(argv=None) -> int:
         "generator": "generate_corpus.py",
         "seed": args.seed,
         "pages": args.pages,
-        "dpi": DPI,
+        "dpi": args.dpi,
         "font": f"{FONT} {FONT_SIZE:g}pt",
         "columns": 2,
         "reading_order": "column-major: left column top-to-bottom, then right",
