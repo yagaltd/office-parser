@@ -157,7 +157,8 @@ impl<'r> Renderer<'r> {
         } else if self.in_knockout() {
             self.ctx.set_blend_mode(knockout_blend_mode());
         } else {
-            self.ctx.set_blend_mode(convert_blend_mode(props.blend_mode));
+            self.ctx
+                .set_blend_mode(convert_blend_mode(props.blend_mode));
         }
         self.apply_soft_mask(props.soft_mask.as_ref());
     }
@@ -168,7 +169,8 @@ impl<'r> Renderer<'r> {
         if self.erasing || self.in_knockout() {
             self.ctx.set_blend_mode(knockout_blend_mode());
         } else {
-            self.ctx.set_blend_mode(convert_blend_mode(props.blend_mode));
+            self.ctx
+                .set_blend_mode(convert_blend_mode(props.blend_mode));
         }
         self.apply_soft_mask(props.soft_mask.as_ref());
     }
@@ -201,7 +203,7 @@ impl<'a, 'r> Device<'a> for Renderer<'r> {
             return;
         }
         let _ = isolated; // PdfCraft patch: group layers here already start from a blank
-                          // backdrop, which is the isolated behaviour.
+        // backdrop, which is the isolated behaviour.
         Self::push_transparency_group(self, opacity, mask, blend_mode, knockout);
     }
 

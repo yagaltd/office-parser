@@ -287,7 +287,8 @@ impl Renderer<'_> {
             * 0.5
             + 1.0;
         if self.misses_target(
-            self.run_bbox(glyph_run, props.transform).inflate(extent, extent),
+            self.run_bbox(glyph_run, props.transform)
+                .inflate(extent, extent),
         ) {
             return;
         }

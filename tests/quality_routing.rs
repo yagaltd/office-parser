@@ -13,9 +13,9 @@
 
 use office_parser::document_ast::{Block, SourceSpan};
 use office_parser::formats::pdf::{
-    parse_pdf_split, PageGeometry, PageOcrEngine, ParsedPdfDocument, PdfPageBlockRange, SpanBox,
+    PageGeometry, PageOcrEngine, ParsedPdfDocument, PdfPageBlockRange, SpanBox, parse_pdf_split,
 };
-use office_parser::quality::{count_columns, page_verdict, PageTextQuality, PageVerdict};
+use office_parser::quality::{PageTextQuality, PageVerdict, count_columns, page_verdict};
 
 const MIXED: &str = "tests/fixtures/pdf_mixed.pdf";
 const SCANNED: &str = "tests/fixtures/pdf_scanned.pdf";
@@ -108,13 +108,15 @@ fn five_fixture_routing_table() {
 #[test]
 fn split_pages_carry_their_single_page_verdict() {
     let bytes = std::fs::read(MIXED).expect("fixture");
-    let (combined, pages) =
-        parse_pdf_split(&bytes, None, 150, 50, false).expect("split parse");
+    let (combined, pages) = parse_pdf_split(&bytes, None, 150, 50, false).expect("split parse");
 
     let combined_quality = combined.metadata.page_quality.expect("combined quality");
     assert_eq!(combined_quality.len(), 2);
     assert_eq!(combined_quality[0].verdict, PageVerdict::Trust);
-    assert!(matches!(combined_quality[1].verdict, PageVerdict::Ocr { .. }));
+    assert!(matches!(
+        combined_quality[1].verdict,
+        PageVerdict::Ocr { .. }
+    ));
 
     assert_eq!(pages.len(), 2);
     for (i, (page_number, page_doc)) in pages.iter().enumerate() {
@@ -186,9 +188,21 @@ fn count_columns_over_synthetic_layouts() {
     let one_col: Vec<SpanBox> = (0..4)
         .map(|i| {
             if i % 2 == 0 {
-                span(60.0, 100.0 + i as f32 * 20.0, 460.0, 112.0 + i as f32 * 20.0, 12.0)
+                span(
+                    60.0,
+                    100.0 + i as f32 * 20.0,
+                    460.0,
+                    112.0 + i as f32 * 20.0,
+                    12.0,
+                )
             } else {
-                span(60.0, 100.0 + i as f32 * 20.0, 400.0, 112.0 + i as f32 * 20.0, 12.0)
+                span(
+                    60.0,
+                    100.0 + i as f32 * 20.0,
+                    400.0,
+                    112.0 + i as f32 * 20.0,
+                    12.0,
+                )
             }
         })
         .collect();
@@ -202,7 +216,11 @@ fn count_columns_over_synthetic_layouts() {
         two_col.push(span(60.0, y, 290.0, y + 12.0, 12.0));
         two_col.push(span(320.0, y, 550.0, y + 12.0, 12.0));
     }
-    assert_eq!(count_columns(&two_col), 2, "heading must not mask the gutter");
+    assert_eq!(
+        count_columns(&two_col),
+        2,
+        "heading must not mask the gutter"
+    );
 
     let single_line = vec![span(60.0, 100.0, 550.0, 112.0, 12.0)];
     assert_eq!(count_columns(&single_line), 1);
@@ -222,8 +240,16 @@ fn recompute_page_block_ranges_follows_merged_layout() {
             ]
         }),
         page_block_ranges: vec![
-            PdfPageBlockRange { page_number: 1, block_start: 0, block_end: 3 },
-            PdfPageBlockRange { page_number: 2, block_start: 3, block_end: 5 },
+            PdfPageBlockRange {
+                page_number: 1,
+                block_start: 0,
+                block_end: 3,
+            },
+            PdfPageBlockRange {
+                page_number: 2,
+                block_start: 3,
+                block_end: 5,
+            },
         ],
         pages_geometry: Vec::new(),
     };
@@ -268,10 +294,7 @@ fn merged_combined_doc_page_block_ranges_stay_fresh() {
     }
     struct EchoEngine;
     impl PageOcrEngine for EchoEngine {
-        fn ocr_page_png(
-            &mut self,
-            _png: &[u8],
-        ) -> Result<(Vec<Block>, Option<f64>), String> {
+        fn ocr_page_png(&mut self, _png: &[u8]) -> Result<(Vec<Block>, Option<f64>), String> {
             Ok((
                 vec![Block::Paragraph {
                     block_index: 0,
@@ -320,9 +343,8 @@ fn merged_combined_doc_page_block_ranges_stay_fresh() {
 }
 
 fn pdftoppm_available() -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|p| {
-            std::env::split_paths(&p)
-                .any(|dir| dir.join("pdftoppm").is_file() || dir.join("pdftoppm.exe").is_file())
-        })
+    std::env::var_os("PATH").is_some_and(|p| {
+        std::env::split_paths(&p)
+            .any(|dir| dir.join("pdftoppm").is_file() || dir.join("pdftoppm.exe").is_file())
+    })
 }

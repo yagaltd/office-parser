@@ -67,7 +67,9 @@ fn docx_table_widths_drive_morph_wrapper() {
     let doc = office_parser::parse(&bytes, "in.docx").unwrap();
     let md = office_parser::render::to_morph_markdown(&doc);
     assert!(
-        md.contains("::: table {widths=[3000,1000]}\n| Name | Qty |\n|---|---|\n| Widget | 4 |\n:::"),
+        md.contains(
+            "::: table {widths=[3000,1000]}\n| Name | Qty |\n|---|---|\n| Widget | 4 |\n:::"
+        ),
         "wrapper md: {md}"
     );
 }

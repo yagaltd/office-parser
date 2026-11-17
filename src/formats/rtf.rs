@@ -63,9 +63,10 @@ fn decode_data_image_uri(uri: &str) -> Result<Option<(Vec<u8>, String)>> {
 
 fn extract_quoted_or_last_token(inst: &str) -> Option<String> {
     if let Some(first) = inst.find('"')
-        && let Some(second) = inst[first + 1..].find('"') {
-            return Some(inst[first + 1..first + 1 + second].to_string());
-        }
+        && let Some(second) = inst[first + 1..].find('"')
+    {
+        return Some(inst[first + 1..first + 1 + second].to_string());
+    }
     inst.split_whitespace()
         .rev()
         .find(|t| {
@@ -78,14 +79,15 @@ fn extract_quoted_or_last_token(inst: &str) -> Option<String> {
 
 fn push_para_link(out: &mut Vec<(String, Option<String>)>, url: String, txt: Option<String>) {
     if let Some((prev_url, prev_txt)) = out.last_mut()
-        && prev_url == &url {
-            match (prev_txt.as_mut(), txt) {
-                (Some(a), Some(b)) => a.push_str(&b),
-                (None, Some(b)) => *prev_txt = Some(b),
-                _ => {}
-            }
-            return;
+        && prev_url == &url
+    {
+        match (prev_txt.as_mut(), txt) {
+            (Some(a), Some(b)) => a.push_str(&b),
+            (None, Some(b)) => *prev_txt = Some(b),
+            _ => {}
         }
+        return;
+    }
     out.push((url, txt));
 }
 
@@ -363,15 +365,16 @@ fn flush_pending_list(
     pending_list: &mut Option<(bool, Vec<ListItem>)>,
 ) {
     if let Some((ordered, items)) = pending_list.take()
-        && !items.is_empty() {
-            blocks.push(Block::List {
-                block_index: *next_block_index,
-                ordered,
-                items,
-                source: SourceSpan::default(),
-            });
-            *next_block_index += 1;
-        }
+        && !items.is_empty()
+    {
+        blocks.push(Block::List {
+            block_index: *next_block_index,
+            ordered,
+            items,
+            source: SourceSpan::default(),
+        });
+        *next_block_index += 1;
+    }
 }
 
 fn flush_table_if_any(
@@ -424,7 +427,7 @@ fn flush_paragraph(
             text,
             source: SourceSpan::default(),
             marks: Vec::new(),
-    };
+        };
         if let Some((ord, items)) = pending_list.as_mut() {
             if *ord == ordered {
                 items.push(item);
@@ -451,7 +454,7 @@ fn flush_paragraph(
             text,
             source: SourceSpan::default(),
             marks: Vec::new(),
-    });
+        });
         *next_block_index += 1;
 
         for (url, txt) in cur_para_links.drain(..) {
@@ -511,43 +514,90 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                 let ended = group_stack.pop().unwrap_or_default();
 
                 if ended.pict_started_here
-                    && let Some(pict) = pict_stack.pop() {
-                        let data = if pict.raw.is_empty() {
-                            decode_hex_string(&pict.hex)
+                    && let Some(pict) = pict_stack.pop()
+                {
+                    let data = if pict.raw.is_empty() {
+                        decode_hex_string(&pict.hex)
+                    } else {
+                        pict.raw
+                    };
+                    if !data.is_empty() {
+                        let mime = if pict.mime_type == "application/octet-stream" {
+                            sniff_image_mime(&data).map_or_else(
+                                || pict.mime_type.clone(),
+                                std::string::ToString::to_string,
+                            )
                         } else {
-                            pict.raw
+                            pict.mime_type.clone()
                         };
-                        if !data.is_empty() {
-                            let mime = if pict.mime_type == "application/octet-stream" {
-                                sniff_image_mime(&data).map_or_else(|| pict.mime_type.clone(), std::string::ToString::to_string)
-                            } else {
-                                pict.mime_type.clone()
-                            };
 
-                            // Word often emits the same image twice: a raster (png/jpg) under
-                            // {\*\shppict ...} and a WMF fallback under {\nonshppict ...}. Prefer
-                            // raster when both are present within the same field.
-                            let skip_image = ended.in_nonshppict
-                                && mime == "image/wmf"
-                                && field_stack.last().is_some_and(|f| f.saw_raster_image);
+                        // Word often emits the same image twice: a raster (png/jpg) under
+                        // {\*\shppict ...} and a WMF fallback under {\nonshppict ...}. Prefer
+                        // raster when both are present within the same field.
+                        let skip_image = ended.in_nonshppict
+                            && mime == "image/wmf"
+                            && field_stack.last().is_some_and(|f| f.saw_raster_image);
 
-                            if !skip_image {
-                                let is_raster = matches!(
-                                    mime.as_str(),
-                                    "image/png"
-                                        | "image/jpeg"
-                                        | "image/gif"
-                                        | "image/webp"
-                                        | "image/bmp"
-                                );
-                                if is_raster
-                                    && let Some(f) = field_stack.last_mut() {
-                                        f.saw_raster_image = true;
-                                    }
-                                let hash = sha256_hex(&data);
+                        if !skip_image {
+                            let is_raster = matches!(
+                                mime.as_str(),
+                                "image/png"
+                                    | "image/jpeg"
+                                    | "image/gif"
+                                    | "image/webp"
+                                    | "image/bmp"
+                            );
+                            if is_raster && let Some(f) = field_stack.last_mut() {
+                                f.saw_raster_image = true;
+                            }
+                            let hash = sha256_hex(&data);
+                            images.push(ParsedImage {
+                                id: format!("sha256:{hash}"),
+                                bytes: data,
+                                mime_type: mime.clone(),
+                                filename: None,
+                            });
+                            blocks.push(Block::Image {
+                                block_index: next_block_index,
+                                id: format!("sha256:{hash}"),
+                                filename: None,
+                                content_type: Some(mime),
+                                alt: None,
+                                source: SourceSpan::default(),
+                            });
+                            next_block_index += 1;
+                        }
+                    }
+                }
+
+                if group_stack.is_empty() {
+                    group_stack.push(GroupCtx::default());
+                }
+
+                if ended.field_started_here
+                    && let Some(field) = field_stack.pop()
+                {
+                    let inst = field.inst;
+                    let rslt = normalize_ws(&field.rslt);
+                    let inst_upper = inst.to_ascii_uppercase();
+                    if inst_upper.contains("HYPERLINK") || inst_upper.contains("INCLUDEPICTURE") {
+                        let Some(url) = extract_quoted_or_last_token(&inst)
+                            .map(|u| u.trim().to_string())
+                            .filter(|u| !u.is_empty())
+                        else {
+                            continue;
+                        };
+
+                        // If someone embedded a data:image URI in a field, decode it to an image
+                        // instead of emitting giant extracted_text.
+                        if let Some((bytes, mime)) = decode_data_image_uri(&url)? {
+                            if !bytes.is_empty() {
+                                let mime = sniff_image_mime(&bytes)
+                                    .map_or(mime, std::string::ToString::to_string);
+                                let hash = sha256_hex(&bytes);
                                 images.push(ParsedImage {
                                     id: format!("sha256:{hash}"),
-                                    bytes: data,
+                                    bytes,
                                     mime_type: mime.clone(),
                                     filename: None,
                                 });
@@ -561,64 +611,20 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                                 });
                                 next_block_index += 1;
                             }
+                            continue;
                         }
-                    }
 
-                if group_stack.is_empty() {
-                    group_stack.push(GroupCtx::default());
+                        let txt = if inst_upper.contains("INCLUDEPICTURE") {
+                            None
+                        } else if rslt.is_empty() {
+                            None
+                        } else {
+                            Some(rslt)
+                        };
+
+                        push_para_link(&mut cur_para_links, url, txt);
+                    }
                 }
-
-                if ended.field_started_here
-                    && let Some(field) = field_stack.pop() {
-                        let inst = field.inst;
-                        let rslt = normalize_ws(&field.rslt);
-                        let inst_upper = inst.to_ascii_uppercase();
-                        if inst_upper.contains("HYPERLINK") || inst_upper.contains("INCLUDEPICTURE")
-                        {
-                            let Some(url) = extract_quoted_or_last_token(&inst)
-                                .map(|u| u.trim().to_string())
-                                .filter(|u| !u.is_empty())
-                            else {
-                                continue;
-                            };
-
-                            // If someone embedded a data:image URI in a field, decode it to an image
-                            // instead of emitting giant extracted_text.
-                            if let Some((bytes, mime)) = decode_data_image_uri(&url)? {
-                                if !bytes.is_empty() {
-                                    let mime = sniff_image_mime(&bytes)
-                                        .map_or(mime, std::string::ToString::to_string);
-                                    let hash = sha256_hex(&bytes);
-                                    images.push(ParsedImage {
-                                        id: format!("sha256:{hash}"),
-                                        bytes,
-                                        mime_type: mime.clone(),
-                                        filename: None,
-                                    });
-                                    blocks.push(Block::Image {
-                                        block_index: next_block_index,
-                                        id: format!("sha256:{hash}"),
-                                        filename: None,
-                                        content_type: Some(mime),
-                                        alt: None,
-                                        source: SourceSpan::default(),
-                                    });
-                                    next_block_index += 1;
-                                }
-                                continue;
-                            }
-
-                            let txt = if inst_upper.contains("INCLUDEPICTURE") {
-                                None
-                            } else if rslt.is_empty() {
-                                None
-                            } else {
-                                Some(rslt)
-                            };
-
-                            push_para_link(&mut cur_para_links, url, txt);
-                        }
-                    }
             }
             b'\n' | b'\r' => {}
             b'\\' => {
@@ -697,9 +703,10 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                                             push_byte_as_text(&mut cur_text, top.encoding, val);
                                         }
                                         if top.destination == Destination::FieldRslt
-                                            && let Some(f) = field_stack.last_mut() {
-                                                push_byte_as_text(&mut f.rslt, top.encoding, val);
-                                            }
+                                            && let Some(f) = field_stack.last_mut()
+                                        {
+                                            push_byte_as_text(&mut f.rslt, top.encoding, val);
+                                        }
                                     }
                                     Destination::FieldInst => {
                                         if let Some(f) = field_stack.last_mut() {
@@ -798,9 +805,10 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                                                     cur_text.push(ch);
                                                 }
                                                 if top.destination == Destination::FieldRslt
-                                                    && let Some(f) = field_stack.last_mut() {
-                                                        f.rslt.push(ch);
-                                                    }
+                                                    && let Some(f) = field_stack.last_mut()
+                                                {
+                                                    f.rslt.push(ch);
+                                                }
                                             }
                                             Destination::FieldInst => {
                                                 if let Some(f) = field_stack.last_mut() {
@@ -946,15 +954,14 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                                     p.mime_type = "image/bmp".to_string();
                                 }
                             }
-                            "bin"
-                                if top.destination == Destination::Pict => {
-                                    let n = num.unwrap_or(0).max(0) as usize;
-                                    let end = (pos + n).min(bytes.len());
-                                    if let Some(p) = pict_stack.last_mut() {
-                                        p.raw.extend_from_slice(&bytes[pos..end]);
-                                    }
-                                    pos = end;
+                            "bin" if top.destination == Destination::Pict => {
+                                let n = num.unwrap_or(0).max(0) as usize;
+                                let end = (pos + n).min(bytes.len());
+                                if let Some(p) = pict_stack.last_mut() {
+                                    p.raw.extend_from_slice(&bytes[pos..end]);
                                 }
+                                pos = end;
+                            }
                             _ => {}
                         }
                     }
@@ -971,9 +978,10 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                     Destination::Skip => {}
                     Destination::Pict => {
                         if is_hex_digit(b)
-                            && let Some(p) = pict_stack.last_mut() {
-                                p.hex.push(b as char);
-                            }
+                            && let Some(p) = pict_stack.last_mut()
+                        {
+                            p.hex.push(b as char);
+                        }
                     }
                     Destination::FieldInst => {
                         if let Some(f) = field_stack.last_mut() {
@@ -987,9 +995,10 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                             push_byte_as_text(&mut cur_text, top.encoding, b);
                         }
                         if top.destination == Destination::FieldRslt
-                            && let Some(f) = field_stack.last_mut() {
-                                push_byte_as_text(&mut f.rslt, top.encoding, b);
-                            }
+                            && let Some(f) = field_stack.last_mut()
+                        {
+                            push_byte_as_text(&mut f.rslt, top.encoding, b);
+                        }
                     }
                 }
             }
@@ -1022,7 +1031,7 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
             text: rem,
             source: SourceSpan::default(),
             marks: Vec::new(),
-    });
+        });
         next_block_index += 1;
     }
     cur_text.clear();

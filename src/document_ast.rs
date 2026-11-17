@@ -1,13 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SpanKind {
     /// Byte offsets into the rendered extracted text.
     #[default]
     ExtractedTextByte,
 }
-
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceSpan {
@@ -126,7 +124,7 @@ impl Block {
             | Block::Table { block_index, .. }
             | Block::Image { block_index, .. }
             | Block::Link { block_index, .. } => *block_index,
-            | Block::Note { block_index, .. } => *block_index,
+            Block::Note { block_index, .. } => *block_index,
         }
     }
 
@@ -139,7 +137,7 @@ impl Block {
             | Block::Table { source, .. }
             | Block::Image { source, .. }
             | Block::Link { source, .. } => *source,
-            | Block::Note { source, .. } => *source,
+            Block::Note { source, .. } => *source,
         }
     }
 
@@ -194,10 +192,12 @@ pub fn merge_marks(mut marks: Vec<InlineMark>) -> Vec<InlineMark> {
             continue;
         }
         if let Some(last) = out.last_mut()
-            && last.kind == m.kind && m.start <= last.end {
-                last.end = last.end.max(m.end);
-                continue;
-            }
+            && last.kind == m.kind
+            && m.start <= last.end
+        {
+            last.end = last.end.max(m.end);
+            continue;
+        }
         out.push(m);
     }
     out
@@ -252,7 +252,8 @@ pub fn render_blocks_to_extracted_text(blocks: &mut [Block]) -> String {
                 level,
                 text,
                 source,
-                .. } => {
+                ..
+            } => {
                 let lvl = (*level).max(1).min(6) as usize;
                 out.push_str(&"#".repeat(lvl));
                 out.push(' ');
@@ -304,7 +305,12 @@ pub fn render_blocks_to_extracted_text(blocks: &mut [Block]) -> String {
                 };
             }
             Block::Table { rows, source, .. } => {
-                let cols = rows.iter().map(std::vec::Vec::len).max().unwrap_or(0).max(1);
+                let cols = rows
+                    .iter()
+                    .map(std::vec::Vec::len)
+                    .max()
+                    .unwrap_or(0)
+                    .max(1);
 
                 if rows.is_empty() {
                     out.push_str("| |\n|---|\n\n");

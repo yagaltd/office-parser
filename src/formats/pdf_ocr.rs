@@ -50,12 +50,15 @@ pub fn parse_auto_split(
     opts: &PdfOcrOptions,
     ocr: bool,
     split: bool,
-) -> crate::Result<(
-    crate::Document,
-    Vec<(u32, crate::Document)>,
-)> {
+) -> crate::Result<(crate::Document, Vec<(u32, crate::Document)>)> {
     if !ocr {
-        return crate::formats::pdf::parse_pdf_split(bytes, None, opts.dpi, opts.min_chars, opts.force);
+        return crate::formats::pdf::parse_pdf_split(
+            bytes,
+            None,
+            opts.dpi,
+            opts.min_chars,
+            opts.force,
+        );
     }
     // split + ocr routes EVERY page through the engine (the user wants the
     // engine's layout output per page, not the raw text layer); a plain
@@ -70,13 +73,7 @@ pub fn parse_auto_split(
             ),
         )
     })?;
-    crate::formats::pdf::parse_pdf_split(
-        bytes,
-        Some(&mut engine),
-        opts.dpi,
-        opts.min_chars,
-        force,
-    )
+    crate::formats::pdf::parse_pdf_split(bytes, Some(&mut engine), opts.dpi, opts.min_chars, force)
 }
 
 /// Kept for API compatibility; the OCR quality classification itself is

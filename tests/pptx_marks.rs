@@ -27,6 +27,12 @@ fn pptx_run_attributes_become_inline_marks() {
     assert!(fm.iter().any(|m| m.kind == MarkKind::Strikethrough));
 
     let md = office_parser::render::to_morph_markdown(&doc);
-    assert!(md.contains("## Styled Run") || md.contains("# Styled Run"), "{md}");
-    assert!(md.contains("plain ~~*fancy*~~") || md.contains("plain *~~fancy~~*"), "{md}");
+    assert!(
+        md.contains("## Styled Run") || md.contains("# Styled Run"),
+        "{md}"
+    );
+    assert!(
+        md.contains("plain ~~*fancy*~~") || md.contains("plain *~~fancy~~*"),
+        "{md}"
+    );
 }

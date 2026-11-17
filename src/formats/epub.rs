@@ -83,7 +83,7 @@ fn push_list(blocks: &mut Vec<Block>, next_idx: &mut usize, ordered: bool, items
             text: t,
             source: SourceSpan::default(),
             marks: Vec::new(),
-    })
+        })
         .collect();
     if items.is_empty() {
         return;
@@ -200,12 +200,13 @@ fn parse_opf(
                 if ln == b"itemref" {
                     for a in e.attributes().flatten() {
                         if a.key.as_ref().ends_with(b"idref")
-                            && let Ok(v) = a.unescape_value() {
-                                let v = v.trim();
-                                if !v.is_empty() {
-                                    spine.push(v.to_string());
-                                }
+                            && let Ok(v) = a.unescape_value()
+                        {
+                            let v = v.trim();
+                            if !v.is_empty() {
+                                spine.push(v.to_string());
                             }
+                        }
                     }
                 }
             }
@@ -240,23 +241,26 @@ fn parse_opf(
                 if ln == b"itemref" {
                     for a in e.attributes().flatten() {
                         if a.key.as_ref().ends_with(b"idref")
-                            && let Ok(v) = a.unescape_value() {
-                                let v = v.trim();
-                                if !v.is_empty() {
-                                    spine.push(v.to_string());
-                                }
+                            && let Ok(v) = a.unescape_value()
+                        {
+                            let v = v.trim();
+                            if !v.is_empty() {
+                                spine.push(v.to_string());
                             }
+                        }
                     }
                 }
             }
             Ok(Event::Text(t)) => {
-                if in_title && title.is_none()
-                    && let Ok(s) = t.decode() {
-                        let s = normalize_ws(&s);
-                        if !s.is_empty() {
-                            title = Some(s);
-                        }
+                if in_title
+                    && title.is_none()
+                    && let Ok(s) = t.decode()
+                {
+                    let s = normalize_ws(&s);
+                    if !s.is_empty() {
+                        title = Some(s);
                     }
+                }
             }
             Ok(Event::End(e)) => {
                 if e.local_name().as_ref() == b"title" {
@@ -419,9 +423,10 @@ fn parse_xhtml_to_blocks(
                                     src = Some(v.to_string());
                                 }
                             } else if k.ends_with(b"alt")
-                                && let Ok(v) = a.unescape_value() {
-                                    alt = Some(v.to_string());
-                                }
+                                && let Ok(v) = a.unescape_value()
+                            {
+                                alt = Some(v.to_string());
+                            }
                         }
                         if let Some(src) = src {
                             let img_zip_path = resolve_path(xhtml_path, &src);
@@ -467,9 +472,10 @@ fn parse_xhtml_to_blocks(
                         let mut href: Option<String> = None;
                         for a in e.attributes().flatten() {
                             if a.key.as_ref().ends_with(b"href")
-                                && let Ok(v) = a.unescape_value() {
-                                    href = Some(v.to_string());
-                                }
+                                && let Ok(v) = a.unescape_value()
+                            {
+                                href = Some(v.to_string());
+                            }
                         }
                         if let Some(href) = href {
                             in_a = Some(href);
@@ -501,9 +507,10 @@ fn parse_xhtml_to_blocks(
                                     src = Some(v.to_string());
                                 }
                             } else if k.ends_with(b"alt")
-                                && let Ok(v) = a.unescape_value() {
-                                    alt = Some(v.to_string());
-                                }
+                                && let Ok(v) = a.unescape_value()
+                            {
+                                alt = Some(v.to_string());
+                            }
                         }
                         if let Some(src) = src {
                             let img_zip_path = resolve_path(xhtml_path, &src);
@@ -565,9 +572,10 @@ fn parse_xhtml_to_blocks(
             }
             Ok(Event::CData(t)) => {
                 if let Ok(s) = t.decode()
-                    && let Some(p) = cur_p.as_mut() {
-                        append_text_glue(p, &s);
-                    }
+                    && let Some(p) = cur_p.as_mut()
+                {
+                    append_text_glue(p, &s);
+                }
             }
             Ok(Event::End(e)) => {
                 let name = String::from_utf8_lossy(e.local_name().as_ref()).to_ascii_lowercase();

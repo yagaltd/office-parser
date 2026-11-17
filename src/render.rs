@@ -35,10 +35,7 @@ fn escape_markdown_table_cell(s: &str) -> String {
 fn render_block(b: &Block) -> String {
     match b {
         Block::Heading {
-            level,
-            text,
-            marks,
-            ..
+            level, text, marks, ..
         } => {
             let lvl = (*level).max(1).min(6) as usize;
             format!(
@@ -68,7 +65,12 @@ fn render_block(b: &Block) -> String {
             out
         }
         Block::Table { rows, widths, .. } => {
-            let cols = rows.iter().map(std::vec::Vec::len).max().unwrap_or(0).max(1);
+            let cols = rows
+                .iter()
+                .map(std::vec::Vec::len)
+                .max()
+                .unwrap_or(0)
+                .max(1);
             if rows.is_empty() {
                 return "| |\n|---|\n\n".to_string();
             }
@@ -143,7 +145,12 @@ fn render_block(b: &Block) -> String {
 
 fn render_table_pieces(rows: &[Vec<Cell>], max_chars: usize) -> Vec<String> {
     let max_chars = max_chars.max(1);
-    let cols = rows.iter().map(std::vec::Vec::len).max().unwrap_or(0).max(1);
+    let cols = rows
+        .iter()
+        .map(std::vec::Vec::len)
+        .max()
+        .unwrap_or(0)
+        .max(1);
     if rows.is_empty() {
         return vec!["| |\n|---|\n\n".to_string()];
     }
@@ -426,8 +433,7 @@ pub(crate) fn escape_morph_line(line: &str) -> String {
     let b = rest.as_bytes();
     let hashes = b.iter().take_while(|&&c| c == b'#').count();
     let is_heading = (1..=6).contains(&hashes) && b.get(hashes) == Some(&b' ');
-    let is_list =
-        matches!(b.first(), Some(b'-' | b'*' | b'+')) && b.get(1) == Some(&b' ');
+    let is_list = matches!(b.first(), Some(b'-' | b'*' | b'+')) && b.get(1) == Some(&b' ');
     let digits = b.iter().take_while(|c| c.is_ascii_digit()).count();
     let is_ordered = digits > 0 && b.get(digits) == Some(&b'.') && b.get(digits + 1) == Some(&b' ');
     let is_quote = b.first() == Some(&b'>');
@@ -468,9 +474,7 @@ fn escape_morph_paragraph(text: &str) -> String {
 /// the CLI's OKF frontmatter; `slides:` there selects deck rendering.
 /// Column groups parsed from metadata (`multi_column_sections`):
 /// (`block_first`, `block_last`, cols), non-overlapping, ascending.
-fn column_sections(
-    doc: &Document,
-) -> Vec<(usize, usize, usize)> {
+fn column_sections(doc: &Document) -> Vec<(usize, usize, usize)> {
     doc.metadata
         .extra
         .get("multi_column_sections")
@@ -519,7 +523,10 @@ fn column_boundaries(first: usize, last: usize, cols: usize, doc: &Document) -> 
 
 #[must_use]
 pub fn to_morph_markdown(doc: &Document) -> String {
-    let is_deck = matches!(doc.metadata.format, crate::Format::Pptx | crate::Format::Odp);
+    let is_deck = matches!(
+        doc.metadata.format,
+        crate::Format::Pptx | crate::Format::Odp
+    );
     let sections = column_sections(doc);
     let mut out = String::new();
     let mut seen_l1 = false;
@@ -543,9 +550,7 @@ pub fn to_morph_markdown(doc: &Document) -> String {
             continue;
         }
         let b = &doc.blocks[idx];
-        if is_deck
-            && let Block::Heading { level: 1, .. } = b
-        {
+        if is_deck && let Block::Heading { level: 1, .. } = b {
             if seen_l1 {
                 out.push_str("---\n\n");
             }
@@ -680,14 +685,23 @@ mod marks_tests {
 
     #[test]
     fn serialize_inline_matches_blockmodel_semantics() {
-        assert_eq!(serialize_inline("bold and more", &[mk(MarkKind::Bold, 0, 4)]), "**bold** and more");
         assert_eq!(
-            serialize_inline("bold and it", &[mk(MarkKind::Bold, 0, 4), mk(MarkKind::Italic, 9, 11)]),
+            serialize_inline("bold and more", &[mk(MarkKind::Bold, 0, 4)]),
+            "**bold** and more"
+        );
+        assert_eq!(
+            serialize_inline(
+                "bold and it",
+                &[mk(MarkKind::Bold, 0, 4), mk(MarkKind::Italic, 9, 11)]
+            ),
             "**bold** and *it*"
         );
         // full overlap clusters as ***
         assert_eq!(
-            serialize_inline("both", &[mk(MarkKind::Bold, 0, 4), mk(MarkKind::Italic, 0, 4)]),
+            serialize_inline(
+                "both",
+                &[mk(MarkKind::Bold, 0, 4), mk(MarkKind::Italic, 0, 4)]
+            ),
             "***both***"
         );
         // code + strike
@@ -703,18 +717,30 @@ mod marks_tests {
         assert_eq!(
             serialize_inline(
                 "link text tail",
-                &[mk(MarkKind::Link { url: "https://x.y".into() }, 0, 9)]
+                &[mk(
+                    MarkKind::Link {
+                        url: "https://x.y".into()
+                    },
+                    0,
+                    9
+                )]
             ),
             "[link text](https://x.y) tail"
         );
         // partial overlap nests
         assert_eq!(
-            serialize_inline("border", &[mk(MarkKind::Bold, 0, 6), mk(MarkKind::Italic, 2, 4)]),
+            serialize_inline(
+                "border",
+                &[mk(MarkKind::Bold, 0, 6), mk(MarkKind::Italic, 2, 4)]
+            ),
             "**bo*rd*er**"
         );
         // adjacent same-kind merges
         assert_eq!(
-            serialize_inline("abcd", &[mk(MarkKind::Bold, 0, 2), mk(MarkKind::Bold, 2, 4)]),
+            serialize_inline(
+                "abcd",
+                &[mk(MarkKind::Bold, 0, 2), mk(MarkKind::Bold, 2, 4)]
+            ),
             "**abcd**"
         );
         // empty text / no marks passthrough

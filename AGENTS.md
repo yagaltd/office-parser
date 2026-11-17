@@ -17,6 +17,9 @@
 - Project overview: `README.md` — 17 office/data formats → one `Document` AST; MIT; consumers are
   CognitiveOS V3 and MorphEditor.
 - Build and test: `cli/README.md` (CLI, all flags); `cargo test` (default features, no pdfium);
+  `cargo fmt --all --check` (formatting is enforced, vendor/ included — upstream hayro is
+  rustfmt-formatted, so patch hunks must be too); `cargo clippy` (lints: `[workspace.lints]`
+  = BeautifulRust config; `cargo build` is warning-free, the pedantic backlog is a ratchet);
   `cargo test --features pdf,ocr-indra-native` (in-process Indra OCR).
 - Architecture and docs index: `docs/formats.md` (per-format behaviour) · `docs/spreadsheets.md` ·
   `docs/charts-diagrams.md` · `docs/library-usage.md` · `docs/release.md`.

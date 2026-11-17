@@ -17,9 +17,9 @@
 //!   self-consistent: `pdf_scanned` has zero spans AND zero chars, so the
 //!   image-only gate owns it — no-ink must NOT fire).
 
-use office_parser::formats::pdf::{parse_pdf_split, SpanBox};
+use office_parser::formats::pdf::{SpanBox, parse_pdf_split};
 use office_parser::quality::{
-    no_ink_reason, NO_INK_ADVANCE_FACTOR, NO_INK_MIN_COVERAGE_RATIO, NO_INK_REASON, PageVerdict,
+    NO_INK_ADVANCE_FACTOR, NO_INK_MIN_COVERAGE_RATIO, NO_INK_REASON, PageVerdict, no_ink_reason,
 };
 
 const A4_AREA_PT2: f32 = 612.0 * 792.0;
@@ -105,7 +105,10 @@ fn expected_ink_uses_the_median_span_font_size() {
     };
     // Median 8 pt (8, 8, 18): expected = 120 × 0.55 × 64 = 4,224 pt²;
     // measured 3,060 pt² corroborates the claim.
-    assert_eq!(no_ink_reason(120, 50, &mk(8.0, 8.0, 18.0), A4_AREA_PT2), None);
+    assert_eq!(
+        no_ink_reason(120, 50, &mk(8.0, 8.0, 18.0), A4_AREA_PT2),
+        None
+    );
     // Median 18 pt (8, 18, 18): expected = 120 × 0.55 × 324 = 21,384 pt²;
     // measured 3,960 pt² is ~18% of it — implausible → no-ink.
     assert_eq!(
@@ -147,7 +150,10 @@ fn scanned_pages_route_image_only_not_no_ink_without_pdfium() {
         assert_eq!(q.text_richness, 0);
         match &q.verdict {
             PageVerdict::Ocr { reason } => {
-                assert_eq!(reason, "image-only page", "gate order: image-only, not {reason:?}");
+                assert_eq!(
+                    reason, "image-only page",
+                    "gate order: image-only, not {reason:?}"
+                );
             }
             other => panic!("expected Ocr, got {other:?}"),
         }
@@ -191,7 +197,11 @@ fn trust_verdicts_are_never_silently_empty_without_pdfium() {
         assert!(!pages.is_empty(), "{path}: verdict vector is empty");
         for q in &pages {
             if let PageVerdict::Ocr { reason } = &q.verdict {
-                assert!(!reason.is_empty(), "{path} p{}: empty untrust reason", q.page);
+                assert!(
+                    !reason.is_empty(),
+                    "{path} p{}: empty untrust reason",
+                    q.page
+                );
             }
         }
     }

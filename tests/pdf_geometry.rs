@@ -15,7 +15,7 @@
 //! this change — the markdown must be byte-identical.
 
 use office_parser::document_ast::Block;
-use office_parser::formats::pdf::{parse_pdf_full, CoordinateSystem, PageGeometry};
+use office_parser::formats::pdf::{CoordinateSystem, PageGeometry, parse_pdf_full};
 use office_parser::{pdf, render};
 
 const MIXED: &str = "tests/fixtures/pdf_mixed.pdf";
@@ -87,10 +87,7 @@ fn synth_pdf(rotate: Option<i64>) -> Vec<u8> {
 
     let mut pages_dict = Dictionary::new();
     pages_dict.set("Type", nm("Pages"));
-    pages_dict.set(
-        "Kids",
-        Object::Array(vec![Object::Reference(page_id)]),
-    );
+    pages_dict.set("Kids", Object::Array(vec![Object::Reference(page_id)]));
     pages_dict.set("Count", int(1));
     doc.set_object(pages_id, pages_dict);
 
@@ -115,8 +112,20 @@ fn test_spans_carry_bbox_font_name_and_size() {
     let p1 = page_geo(&parsed.pages_geometry, 1);
     assert!(!p1.spans.is_empty(), "page 1 is the born-digital text page");
     for s in &p1.spans {
-        assert!(s.x1 > s.x0, "span {}: x1 ({}) <= x0 ({})", s.seq, s.x1, s.x0);
-        assert!(s.y1 > s.y0, "span {}: y1 ({}) <= y0 ({})", s.seq, s.y1, s.y0);
+        assert!(
+            s.x1 > s.x0,
+            "span {}: x1 ({}) <= x0 ({})",
+            s.seq,
+            s.x1,
+            s.x0
+        );
+        assert!(
+            s.y1 > s.y0,
+            "span {}: y1 ({}) <= y0 ({})",
+            s.seq,
+            s.y1,
+            s.y0
+        );
         assert!(!s.font_name.is_empty(), "span {}: empty font_name", s.seq);
         assert!(s.font_size > 0.0, "span {}: font_size <= 0", s.seq);
         assert_eq!(s.char_count, s.text.chars().count());
@@ -149,7 +158,11 @@ fn test_cropbox_origin_is_subtracted() {
     assert_eq!(s.x0, 50.0, "x0 must be pen 150 - crop origin 100");
     assert_eq!(s.y0, 32.0, "top edge = max_y 700 - raw y1 668");
     assert_eq!(s.y1, 50.0, "bottom edge = max_y 700 - raw y0 650");
-    assert!(s.x1 > 115.0 && s.x1 < 116.0, "advance-bounded x1, got {}", s.x1);
+    assert!(
+        s.x1 > 115.0 && s.x1 < 116.0,
+        "advance-bounded x1, got {}",
+        s.x1
+    );
     assert!(s.x1 > s.x0 && s.y1 > s.y0);
     // Reversible: adding the recorded origin recovers the raw pen x.
     let origin_x = g.crop_box.unwrap()[0];
@@ -184,7 +197,10 @@ fn test_initial_rotation_preserved() {
     assert_eq!(g.coordinate_system, CoordinateSystem::Source);
     assert_eq!(g.spans, [] as [office_parser::formats::pdf::SpanBox; 0]);
     let media = g.media_box.expect("MediaBox resolved");
-    assert!(approx(media[2], 792.05) && approx(media[3], 612.04), "media: {media:?}");
+    assert!(
+        approx(media[2], 792.05) && approx(media[3], 612.04),
+        "media: {media:?}"
+    );
 }
 
 /// Scenario: existing block output is byte-identical (negative).
@@ -197,7 +213,11 @@ fn test_existing_block_output_unchanged() {
         assert!(doc.blocks.is_empty(), "{path}: expected no blocks");
         assert_eq!(render::to_markdown(&doc), "", "{path}: markdown");
         let j = render::to_json_value(&doc);
-        assert_eq!(j["blocks"].as_array().unwrap().len(), 0, "{path}: json blocks");
+        assert_eq!(
+            j["blocks"].as_array().unwrap().len(),
+            0,
+            "{path}: json blocks"
+        );
     }
 
     // pdf_cjk_scan: exactly one paragraph (the 16-char latin-1 mojibake layer).
@@ -231,8 +251,12 @@ fn test_existing_block_output_unchanged() {
         let j = render::to_json_value(&doc);
         assert_eq!(j["blocks"][0]["type"], "image");
         assert!(
-            j["blocks"][0]["id"].as_str().unwrap().starts_with("sha256:ac2179740601"),
-            "json id: {}", j["blocks"][0]["id"]
+            j["blocks"][0]["id"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:ac2179740601"),
+            "json id: {}",
+            j["blocks"][0]["id"]
         );
     }
 
@@ -244,8 +268,16 @@ fn test_existing_block_output_unchanged() {
         let expectations: [(&str, Option<u8>, &str); 5] = [
             ("heading", Some(1), "Quarterly Field Report"),
             ("heading", Some(2), "Network Maintenance Summary"),
-            ("paragraph", None, "During the second quarter the field team replaced 34 fiber patch panels across the northern ring. Downtime totalled eleven hours, split over four maintenance windows."),
-            ("paragraph", None, "Customer impact was limited to two buildings on the Riverside campus. Affected tenants received credits according to the standard SLA schedule."),
+            (
+                "paragraph",
+                None,
+                "During the second quarter the field team replaced 34 fiber patch panels across the northern ring. Downtime totalled eleven hours, split over four maintenance windows.",
+            ),
+            (
+                "paragraph",
+                None,
+                "Customer impact was limited to two buildings on the Riverside campus. Affected tenants received credits according to the standard SLA schedule.",
+            ),
             ("image", None, "sha256:1f5353555f1f"),
         ];
         for (i, (kind, level, expected)) in expectations.iter().enumerate() {
@@ -277,10 +309,17 @@ fn test_page_without_spans_yields_empty_geometry() {
     assert_eq!(parsed.pages_geometry.len(), 2);
     for (i, g) in parsed.pages_geometry.iter().enumerate() {
         assert_eq!(g.page_number, (i + 1) as u32);
-        assert!(g.spans.is_empty(), "page {} must have no spans", g.page_number);
+        assert!(
+            g.spans.is_empty(),
+            "page {} must have no spans",
+            g.page_number
+        );
         // the scanner fixture declares a CropBox — it must resolve, not vanish
         let crop = g.crop_box.expect("CropBox resolved");
-        assert!(approx(crop[2], 612.041) && approx(crop[3], 792.053), "crop: {crop:?}");
+        assert!(
+            approx(crop[2], 612.041) && approx(crop[3], 792.053),
+            "crop: {crop:?}"
+        );
         let media = g.media_box.expect("MediaBox resolved");
         assert!(
             approx(media[2], 612.041) && approx(media[3], 792.053),

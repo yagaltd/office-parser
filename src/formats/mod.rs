@@ -149,12 +149,18 @@ fn slide_meta_for_image_ids(
 
     let mut ranges: Vec<SlideRange> = Vec::new();
     for s in slides {
-        let idx = s.get("index").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
+        let idx = s
+            .get("index")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize;
         let title = s
             .get("title")
             .and_then(|v| v.as_str())
             .map(std::string::ToString::to_string);
-        let first = s.get("block_first").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
+        let first = s
+            .get("block_first")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize;
         let last = s
             .get("block_last")
             .and_then(serde_json::Value::as_u64)

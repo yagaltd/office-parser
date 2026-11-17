@@ -148,18 +148,22 @@ fn run(args: Args) -> Result<()> {
     };
 
     let (doc, page_docs) = match format {
-        office_parser::Format::Xlsx => {
-            (office_parser::xlsx::parse_with_options(&input_bytes, sheet_opts)?, None)
-        }
-        office_parser::Format::Ods => {
-            (office_parser::ods::parse_with_options(&input_bytes, sheet_opts)?, None)
-        }
-        office_parser::Format::Csv => {
-            (office_parser::csv::parse_with_options(&input_bytes, sheet_opts)?, None)
-        }
-        office_parser::Format::Tsv => {
-            (office_parser::tsv::parse_with_options(&input_bytes, sheet_opts)?, None)
-        }
+        office_parser::Format::Xlsx => (
+            office_parser::xlsx::parse_with_options(&input_bytes, sheet_opts)?,
+            None,
+        ),
+        office_parser::Format::Ods => (
+            office_parser::ods::parse_with_options(&input_bytes, sheet_opts)?,
+            None,
+        ),
+        office_parser::Format::Csv => (
+            office_parser::csv::parse_with_options(&input_bytes, sheet_opts)?,
+            None,
+        ),
+        office_parser::Format::Tsv => (
+            office_parser::tsv::parse_with_options(&input_bytes, sheet_opts)?,
+            None,
+        ),
         office_parser::Format::Pdf => {
             let opts = office_parser::pdf_ocr::PdfOcrOptions {
                 min_chars: args.ocr_min_chars,
@@ -277,7 +281,10 @@ fn run(args: Args) -> Result<()> {
                     );
                     let page_path = out_path.with_file_name(format!(
                         "{}-p{:03}.md",
-                        out_path.file_stem().and_then(|s| s.to_str()).unwrap_or("page"),
+                        out_path
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("page"),
                         page_no
                     ));
                     std::fs::write(&page_path, format!("{fm}{pmd}"))
@@ -427,7 +434,10 @@ fn okf_frontmatter(
 ) -> String {
     fn quote(s: &str) -> String {
         let one_line = s.split_whitespace().collect::<Vec<_>>().join(" ");
-        format!("\"{}\"", one_line.replace('\\', "\\\\").replace('"', "\\\""))
+        format!(
+            "\"{}\"",
+            one_line.replace('\\', "\\\\").replace('"', "\\\"")
+        )
     }
     let mut fm = String::from("---\ntype: document\n");
     if let Some(t) = doc

@@ -94,20 +94,21 @@ fn parse_document_xml_root(xml: &str) -> Result<MindNode> {
                         top.collapsed = is_collapsed;
                     }
                 } else if n == "Text"
-                    && let Some(top) = topic_stack.last_mut() {
-                        let plain = e.attributes().flatten().find_map(|a| {
-                            if local_name(a.key.as_ref()) == "PlainText" {
-                                a.unescape_value().ok().map(|v| v.to_string())
-                            } else {
-                                None
-                            }
-                        });
-                        if let Some(t) = plain {
-                            top.title = t;
+                    && let Some(top) = topic_stack.last_mut()
+                {
+                    let plain = e.attributes().flatten().find_map(|a| {
+                        if local_name(a.key.as_ref()) == "PlainText" {
+                            a.unescape_value().ok().map(|v| v.to_string())
                         } else {
-                            in_text = true;
+                            None
                         }
+                    });
+                    if let Some(t) = plain {
+                        top.title = t;
+                    } else {
+                        in_text = true;
                     }
+                }
             }
             Ok(quick_xml::events::Event::Empty(e)) => {
                 if !in_one_topic {
@@ -125,18 +126,19 @@ fn parse_document_xml_root(xml: &str) -> Result<MindNode> {
                         top.collapsed = is_collapsed;
                     }
                 } else if n == "Text"
-                    && let Some(top) = topic_stack.last_mut() {
-                        let plain = e.attributes().flatten().find_map(|a| {
-                            if local_name(a.key.as_ref()) == "PlainText" {
-                                a.unescape_value().ok().map(|v| v.to_string())
-                            } else {
-                                None
-                            }
-                        });
-                        if let Some(t) = plain {
-                            top.title = t;
+                    && let Some(top) = topic_stack.last_mut()
+                {
+                    let plain = e.attributes().flatten().find_map(|a| {
+                        if local_name(a.key.as_ref()) == "PlainText" {
+                            a.unescape_value().ok().map(|v| v.to_string())
+                        } else {
+                            None
                         }
+                    });
+                    if let Some(t) = plain {
+                        top.title = t;
                     }
+                }
             }
             Ok(quick_xml::events::Event::Text(t)) => {
                 if in_one_topic && in_text {

@@ -1,9 +1,9 @@
 //! TASK 5 (plan 20261108-001): `PageTextQuality` / `PageVerdict` types and
 //! their JSON shape through `render::to_json_value`.
 
-use office_parser::{Document, DocumentMetadata, Format};
 use office_parser::quality::{PageTextQuality, PageVerdict};
 use office_parser::render::to_json_value;
+use office_parser::{Document, DocumentMetadata, Format};
 
 fn doc_with_page_quality(page_quality: Option<Vec<PageTextQuality>>) -> Document {
     Document {
@@ -78,9 +78,8 @@ fn test_page_quality_serde_roundtrip() {
     assert_eq!(rendered[2]["columns"], 2);
     assert_eq!(rendered[2]["rotated"], true);
 
-    let back: Vec<PageTextQuality> =
-        serde_json::from_value(v["metadata"]["page_quality"].clone())
-            .expect("page_quality deserialises");
+    let back: Vec<PageTextQuality> = serde_json::from_value(v["metadata"]["page_quality"].clone())
+        .expect("page_quality deserialises");
     assert_eq!(back, pages);
 }
 
@@ -90,8 +89,8 @@ fn test_escalate_and_ocr_are_distinct_in_json() {
         reason: "scan".to_string(),
     })
     .expect("serialise ocr");
-    let escalate =
-        serde_json::to_value(PageVerdict::Escalate { complexity: None }).expect("serialise escalate");
+    let escalate = serde_json::to_value(PageVerdict::Escalate { complexity: None })
+        .expect("serialise escalate");
 
     // Internally tagged, self-describing: the discriminators differ and each
     // variant carries only its own fields.

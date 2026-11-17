@@ -178,9 +178,10 @@ fn parse_xlsx(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeD
                     };
                     let cell = &mut grid[r][c];
                     if let Ok(v) = cell.text.trim().parse::<f64>()
-                        && excel_serial_looks_like_datetime(v) {
-                            cell.text = excel_serial_to_iso(v, kind);
-                        }
+                        && excel_serial_looks_like_datetime(v)
+                    {
+                        cell.text = excel_serial_to_iso(v, kind);
+                    }
                 }
             }
         }
@@ -189,7 +190,8 @@ fn parse_xlsx(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeD
         if rows_cap >= 2 {
             let mut inferred: Vec<Option<DateTimeKind>> = vec![None; cols_cap];
             for c in 0..cols_cap {
-                let header = grid.first()
+                let header = grid
+                    .first()
                     .and_then(|r| r.get(c))
                     .map_or_default(|c| c.text.trim().to_ascii_lowercase());
                 inferred[c] = if header.contains("timestamp")
@@ -215,9 +217,10 @@ fn parse_xlsx(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeD
                         continue;
                     }
                     if let Ok(v) = cell.text.trim().parse::<f64>()
-                        && excel_serial_looks_like_datetime(v) {
-                            cell.text = excel_serial_to_iso(v, kind);
-                        }
+                        && excel_serial_looks_like_datetime(v)
+                    {
+                        cell.text = excel_serial_to_iso(v, kind);
+                    }
                 }
             }
         }
@@ -481,12 +484,13 @@ fn parse_xlsx(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeD
         }
 
         if let Some(m) = sheets_meta.last_mut()
-            && let Some(o) = m.as_object_mut() {
-                o.insert(
-                    "emitted_tables".to_string(),
-                    serde_json::json!(emitted_tables),
-                );
-            }
+            && let Some(o) = m.as_object_mut()
+        {
+            o.insert(
+                "emitted_tables".to_string(),
+                serde_json::json!(emitted_tables),
+            );
+        }
     }
 
     let mut extra = serde_json::json!({
@@ -747,10 +751,9 @@ fn xlsx_sheet_formulas(
                 }
             }
             Ok(Event::CData(t)) => {
-                if in_f
-                    && let Ok(c) = t.decode() {
-                        f_text.push_str(&c);
-                    }
+                if in_f && let Ok(c) = t.decode() {
+                    f_text.push_str(&c);
+                }
             }
             Ok(Event::Eof) => break,
             Err(e) => return Err(anyhow::anyhow!(e).context("parse worksheet for formulas")),
@@ -821,8 +824,9 @@ fn xlsx_date_time_kinds_by_xf(bytes: &[u8]) -> Result<Vec<Option<DateTimeKind>>>
                         num_fmt_id = a.unescape_value().ok().and_then(|v| v.parse().ok());
                     }
                 }
-                let kind = num_fmt_id
-                    .and_then(|id| classify_numfmt(id, custom.get(&id).map(std::string::String::as_str)));
+                let kind = num_fmt_id.and_then(|id| {
+                    classify_numfmt(id, custom.get(&id).map(std::string::String::as_str))
+                });
                 xfs.push(kind);
             }
             Ok(Event::Eof) => break,
@@ -943,9 +947,10 @@ fn xlsx_sheet_date_time_cells(
                     }
                 }
                 if let (Some(rf), Some(si)) = (cell_ref, style_idx)
-                    && let Some(Some(kind)) = kinds_by_xf.get(si) {
-                        out.insert(rf, *kind);
-                    }
+                    && let Some(Some(kind)) = kinds_by_xf.get(si)
+                {
+                    out.insert(rf, *kind);
+                }
             }
             Ok(Event::Eof) => break,
             Err(e) => return Err(anyhow::anyhow!(e).context("parse worksheet styles")),
@@ -1272,9 +1277,7 @@ fn parse_table_xml(xml: &str) -> Result<Option<NamedTable>> {
 
     loop {
         match r.read_event_into(&mut buf) {
-            Ok(Event::Start(e) | Event::Empty(e))
-                if local_name(e.name().as_ref()) == b"table" =>
-            {
+            Ok(Event::Start(e) | Event::Empty(e)) if local_name(e.name().as_ref()) == b"table" => {
                 let mut name: Option<String> = None;
                 let mut display_name: Option<String> = None;
                 let mut ref_a1: Option<String> = None;

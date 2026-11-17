@@ -1,15 +1,15 @@
 mod document;
-pub mod progress;
 pub mod document_ast;
 pub mod formats;
+pub mod progress;
 pub mod quality;
 pub mod render;
 pub mod spreadsheet;
 
 pub use document::{Document, DocumentMetadata, ExtractedImage, Format, PdfTextQuality};
-pub use quality::{PageTextQuality, PageVerdict};
 #[cfg(feature = "ocr-indra-native")]
 pub use formats::indra_native::IndraNative;
+pub use quality::{PageTextQuality, PageVerdict};
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -125,8 +125,7 @@ pub mod rtf {
 pub mod pptx {
     use super::{Document, Result};
 
-    #[derive(Clone, Copy, Debug)]
-    #[derive(Default)]
+    #[derive(Clone, Copy, Debug, Default)]
     pub struct ParseOptions {
         /// Reserved for future snapshot support.
         ///
@@ -134,8 +133,6 @@ pub mod pptx {
         /// but does not generate slide snapshot images.
         pub include_slide_snapshots: bool,
     }
-
-    
 
     pub fn parse(bytes: &[u8]) -> Result<Document> {
         crate::formats::pptx::parse(bytes)
@@ -149,8 +146,7 @@ pub mod pptx {
 pub mod odp {
     use super::{Document, Result};
 
-    #[derive(Clone, Copy, Debug)]
-    #[derive(Default)]
+    #[derive(Clone, Copy, Debug, Default)]
     pub struct ParseOptions {
         /// Reserved for future snapshot support.
         ///
@@ -158,8 +154,6 @@ pub mod odp {
         /// but does not generate slide snapshot images.
         pub include_slide_snapshots: bool,
     }
-
-    
 
     pub fn parse(bytes: &[u8]) -> Result<Document> {
         crate::formats::odp::parse(bytes)
@@ -238,7 +232,7 @@ pub mod pdf {
 #[cfg(all(feature = "pdf", feature = "ocr-indra-native"))]
 pub mod pdf_ocr {
     use super::{Document, Result};
-    pub use crate::formats::pdf_ocr::{parse_auto, parse_auto_split, PdfOcrOptions};
+    pub use crate::formats::pdf_ocr::{PdfOcrOptions, parse_auto, parse_auto_split};
 
     pub fn parse(bytes: &[u8]) -> Result<Document> {
         parse_auto(bytes, &PdfOcrOptions::default())

@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 
 use lopdf::Object;
 
-use crate::document_ast::{Block, Cell, LinkKind, ListItem, SourceSpan};
 use crate::PdfTextQuality;
+use crate::document_ast::{Block, Cell, LinkKind, ListItem, SourceSpan};
 
 use super::{ParsedImage, sha256_hex};
 
@@ -48,12 +48,14 @@ fn cleanup_pdf_text(s: &str) -> String {
             if saw_break {
                 // If next is a lowercase letter, treat as hyphenation.
                 if let Some(nxt) = look.peek().copied()
-                    && nxt.is_alphabetic() && nxt.is_lowercase() {
-                        for _ in 0..consumed {
-                            it.next();
-                        }
-                        continue; // drop hyphen + newline
+                    && nxt.is_alphabetic()
+                    && nxt.is_lowercase()
+                {
+                    for _ in 0..consumed {
+                        it.next();
                     }
+                    continue; // drop hyphen + newline
+                }
             }
         }
         tmp.push(ch);
@@ -514,24 +516,25 @@ fn decode_font_string(
 
     if let Some(alias) = font_alias
         && let Some(enc) = encodings.get(alias)
-            && let Ok(s) = lopdf::Document::decode_text(enc, bytes) {
-                // Some PDFs (esp. multi-byte / CID-ish) can yield strings with interleaved NULs.
-                // Prefer a NUL-stripped version, and if the decoded output is mostly NUL,
-                // fall back to direct string decoding.
-                let s_stripped = strip_nul(&s);
-                if s_stripped.is_empty() {
-                    return strip_nul(&decode_pdf_string(bytes));
-                }
-                let nul_ratio = (s.chars().filter(|c| *c == '\u{0000}').count() as f32)
-                    / (s.chars().count().max(1) as f32);
-                if nul_ratio >= 0.20 {
-                    let alt = strip_nul(&decode_pdf_string(bytes));
-                    if alt.chars().count() >= s_stripped.chars().count() {
-                        return alt;
-                    }
-                }
-                return s_stripped;
+        && let Ok(s) = lopdf::Document::decode_text(enc, bytes)
+    {
+        // Some PDFs (esp. multi-byte / CID-ish) can yield strings with interleaved NULs.
+        // Prefer a NUL-stripped version, and if the decoded output is mostly NUL,
+        // fall back to direct string decoding.
+        let s_stripped = strip_nul(&s);
+        if s_stripped.is_empty() {
+            return strip_nul(&decode_pdf_string(bytes));
+        }
+        let nul_ratio = (s.chars().filter(|c| *c == '\u{0000}').count() as f32)
+            / (s.chars().count().max(1) as f32);
+        if nul_ratio >= 0.20 {
+            let alt = strip_nul(&decode_pdf_string(bytes));
+            if alt.chars().count() >= s_stripped.chars().count() {
+                return alt;
             }
+        }
+        return s_stripped;
+    }
 
     // Best-effort fallback when the PDF doesn't provide a usable font encoding.
     strip_nul(&decode_pdf_string(bytes))
@@ -880,9 +883,10 @@ fn parse_pdf_outline(
             return None;
         };
         if let Object::Name(n) = s
-            && n.as_slice() != b"GoTo" {
-                return None;
-            }
+            && n.as_slice() != b"GoTo"
+        {
+            return None;
+        }
         let Ok(d) = a.get(b"D") else {
             return None;
         };
@@ -947,13 +951,14 @@ fn parse_pdf_outline(
             });
 
         if !title.is_empty()
-            && let Some(page_number) = page_number {
-                out.push(PdfOutlineEntry {
-                    title,
-                    level: level.max(1),
-                    page_number,
-                });
-            }
+            && let Some(page_number) = page_number
+        {
+            out.push(PdfOutlineEntry {
+                title,
+                level: level.max(1),
+                page_number,
+            });
+        }
 
         if let Ok(child) = item.get(b"First") {
             walk(
@@ -1010,7 +1015,11 @@ fn push_text_atom(
     let adv = estimate_text_advance(&t, fs);
     let m = state.ctm.multiply(&state.tm);
     let len = (m.a * m.a + m.b * m.b).sqrt();
-    let (ux, uy) = if len > 1e-6 { (m.a / len, m.b / len) } else { (1.0, 0.0) };
+    let (ux, uy) = if len > 1e-6 {
+        (m.a / len, m.b / len)
+    } else {
+        (1.0, 0.0)
+    };
     let (ex, ey) = (x + adv * ux, y + adv * uy);
     let (upx, upy) = (-uy, ux);
     let corners = [
@@ -1021,11 +1030,18 @@ fn push_text_atom(
     ];
     let x0 = corners.iter().map(|c| c.0).fold(f32::INFINITY, f32::min);
     let y0 = corners.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
-    let x1 = corners.iter().map(|c| c.0).fold(f32::NEG_INFINITY, f32::max);
-    let y1 = corners.iter().map(|c| c.1).fold(f32::NEG_INFINITY, f32::max);
-    let font_name = state
-        .font_alias
-        .as_deref().map_or_else(|| "(none)".to_string(), |a| String::from_utf8_lossy(a).to_string());
+    let x1 = corners
+        .iter()
+        .map(|c| c.0)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let y1 = corners
+        .iter()
+        .map(|c| c.1)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let font_name = state.font_alias.as_deref().map_or_else(
+        || "(none)".to_string(),
+        |a| String::from_utf8_lossy(a).to_string(),
+    );
     geometry.push(SpanBox {
         seq,
         x0,
@@ -1096,9 +1112,10 @@ fn handle_content_ops(
                         obj_to_f32(&operands[3]),
                         obj_to_f32(&operands[4]),
                         obj_to_f32(&operands[5]),
-                    ) {
-                        state.tm = Matrix2D::from_components(a, b, c, d, e, f);
-                    }
+                    )
+                {
+                    state.tm = Matrix2D::from_components(a, b, c, d, e, f);
+                }
             }
             "cm" => {
                 // a b c d e f
@@ -1110,29 +1127,30 @@ fn handle_content_ops(
                         obj_to_f32(&operands[3]),
                         obj_to_f32(&operands[4]),
                         obj_to_f32(&operands[5]),
-                    ) {
-                        let m = Matrix2D::from_components(a, b, c, d, e, f);
-                        state.ctm = state.ctm.multiply(&m);
-                    }
+                    )
+                {
+                    let m = Matrix2D::from_components(a, b, c, d, e, f);
+                    state.ctm = state.ctm.multiply(&m);
+                }
             }
             "Td" => {
                 if operands.len() >= 2
                     && let (Some(tx), Some(ty)) =
                         (obj_to_f32(&operands[0]), obj_to_f32(&operands[1]))
-                    {
-                        let t = Matrix2D::from_components(1.0, 0.0, 0.0, 1.0, tx, ty);
-                        state.tm = state.tm.multiply(&t);
-                    }
+                {
+                    let t = Matrix2D::from_components(1.0, 0.0, 0.0, 1.0, tx, ty);
+                    state.tm = state.tm.multiply(&t);
+                }
             }
             "TD" => {
                 if operands.len() >= 2
                     && let (Some(tx), Some(ty)) =
                         (obj_to_f32(&operands[0]), obj_to_f32(&operands[1]))
-                    {
-                        state.leading = (-ty).abs().max(1.0);
-                        let t = Matrix2D::from_components(1.0, 0.0, 0.0, 1.0, tx, ty);
-                        state.tm = state.tm.multiply(&t);
-                    }
+                {
+                    state.leading = (-ty).abs().max(1.0);
+                    let t = Matrix2D::from_components(1.0, 0.0, 0.0, 1.0, tx, ty);
+                    state.tm = state.tm.multiply(&t);
+                }
             }
             "TL" => {
                 if let Some(tl) = operands.first().and_then(obj_to_f32) {
@@ -1148,7 +1166,8 @@ fn handle_content_ops(
                     continue;
                 }
                 let alias = state.font_alias.as_deref();
-                if let Some(s) = operands.first()
+                if let Some(s) = operands
+                    .first()
                     .and_then(|o| decode_text_object(encodings, alias, o))
                 {
                     let t = normalize_atom_text(&s);
@@ -1183,7 +1202,8 @@ fn handle_content_ops(
                     continue;
                 }
                 let alias = state.font_alias.as_deref();
-                if let Some(s) = operands.first()
+                if let Some(s) = operands
+                    .first()
                     .and_then(|o| decode_text_object(encodings, alias, o))
                 {
                     let t = normalize_atom_text(&s);
@@ -1229,77 +1249,77 @@ fn handle_content_ops(
                         _ => None,
                     };
                     if let Some(d) = dict
-                        && let Ok(Object::String(b, _)) = d.get(b"ActualText") {
-                            let t = normalize_atom_text(&decode_pdf_string(b));
-                            if !t.is_empty() {
-                                push_text_atom(state, atoms, geometry, t);
-                            }
+                        && let Ok(Object::String(b, _)) = d.get(b"ActualText")
+                    {
+                        let t = normalize_atom_text(&decode_pdf_string(b));
+                        if !t.is_empty() {
+                            push_text_atom(state, atoms, geometry, t);
                         }
+                    }
                 }
             }
-            "Do"
-                if !operands.is_empty() => {
-                    let Object::Name(name) = &operands[0] else {
-                        continue;
-                    };
-                    let Some(stream) = resources_get_xobject_stream(doc, resources, name)? else {
-                        continue;
-                    };
-                    let subtype = stream_subtype(&stream).unwrap_or_default();
+            "Do" if !operands.is_empty() => {
+                let Object::Name(name) = &operands[0] else {
+                    continue;
+                };
+                let Some(stream) = resources_get_xobject_stream(doc, resources, name)? else {
+                    continue;
+                };
+                let subtype = stream_subtype(&stream).unwrap_or_default();
 
-                    if subtype == b"Form".to_vec() {
-                        let mut form_resources = resources.clone();
-                        if let Ok(obj) = stream.dict.get(b"Resources")
-                            && let Some(r) = resolve_dict(doc, obj) {
-                                merge_resources_into(doc, &mut form_resources, &r);
-                            }
+                if subtype == b"Form".to_vec() {
+                    let mut form_resources = resources.clone();
+                    if let Ok(obj) = stream.dict.get(b"Resources")
+                        && let Some(r) = resolve_dict(doc, obj)
+                    {
+                        merge_resources_into(doc, &mut form_resources, &r);
+                    }
 
-                        let mut form_fonts = fonts.clone();
-                        form_fonts.extend(collect_fonts_from_resources(doc, &form_resources));
+                    let mut form_fonts = fonts.clone();
+                    form_fonts.extend(collect_fonts_from_resources(doc, &form_resources));
 
-                        let form_encodings: HashMap<Vec<u8>, lopdf::Encoding<'_>> = form_fonts
-                            .iter()
-                            .filter_map(|(name, font)| {
-                                font.get_font_encoding(doc)
-                                    .ok()
-                                    .map(|enc| (name.clone(), enc))
-                            })
-                            .collect();
+                    let form_encodings: HashMap<Vec<u8>, lopdf::Encoding<'_>> = form_fonts
+                        .iter()
+                        .filter_map(|(name, font)| {
+                            font.get_font_encoding(doc)
+                                .ok()
+                                .map(|enc| (name.clone(), enc))
+                        })
+                        .collect();
 
-                        let bytes = stream
-                            .decompressed_content()
-                            .unwrap_or_else(|_| stream.content.clone());
-                        let content =
-                            lopdf::content::Content::decode(&bytes).with_context(|| {
-                                format!("decode Form XObject content (page {page_number})")
-                            })?;
+                    let bytes = stream
+                        .decompressed_content()
+                        .unwrap_or_else(|_| stream.content.clone());
+                    let content = lopdf::content::Content::decode(&bytes).with_context(|| {
+                        format!("decode Form XObject content (page {page_number})")
+                    })?;
 
-                        let saved = state.clone();
-                        let saved_stack = state_stack.clone();
-                        handle_content_ops(
-                            doc,
-                            &content.operations,
-                            &form_resources,
-                            &form_fonts,
-                            &form_encodings,
-                            page_number,
-                            state,
-                            state_stack,
-                            atoms,
-                            geometry,
-                            images,
-                            image_by_hash,
-                            image_blocks,
-                        )?;
-                        *state = saved;
-                        *state_stack = saved_stack;
-                    } else if subtype == b"Image".to_vec()
-                        && let Some((id, mime)) =
-                            extract_xobject_image(doc, &stream, images, image_by_hash)
-                        {
-                            image_blocks.push((page_number, id, mime));
-                        }
+                    let saved = state.clone();
+                    let saved_stack = state_stack.clone();
+                    handle_content_ops(
+                        doc,
+                        &content.operations,
+                        &form_resources,
+                        &form_fonts,
+                        &form_encodings,
+                        page_number,
+                        state,
+                        state_stack,
+                        atoms,
+                        geometry,
+                        images,
+                        image_by_hash,
+                        image_blocks,
+                    )?;
+                    *state = saved;
+                    *state_stack = saved_stack;
+                } else if subtype == b"Image".to_vec()
+                    && let Some((id, mime)) =
+                        extract_xobject_image(doc, &stream, images, image_by_hash)
+                {
+                    image_blocks.push((page_number, id, mime));
                 }
+            }
             _ => {}
         }
     }
@@ -1424,17 +1444,20 @@ fn page_inherited_boxes(
             break;
         };
         if media.is_none()
-            && let Ok(o) = dict.get(b"MediaBox") {
-                media = box_array(doc, o);
-            }
+            && let Ok(o) = dict.get(b"MediaBox")
+        {
+            media = box_array(doc, o);
+        }
         if crop.is_none()
-            && let Ok(o) = dict.get(b"CropBox") {
-                crop = box_array(doc, o);
-            }
+            && let Ok(o) = dict.get(b"CropBox")
+        {
+            crop = box_array(doc, o);
+        }
         if rotate.is_none()
-            && let Some(r) = dict.get(b"Rotate").ok().and_then(obj_to_f32) {
-                rotate = Some((r as i64).rem_euclid(360) as u16);
-            }
+            && let Some(r) = dict.get(b"Rotate").ok().and_then(obj_to_f32)
+        {
+            rotate = Some((r as i64).rem_euclid(360) as u16);
+        }
         match dict.get(b"Parent") {
             Ok(Object::Reference(pid)) => id = *pid,
             _ => break,
@@ -1687,10 +1710,11 @@ fn cluster_atoms_to_lines(atoms: &[TextAtom]) -> Vec<Line> {
     let mut lines: Vec<(f32, Vec<TextAtom>)> = Vec::new();
     for a in sorted {
         if let Some((ly, group)) = lines.last_mut()
-            && (a.y - *ly).abs() <= eps_y {
-                group.push(a);
-                continue;
-            }
+            && (a.y - *ly).abs() <= eps_y
+        {
+            group.push(a);
+            continue;
+        }
         lines.push((a.y, vec![a]));
     }
 
@@ -1766,9 +1790,10 @@ fn cluster_lines_to_paragraphs(lines: &[Line]) -> Vec<Paragraph> {
         if let Some(py) = prev_y {
             let gap = (py - l.y).abs();
             if gap > gap_thr
-                && let Some(p) = cur.take() {
-                    out.push(p);
-                }
+                && let Some(p) = cur.take()
+            {
+                out.push(p);
+            }
         }
         prev_y = Some(l.y);
 
@@ -2097,14 +2122,8 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
             lines
         };
 
-        let y_min = lines
-            .iter()
-            .map(|l| l.y)
-            .fold(f32::INFINITY, f32::min);
-        let y_max = lines
-            .iter()
-            .map(|l| l.y)
-            .fold(f32::NEG_INFINITY, f32::max);
+        let y_min = lines.iter().map(|l| l.y).fold(f32::INFINITY, f32::min);
+        let y_max = lines.iter().map(|l| l.y).fold(f32::NEG_INFINITY, f32::max);
         let y_span = (y_max - y_min).abs().max(1.0);
 
         // Estimate body font-size by ignoring the top area (where titles/headers live).
@@ -2165,7 +2184,7 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
                     text: title_parts.join(" "),
                     source: SourceSpan::default(),
                     marks: Vec::new(),
-    });
+                });
                 next_block_index += 1;
             }
         }
@@ -2210,7 +2229,7 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
                         text: t,
                         source: SourceSpan::default(),
                         marks: Vec::new(),
-    })
+                    })
                     .collect::<Vec<_>>();
                 blocks.push(Block::List {
                     block_index: next_block_index,
@@ -2246,26 +2265,29 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
 
                 // Some PDFs use body-sized text for headings, and the heading can appear mid-page.
                 // Detect the common "2-line heading then body" pattern using local neighborhood.
-                if !is_heading && shortish && !sentence_like && semantic && ratio >= 0.90
-                    && let Some(p2) = paragraphs.get(para_idx + 1) {
-                        let t2 = p2.lines.join("\n").trim().to_string();
-                        let t2_chars = t2.chars().count();
-                        let shortish2 = t2_chars <= 120 && p2.lines.len() <= 4;
-                        let semantic2 = looks_like_heading_text(&t2);
-                        let rel_fs = (p2.font_size - p.font_size).abs() / p.font_size.max(1.0);
-                        if !t2.is_empty() && shortish2 && semantic2 && rel_fs <= 0.20 {
-                            let bodyish_after = paragraphs
-                                .get(para_idx + 2)
-                                .is_none_or(|p3| {
-                                    let t3 = p3.lines.join("\n").trim().to_string();
-                                    let n = t3.chars().count();
-                                    n > 140 || t3.ends_with('.')
-                                });
-                            if bodyish_after {
-                                is_heading = true;
-                            }
+                if !is_heading
+                    && shortish
+                    && !sentence_like
+                    && semantic
+                    && ratio >= 0.90
+                    && let Some(p2) = paragraphs.get(para_idx + 1)
+                {
+                    let t2 = p2.lines.join("\n").trim().to_string();
+                    let t2_chars = t2.chars().count();
+                    let shortish2 = t2_chars <= 120 && p2.lines.len() <= 4;
+                    let semantic2 = looks_like_heading_text(&t2);
+                    let rel_fs = (p2.font_size - p.font_size).abs() / p.font_size.max(1.0);
+                    if !t2.is_empty() && shortish2 && semantic2 && rel_fs <= 0.20 {
+                        let bodyish_after = paragraphs.get(para_idx + 2).is_none_or(|p3| {
+                            let t3 = p3.lines.join("\n").trim().to_string();
+                            let n = t3.chars().count();
+                            n > 140 || t3.ends_with('.')
+                        });
+                        if bodyish_after {
+                            is_heading = true;
                         }
                     }
+                }
             }
             if is_heading {
                 let mut level = heading_level_from_ratio(ratio).max(1).min(6);
@@ -2331,7 +2353,7 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
                     text,
                     source: SourceSpan::default(),
                     marks: Vec::new(),
-    });
+                });
                 next_block_index += 1;
                 para_idx = j;
             } else {
@@ -2340,7 +2362,7 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
                     text: joined,
                     source: SourceSpan::default(),
                     marks: Vec::new(),
-    });
+                });
                 next_block_index += 1;
                 para_idx += 1;
             }
@@ -2455,9 +2477,11 @@ fn count_alphanumeric(blocks: &[Block]) -> usize {
             let text: String = match b {
                 Block::Heading { text, .. } => text.clone(),
                 Block::Paragraph { text, .. } => text.clone(),
-                Block::List { items, .. } => {
-                    items.iter().map(|i| i.text.as_str()).collect::<Vec<_>>().join(" ")
-                }
+                Block::List { items, .. } => items
+                    .iter()
+                    .map(|i| i.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" "),
                 Block::Table { rows, .. } => rows
                     .iter()
                     .flat_map(|r| r.iter())
@@ -2531,7 +2555,9 @@ pub fn install_pdfium() -> Result<std::path::PathBuf> {
     } else if cfg!(target_os = "linux") {
         ("pdfium-linux-x64.tgz", "lib/libpdfium.so")
     } else {
-        anyhow::bail!("automatic Pdfium install supports Linux/macOS; download manually from https://github.com/bblanchon/pdfium-binaries/releases");
+        anyhow::bail!(
+            "automatic Pdfium install supports Linux/macOS; download manually from https://github.com/bblanchon/pdfium-binaries/releases"
+        );
     };
     let dir = std::env::temp_dir().join(format!("office-parser-pdfium-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
@@ -2665,8 +2691,7 @@ fn clamp_scale(width_pts: f64, height_pts: f64, scale: f32, budget: RenderBudget
     if budget == RenderBudget::Full || !scale.is_finite() || scale <= 0.0 {
         return scale;
     }
-    let mp = (width_pts.max(0.0) * f64::from(scale))
-        * (height_pts.max(0.0) * f64::from(scale))
+    let mp = (width_pts.max(0.0) * f64::from(scale)) * (height_pts.max(0.0) * f64::from(scale))
         / 1_000_000.0;
     if mp <= OCR_MEGAPIXEL_BUDGET {
         return scale;
@@ -2757,8 +2782,7 @@ fn render_pages_png_hayro(bytes: &[u8], dpi: u32, budget: RenderBudget) -> Resul
     use hayro::vello_cpu::color::palette::css::WHITE;
     use hayro::{PixmapSettings, RenderCache, RenderSettings, render};
 
-    let pdf =
-        Pdf::new(bytes.to_vec()).map_err(|e| anyhow::anyhow!("hayro load: {e:?}"))?;
+    let pdf = Pdf::new(bytes.to_vec()).map_err(|e| anyhow::anyhow!("hayro load: {e:?}"))?;
     // PdfCraft-patched stack (hayro 0.9.0): the render cache is shared across pages; scale
     // lives in PixmapSettings. render() itself pre-clamps hostile page boxes to u16 sides and a
     // 2^28-pixel budget before allocating (PdfCraft patch).
@@ -2776,7 +2800,13 @@ fn render_pages_png_hayro(bytes: &[u8], dpi: u32, budget: RenderBudget) -> Resul
             bg_color: WHITE,
             ..Default::default()
         };
-        let rendered = render(page, &cache, &interpreter, &render_settings, &pixmap_settings);
+        let rendered = render(
+            page,
+            &cache,
+            &interpreter,
+            &render_settings,
+            &pixmap_settings,
+        );
         let png = rendered
             .into_png()
             .map_err(|e| anyhow::anyhow!("hayro png page {index}: {e:?}"))?;
@@ -2868,9 +2898,7 @@ fn render_with(
 fn render_pages_png_poppler(bytes: &[u8], dpi: u32, budget: RenderBudget) -> Result<Vec<Vec<u8>>> {
     use std::process::Command;
     if !pdftoppm_available() {
-        anyhow::bail!(
-            "pdftoppm not on PATH (apt install poppler-utils / brew install poppler)"
-        );
+        anyhow::bail!("pdftoppm not on PATH (apt install poppler-utils / brew install poppler)");
     }
     let dpi = match budget {
         RenderBudget::Full => dpi,
@@ -3005,7 +3033,6 @@ pub trait PageOcrEngine {
     fn name(&self) -> &'static str;
 }
 
-
 /// Router with default thresholds (50 chars, no force).
 /// Per-page [`crate::quality::PageTextQuality`] (TASK 7): text-layer char
 /// count + span-box geometry + routing verdict, one record per page in page
@@ -3040,9 +3067,10 @@ fn build_page_quality(
                     min_chars,
                     &geo.spans,
                     visible_page_area_pt2(geo),
-                ) {
-                    verdict = crate::quality::PageVerdict::Ocr { reason };
-                }
+                )
+            {
+                verdict = crate::quality::PageVerdict::Ocr { reason };
+            }
             crate::quality::PageTextQuality {
                 page: geo.page_number,
                 text_richness: richness,
@@ -3145,9 +3173,15 @@ fn pdfium_text_layer_reasons(bytes: &[u8]) -> Option<Vec<Option<String>>> {
         let verdict = if total == 0 {
             Some("no text layer".to_string())
         } else if invisible as f32 / total as f32 > 0.05 {
-            Some(format!("invisible text {}% (OCR layer)", invisible * 100 / total))
+            Some(format!(
+                "invisible text {}% (OCR layer)",
+                invisible * 100 / total
+            ))
         } else if bad as f32 / total as f32 > 0.005 {
-            Some(format!("broken font map ({}% bad chars)", bad * 100 / total))
+            Some(format!(
+                "broken font map ({}% bad chars)",
+                bad * 100 / total
+            ))
         } else {
             None
         };
@@ -3197,10 +3231,7 @@ fn parse_with_page_ocr_inner<'e>(
     dpi: u32,
     min_chars: usize,
     force: bool,
-) -> crate::Result<(
-    crate::Document,
-    Vec<(u32, crate::Document)>,
-)> {
+) -> crate::Result<(crate::Document, Vec<(u32, crate::Document)>)> {
     let mut parsed =
         parse_pdf_full(bytes).map_err(|e| crate::Error::from_parse(crate::Format::Pdf, e))?;
     let quality = classify_pdf_text_quality(&parsed.blocks);
@@ -3255,8 +3286,7 @@ fn parse_with_page_ocr_inner<'e>(
         routing_rollup(&page_quality)
     };
 
-    
-        #[allow(unused_assignments)]
+    #[allow(unused_assignments)]
     let mut ocr_meta = serde_json::json!({
         "engine": engine.as_ref().map_or("none", |e| e.name()),
         "pages_ocr": 0,
@@ -3271,7 +3301,10 @@ fn parse_with_page_ocr_inner<'e>(
             dpi
         ));
         let rendered = render_pages_png_opts(bytes, dpi, RenderBudget::Full)?;
-        let engine_name = engine.as_deref_mut().map_or("none", |e| e.name()).to_string();
+        let engine_name = engine
+            .as_deref_mut()
+            .map_or("none", |e| e.name())
+            .to_string();
         crate::progress::emit(&format!(
             "OCR routing {} page(s) of {} through {}",
             ocr_pages.len(),
@@ -3295,17 +3328,13 @@ fn parse_with_page_ocr_inner<'e>(
                         anyhow::anyhow!("page {} was not rendered", page_pos + 1),
                     )
                 })?;
-                crate::progress::emit(&format!(
-                    "ocr page {}/{}",
-                    page_pos + 1,
-                    page_quality.len()
-                ));
+                crate::progress::emit(&format!("ocr page {}/{}", page_pos + 1, page_quality.len()));
                 let Some(engine_ref) = engine.as_deref_mut() else {
                     unreachable!("engine present when ocr_pages non-empty")
                 };
-                                let page = engine_ref
-                    .ocr_page(png)
-                    .map_err(|e| crate::Error::from_parse(crate::Format::Pdf, anyhow::anyhow!(e)))?;
+                let page = engine_ref.ocr_page(png).map_err(|e| {
+                    crate::Error::from_parse(crate::Format::Pdf, anyhow::anyhow!(e))
+                })?;
                 // TASK 13 (`ocr-table-structure`): enrich the engine's OcrPage
                 // AFTER Indra built blocks + confidence (the engine's geometry
                 // — layout_regions/word_boxes — is already on the payload).
@@ -3322,9 +3351,10 @@ fn parse_with_page_ocr_inner<'e>(
                     table_html,
                 } = page;
                 if let Some(conf) = confidence
-                    && conf < 0.60 {
-                        low_conf.push(serde_json::json!(page_pos));
-                    }
+                    && conf < 0.60
+                {
+                    low_conf.push(serde_json::json!(page_pos));
+                }
                 page_vec.append(&mut blocks);
                 if let Some(regions) = layout_regions {
                     layout_regions_meta.push(serde_json::json!({
@@ -3345,9 +3375,14 @@ fn parse_with_page_ocr_inner<'e>(
                     }));
                 }
 
-                ocr_meta["pages_ocr"] = serde_json::json!(ocr_meta["pages_ocr"].as_u64().unwrap_or(0) + 1);
+                ocr_meta["pages_ocr"] =
+                    serde_json::json!(ocr_meta["pages_ocr"].as_u64().unwrap_or(0) + 1);
             } else {
-                page_vec.extend(parsed.blocks[range.block_start..range.block_end].iter().cloned());
+                page_vec.extend(
+                    parsed.blocks[range.block_start..range.block_end]
+                        .iter()
+                        .cloned(),
+                );
             }
             let page_start = merged.len();
             let mut local: Vec<Block> = Vec::new();
@@ -3537,8 +3572,8 @@ mod tests {
     // checker math itself is unit-tested in tests/pdf_no_ink.rs.
 
     use super::{
-        build_page_quality, visible_page_area_pt2, Block, CoordinateSystem, PageGeometry,
-        ParsedPdfDocument, PdfPageBlockRange, SourceSpan, SpanBox, PAGE_TEXT_THRESHOLD,
+        Block, CoordinateSystem, PAGE_TEXT_THRESHOLD, PageGeometry, ParsedPdfDocument,
+        PdfPageBlockRange, SourceSpan, SpanBox, build_page_quality, visible_page_area_pt2,
     };
 
     fn parsed_one_page(spans: Vec<SpanBox>, text: &str) -> ParsedPdfDocument {
@@ -3626,6 +3661,10 @@ mod tests {
         geo.crop_box = None;
         assert_eq!(visible_page_area_pt2(&geo), 612.0 * 792.0);
         geo.media_box = None;
-        assert_eq!(visible_page_area_pt2(&geo), 0.0, "no declared box: undefined area");
+        assert_eq!(
+            visible_page_area_pt2(&geo),
+            0.0,
+            "no declared box: undefined area"
+        );
     }
 }

@@ -34,9 +34,9 @@ pub struct DocumentMetadata {
     /// Consumers can use this to decide whether to OCR scanned pages.
     pub pdf_text_quality: Option<PdfTextQuality>,
     /// Per-page text quality for PDF documents.
-///
-/// `None` for non-PDF formats. Filled per page by the PDF parser; never
-/// populated for other formats (same discipline as `pdf_text_quality`).
+    ///
+    /// `None` for non-PDF formats. Filled per page by the PDF parser; never
+    /// populated for other formats (same discipline as `pdf_text_quality`).
     pub page_quality: Option<Vec<crate::quality::PageTextQuality>>,
     pub extra: serde_json::Value,
 }

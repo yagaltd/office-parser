@@ -88,7 +88,8 @@ fn resolve_model_dir() -> Result<PathBuf, String> {
     // Scan the standard Hugging Face cache for the indra-ocr snapshot.
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(home) = std::env::var_os("HOME") {
-        let hub = Path::new(&home).join(".cache/huggingface/hub/models--datalab-to--indra-ocr/snapshots");
+        let hub =
+            Path::new(&home).join(".cache/huggingface/hub/models--datalab-to--indra-ocr/snapshots");
         if let Ok(rd) = std::fs::read_dir(&hub) {
             for e in rd.flatten() {
                 let p = e.path();
@@ -206,9 +207,8 @@ impl GrayPage {
     }
 
     fn resize(&self, nw: usize, nh: usize) -> GrayPage {
-        let img =
-            image::GrayImage::from_raw(self.w as u32, self.h as u32, self.data.clone())
-                .expect("dims match");
+        let img = image::GrayImage::from_raw(self.w as u32, self.h as u32, self.data.clone())
+            .expect("dims match");
         // INTER_AREA ≈ triangle filtering for downscale; INTER_LINEAR ≈ catmull-rom
         // is close enough for upscale. Text-equality is the test, not byte equality.
         let filter = if (nw as f32) < (self.w as f32) {
@@ -326,12 +326,21 @@ fn connected_components(
 
 /// `det_post.decode` — out is [3, h, w] (core logit, top dist, bottom dist).
 /// Returns boxes in input pixels: (x0, y0, x1, y1, score).
-fn det_decode(out: &[f32], h: usize, w: usize, thresh: f32, min_area: i32) -> Vec<(f32, f32, f32, f32, f32)> {
+fn det_decode(
+    out: &[f32],
+    h: usize,
+    w: usize,
+    thresh: f32,
+    min_area: i32,
+) -> Vec<(f32, f32, f32, f32, f32)> {
     let n = h * w;
     let core = &out[0..n];
     let top = &out[n..2 * n];
     let bot = &out[2 * n..3 * n];
-    let mask: Vec<bool> = core.iter().map(|&l| l > 0.0 && sigmoid(l) > thresh).collect();
+    let mask: Vec<bool> = core
+        .iter()
+        .map(|&l| l > 0.0 && sigmoid(l) > thresh)
+        .collect();
     let comps = connected_components(&mask, w, h, core, top, bot);
     let mut boxes = Vec::new();
     for c in &comps.comps {
@@ -611,7 +620,12 @@ fn order_top_down(boxes: &[(f32, f32, f32, f32)]) -> Vec<usize> {
         let kb = (cb / (h * 0.5)).round();
         ka.partial_cmp(&kb)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then(boxes[a].0.partial_cmp(&boxes[b].0).unwrap_or(std::cmp::Ordering::Equal))
+            .then(
+                boxes[a]
+                    .0
+                    .partial_cmp(&boxes[b].0)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
     });
     idx
 }
@@ -625,7 +639,11 @@ fn order_xycut(boxes: &[(f32, f32, f32, f32)]) -> Vec<usize> {
             .map(|b| if axis == 1 { (b.1, b.3) } else { (b.0, b.2) })
             .unzip();
         let mut o: Vec<usize> = (0..boxes.len()).collect();
-        o.sort_by(|&a, &b| lo[a].partial_cmp(&lo[b]).unwrap_or(std::cmp::Ordering::Equal));
+        o.sort_by(|&a, &b| {
+            lo[a]
+                .partial_cmp(&lo[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         let mut end = hi[o[0]];
         let (mut best_gap, mut best_k) = (0.0f32, usize::MAX);
         for k in 1..o.len() {
@@ -695,13 +713,11 @@ fn cluster_same(same: &[f32], n: usize) -> Vec<Vec<usize>> {
         .collect();
     let mut best_v: Vec<f64> = (0..n).map(|i| m[i * n + best[i]]).collect();
     for _ in 0..n.saturating_sub(1) {
-        let a = (0..n)
-            .filter(|&i| alive[i])
-            .max_by(|&x, &y| {
-                best_v[x]
-                    .partial_cmp(&best_v[y])
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+        let a = (0..n).filter(|&i| alive[i]).max_by(|&x, &y| {
+            best_v[x]
+                .partial_cmp(&best_v[y])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         let Some(a) = a else { break };
         if !alive[a] || best_v[a] <= 0.0 {
             break;
@@ -741,25 +757,29 @@ fn cluster_same(same: &[f32], n: usize) -> Vec<Vec<usize>> {
                 continue;
             }
             if j == a {
-                let bj = (0..n)
-                    .filter(|&k| alive[k] && k != a)
-                    .max_by(|&x, &y| {
-                        m[j * n + x]
-                            .partial_cmp(&m[j * n + y])
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    });
+                let bj = (0..n).filter(|&k| alive[k] && k != a).max_by(|&x, &y| {
+                    m[j * n + x]
+                        .partial_cmp(&m[j * n + y])
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
                 best[j] = bj.unwrap_or(j);
-                best_v[j] = if bj.is_some() { m[j * n + best[j]] } else { f64::NEG_INFINITY };
+                best_v[j] = if bj.is_some() {
+                    m[j * n + best[j]]
+                } else {
+                    f64::NEG_INFINITY
+                };
             } else if best[j] == a || best[j] == b {
-                let bj = (0..n)
-                    .filter(|&k| alive[k] && k != j)
-                    .max_by(|&x, &y| {
-                        m[j * n + x]
-                            .partial_cmp(&m[j * n + y])
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    });
+                let bj = (0..n).filter(|&k| alive[k] && k != j).max_by(|&x, &y| {
+                    m[j * n + x]
+                        .partial_cmp(&m[j * n + y])
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
                 best[j] = bj.unwrap_or(j);
-                best_v[j] = if bj.is_some() { m[j * n + best[j]] } else { f64::NEG_INFINITY };
+                best_v[j] = if bj.is_some() {
+                    m[j * n + best[j]]
+                } else {
+                    f64::NEG_INFINITY
+                };
             }
         }
     }
@@ -793,19 +813,22 @@ fn decode_blocks_order(
     let mut inner: Vec<Vec<usize>> = Vec::with_capacity(blocks.len());
     for b in &blocks {
         let bx: Vec<(f32, f32, f32, f32)> = b.iter().map(|&i| boxes[i]).collect();
-        let is_grid = cls
-            .is_some_and(|c| {
-                let mut sum = [0.0f32; 10];
-                for &i in b {
-                    for k in 0..10 {
-                        sum[k] += c[i * 10 + k];
-                    }
+        let is_grid = cls.is_some_and(|c| {
+            let mut sum = [0.0f32; 10];
+            for &i in b {
+                for k in 0..10 {
+                    sum[k] += c[i * 10 + k];
                 }
-                let arg = (0..10)
-                    .max_by(|&x, &y| sum[x].partial_cmp(&sum[y]).unwrap_or(std::cmp::Ordering::Equal))
-                    .unwrap_or(0);
-                grid.contains(&arg)
-            });
+            }
+            let arg = (0..10)
+                .max_by(|&x, &y| {
+                    sum[x]
+                        .partial_cmp(&sum[y])
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .unwrap_or(0);
+            grid.contains(&arg)
+        });
         let local = if is_grid {
             order_top_down(&bx)
         } else {
@@ -885,16 +908,15 @@ fn split_line(
     let mut out = Vec::new();
     for sg in segs {
         let text = decode_toks(sg.iter().copied());
-        let xs: Vec<f32> = sg.iter().filter(|tk| !is_space(&tk.0)).map(|tk| tk.1).collect();
+        let xs: Vec<f32> = sg
+            .iter()
+            .filter(|tk| !is_space(&tk.0))
+            .map(|tk| tk.1)
+            .collect();
         if !text.is_empty() && !xs.is_empty() {
             let min_x = xs.iter().copied().fold(f32::MAX, f32::min);
             let max_x = xs.iter().copied().fold(f32::MIN, f32::max);
-            let bx = (
-                x0.max(min_x - 0.35 * h),
-                y0,
-                x1.min(max_x + 0.35 * h),
-                y1,
-            );
+            let bx = (x0.max(min_x - 0.35 * h), y0, x1.min(max_x + 0.35 * h), y1);
             out.push((bx, text));
         }
     }
@@ -925,7 +947,10 @@ fn build_table_grid(cells: &[(f32, f32, f32, f32, String)]) -> Option<Vec<Vec<St
     for &i in &order {
         let cy = f32::midpoint(cells[i].1, cells[i].3);
         if let Some(last) = rows.last_mut() {
-            let last_cy = last.iter().map(|&j| f32::midpoint(cells[j].1, cells[j].3)).sum::<f32>()
+            let last_cy = last
+                .iter()
+                .map(|&j| f32::midpoint(cells[j].1, cells[j].3))
+                .sum::<f32>()
                 / last.len() as f32;
             if (cy - last_cy).abs() < 0.5 * h {
                 last.push(i);
@@ -936,7 +961,8 @@ fn build_table_grid(cells: &[(f32, f32, f32, f32, String)]) -> Option<Vec<Vec<St
     }
     for r in &mut rows {
         r.sort_by(|&a, &b| {
-            cells[a].0
+            cells[a]
+                .0
                 .partial_cmp(&cells[b].0)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
@@ -964,10 +990,7 @@ fn build_table_grid(cells: &[(f32, f32, f32, f32, String)]) -> Option<Vec<Vec<St
             .map_or(0, |(i, _)| i)
     };
     let ncols = col_centers.len();
-    let mut grid: Vec<Vec<String>> = rows
-        .iter()
-        .map(|_| vec![String::new(); ncols])
-        .collect();
+    let mut grid: Vec<Vec<String>> = rows.iter().map(|_| vec![String::new(); ncols]).collect();
     for (ri, r) in rows.iter().enumerate() {
         for &i in r {
             let col = col_of(cells[i].0).min(ncols - 1);
@@ -1061,7 +1084,10 @@ fn estimate_skew(gray: &GrayPage) -> f32 {
         let r = rotate_gray(&small, a);
         let mut rows = vec![0.0f32; r.h];
         for y in 0..r.h {
-            rows[y] = r.data[y * r.w..(y + 1) * r.w].iter().map(|&v| f32::from(v)).sum();
+            rows[y] = r.data[y * r.w..(y + 1) * r.w]
+                .iter()
+                .map(|&v| f32::from(v))
+                .sum();
         }
         rows.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum()
     };
@@ -1121,7 +1147,11 @@ pub(crate) trait ModelRunner {
 
 #[cfg(feature = "ocr-indra-native")]
 struct OrtRunner {
-    sessions: Vec<(&'static str, ort::session::Session, Vec<(&'static str, bool)>)>,
+    sessions: Vec<(
+        &'static str,
+        ort::session::Session,
+        Vec<(&'static str, bool)>,
+    )>,
 }
 
 #[cfg(feature = "ocr-indra-native")]
@@ -1232,13 +1262,18 @@ impl RtenRunner {
         let dir = std::env::var_os("INDRA_RTEN_MODEL_DIR")
             .map(PathBuf::from)
             .or_else(|| {
-                std::env::var_os("HOME").map(|h| {
-                    PathBuf::from(h).join(".cache/office-parser/indra-rten")
-                })
+                std::env::var_os("HOME")
+                    .map(|h| PathBuf::from(h).join(".cache/office-parser/indra-rten"))
             })
             .ok_or("no home dir for rten models")?;
         let models: &[&'static str] = &[
-            "det", "rec", "order", "orient", "script", "rec_cjk", "rec_world",
+            "det",
+            "rec",
+            "order",
+            "orient",
+            "script",
+            "rec_cjk",
+            "rec_world",
         ];
         let mut loaded = Vec::new();
         for name in models {
@@ -1263,8 +1298,8 @@ impl RtenRunner {
 impl ModelRunner for RtenRunner {
     fn run(&mut self, model: &str, ins: &[TIn]) -> Result<TOut, String> {
         use rten::{NodeId, ValueOrView};
-        use rten_tensor::prelude::*;
         use rten_tensor::Tensor;
+        use rten_tensor::prelude::*;
         let idx = self
             .models
             .iter()
@@ -1302,7 +1337,9 @@ impl ModelRunner for RtenRunner {
             };
             inputs.push((id, v));
         }
-        let out_names = ["out", "p", "a", "cls", "same", "tab", "conf", "ids", "lengths"];
+        let out_names = [
+            "out", "p", "a", "cls", "same", "tab", "conf", "ids", "lengths",
+        ];
         let out_ids: Vec<NodeId> = out_names
             .iter()
             .filter_map(|n| model.node_id(n).ok())
@@ -1325,7 +1362,12 @@ impl ModelRunner for RtenRunner {
             let t_i32: Option<rten_tensor::Tensor<i32>> = v.clone().try_into().ok();
             if let Some(t) = t_i32 {
                 let shape: Vec<i64> = t.shape().iter().map(|&v| v as i64).collect();
-                let up: Vec<i64> = t.into_data().clone().iter().map(|&v| i64::from(v)).collect();
+                let up: Vec<i64> = t
+                    .into_data()
+                    .clone()
+                    .iter()
+                    .map(|&v| i64::from(v))
+                    .collect();
                 out.i64s.push((name, shape, up));
             } else if let Ok(t) = v.clone().try_into() {
                 let t: Tensor<f32> = t;
@@ -1334,7 +1376,12 @@ impl ModelRunner for RtenRunner {
             } else if let Ok(t) = v.clone().try_into() {
                 let t: rten_tensor::Tensor<u8> = t;
                 let shape: Vec<i64> = t.shape().iter().map(|&v| v as i64).collect();
-                let up: Vec<f32> = t.into_data().clone().iter().map(|&b| f32::from(b)).collect();
+                let up: Vec<f32> = t
+                    .into_data()
+                    .clone()
+                    .iter()
+                    .map(|&b| f32::from(b))
+                    .collect();
                 out.f32s.push((name, shape, up));
             }
         }
@@ -1360,8 +1407,10 @@ pub struct IndraNative {
     /// emitted Table block. Consumed by the `ocr_page` trait override;
     /// feature-gated so the default matrix keeps the task-10 payload shape.
     #[cfg(feature = "ocr-table-structure")]
-    table_geometry:
-        Option<(Vec<super::pdf::OcrLayoutRegion>, Vec<super::pdf::OcrWordBox>)>,
+    table_geometry: Option<(
+        Vec<super::pdf::OcrLayoutRegion>,
+        Vec<super::pdf::OcrWordBox>,
+    )>,
 }
 
 pub struct NativeLine {
@@ -1444,11 +1493,7 @@ impl IndraNative {
             let (input, ph, pw, _s) = page_to_input(gray, long_side);
             let out = self.runner.run(
                 "det",
-                &[TIn::F32(
-                    "x",
-                    vec![1, 1, ph as i64, pw as i64],
-                    input,
-                )],
+                &[TIn::F32("x", vec![1, 1, ph as i64, pw as i64], input)],
             )?;
             let (_, out) = out.f32("out").ok_or("det out missing")?;
             let oh = (ph / 2).max(1);
@@ -1469,11 +1514,7 @@ impl IndraNative {
                     let (input, ph, pw, _s2) = page_to_input(gray, long_side);
                     let out = self.runner.run(
                         "det",
-                        &[TIn::F32(
-                            "x",
-                            vec![1, 1, ph as i64, pw as i64],
-                            input,
-                        )],
+                        &[TIn::F32("x", vec![1, 1, ph as i64, pw as i64], input)],
                     )?;
                     let (_, out) = out.f32("out").ok_or("det out missing")?;
                     let oh = (ph / 2).max(1);
@@ -1569,8 +1610,7 @@ impl IndraNative {
             // mid-batch; split conservatively by majority flag of the batch
             let batch: Vec<usize> = match hanzi.as_ref() {
                 Some(h) => {
-                    let (cjk, lat): (Vec<usize>, Vec<usize>) =
-                        batch.iter().partition(|&&i| h[i]);
+                    let (cjk, lat): (Vec<usize>, Vec<usize>) = batch.iter().partition(|&&i| h[i]);
                     let pick = if cjk.len() >= lat.len() { cjk } else { lat };
                     if use_cjk != h[batch[0]] {
                         pick
@@ -1582,8 +1622,7 @@ impl IndraNative {
                 }
                 None => batch,
             };
-            let chunk: Vec<(usize, Vec<f32>)> =
-                batch.iter().map(|&i| crops[i].clone()).collect();
+            let chunk: Vec<(usize, Vec<f32>)> = batch.iter().map(|&i| crops[i].clone()).collect();
             let _ = batch[0];
             let (data, widths, wm) = pad_batch(&chunk);
             let b = chunk.len() as i64;
@@ -1639,11 +1678,19 @@ impl IndraNative {
                     }
                     prev = id;
                 }
-                let conf = if conf_n > 0 { conf_sum / conf_n as f32 } else { 0.0 };
+                let conf = if conf_n > 0 {
+                    conf_sum / conf_n as f32
+                } else {
+                    0.0
+                };
                 let text: String = toks.iter().map(|(s, _)| s.as_str()).collect();
                 out[orig] = LineRec {
                     box_: (bx0, by0, bx1, by1),
-                    text: if conf >= MIN_CONF { text } else { String::new() },
+                    text: if conf >= MIN_CONF {
+                        text
+                    } else {
+                        String::new()
+                    },
                     conf,
                     toks: if conf >= MIN_CONF { toks } else { Vec::new() },
                 };
@@ -1699,15 +1746,9 @@ impl IndraNative {
             return 0;
         };
         let k = (0..4usize)
-            .max_by(|&a, &b| {
-                p[a].partial_cmp(&p[b]).unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .max_by(|&a, &b| p[a].partial_cmp(&p[b]).unwrap_or(std::cmp::Ordering::Equal))
             .unwrap_or(0);
-        if p[k] > ORIENT_MIN {
-            k as u32
-        } else {
-            0
-        }
+        if p[k] > ORIENT_MIN { k as u32 } else { 0 }
     }
 
     pub fn ocr_page(&mut self, gray: GrayPage) -> Result<NativePage, String> {
@@ -1729,8 +1770,7 @@ impl IndraNative {
         };
         let boxes = self.detect(&gray)?;
         let recs = self.recognize(&gray, &boxes)?;
-        let rects: Vec<(f32, f32, f32, f32)> =
-            boxes.iter().map(|b| (b.0, b.1, b.2, b.3)).collect();
+        let rects: Vec<(f32, f32, f32, f32)> = boxes.iter().map(|b| (b.0, b.1, b.2, b.3)).collect();
         let texts: Vec<String> = recs.iter().map(|r| r.text.clone()).collect();
         let wh = (gray.w as f32, gray.h as f32);
         let (order, layout) = self.reading_order(&rects, &texts, wh)?;
@@ -1762,8 +1802,7 @@ impl IndraNative {
             }
             for run in runs {
                 let mut sum = [0.0f32; 10];
-                let (mut bx0, mut by0, mut bx1, mut by1) =
-                    (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+                let (mut bx0, mut by0, mut bx1, mut by1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
                 let mut joined = String::new();
                 for &i in &run {
                     for k in 0..10 {
@@ -1796,7 +1835,9 @@ impl IndraNative {
                 }
                 let label = (0..10)
                     .max_by(|&x, &y| {
-                        sum[x].partial_cmp(&sum[y]).unwrap_or(std::cmp::Ordering::Equal)
+                        sum[x]
+                            .partial_cmp(&sum[y])
+                            .unwrap_or(std::cmp::Ordering::Equal)
                     })
                     .unwrap_or(0);
                 let label = BLOCK_CLASSES[label].to_string();
@@ -1825,15 +1866,15 @@ impl IndraNative {
                             x1: bx1,
                             y1: by1,
                         });
-                        table_cells.extend(cells.iter().map(
-                            |(x0, y0, x1, y1, text)| super::pdf::OcrWordBox {
+                        table_cells.extend(cells.iter().map(|(x0, y0, x1, y1, text)| {
+                            super::pdf::OcrWordBox {
                                 text: text.clone(),
                                 x0: *x0,
                                 y0: *y0,
                                 x1: *x1,
                                 y1: *y1,
-                            },
-                        ));
+                            }
+                        }));
                     }
                     build_table_grid(&cells)
                 } else {

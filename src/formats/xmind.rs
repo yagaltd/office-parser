@@ -99,11 +99,12 @@ fn node_from_json_topic(v: &serde_json::Value) -> MindNode {
     let mut node = MindNode::new(title, collapsed);
 
     if let Some(children_obj) = v.get("children").and_then(|x| x.as_object())
-        && let Some(attached) = children_obj.get("attached").and_then(|x| x.as_array()) {
-            for child in attached {
-                node.children.push(node_from_json_topic(child));
-            }
+        && let Some(attached) = children_obj.get("attached").and_then(|x| x.as_array())
+    {
+        for child in attached {
+            node.children.push(node_from_json_topic(child));
         }
+    }
 
     node
 }
@@ -208,11 +209,13 @@ fn parse_content_xml_root(xml: &str) -> Result<MindNode> {
                 }
             }
             Ok(quick_xml::events::Event::GeneralRef(r)) => {
-                if in_first_sheet && in_title
+                if in_first_sheet
+                    && in_title
                     && let Some(s) = decode_general_ref(r)
-                        && let Some(cur) = topic_stack.last_mut() {
-                            cur.title.push_str(&s);
-                        }
+                    && let Some(cur) = topic_stack.last_mut()
+                {
+                    cur.title.push_str(&s);
+                }
             }
             Ok(quick_xml::events::Event::End(e)) => {
                 let n = local_name(e.name().as_ref());
@@ -231,24 +234,26 @@ fn parse_content_xml_root(xml: &str) -> Result<MindNode> {
 
                 if n == "title" {
                     in_title = false;
-                } else if n == "topic" && in_first_sheet
-                    && let Some(top) = topic_stack.pop() {
-                        let title = if top.title.trim().is_empty() {
-                            "Untitled".to_string()
-                        } else {
-                            top.title
-                        };
-                        let node = MindNode {
-                            title,
-                            collapsed: top.collapsed,
-                            children: top.children,
-                        };
-                        if let Some(parent) = topic_stack.last_mut() {
-                            parent.children.push(node);
-                        } else if root.is_none() {
-                            root = Some(node);
-                        }
+                } else if n == "topic"
+                    && in_first_sheet
+                    && let Some(top) = topic_stack.pop()
+                {
+                    let title = if top.title.trim().is_empty() {
+                        "Untitled".to_string()
+                    } else {
+                        top.title
+                    };
+                    let node = MindNode {
+                        title,
+                        collapsed: top.collapsed,
+                        children: top.children,
+                    };
+                    if let Some(parent) = topic_stack.last_mut() {
+                        parent.children.push(node);
+                    } else if root.is_none() {
+                        root = Some(node);
                     }
+                }
             }
             Ok(quick_xml::events::Event::Eof) => break,
             Ok(_) => {}
@@ -378,7 +383,12 @@ mod tests {
         assert!(md.contains("- B"), "{md}");
 
         let mindmap = doc.metadata.extra.get("mindmap").expect("mindmap metadata");
-        assert_eq!(mindmap.get("node_count").and_then(serde_json::Value::as_u64), Some(4));
+        assert_eq!(
+            mindmap
+                .get("node_count")
+                .and_then(serde_json::Value::as_u64),
+            Some(4)
+        );
     }
 
     #[test]

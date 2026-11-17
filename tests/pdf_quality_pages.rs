@@ -15,8 +15,7 @@ use std::cell::Cell;
 
 use office_parser::document_ast::{Block, SourceSpan};
 use office_parser::formats::pdf::{
-    parse_pdf_split, parse_with_page_ocr_opts, routing_rollup, PageOcrEngine,
-    PAGE_TEXT_THRESHOLD,
+    PAGE_TEXT_THRESHOLD, PageOcrEngine, parse_pdf_split, parse_with_page_ocr_opts, routing_rollup,
 };
 use office_parser::quality::{PageTextQuality, PageVerdict};
 
@@ -149,11 +148,10 @@ fn pages_ocr_of(doc: &office_parser::Document) -> u64 {
 }
 
 fn pdftoppm_available() -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|p| {
-            std::env::split_paths(&p)
-                .any(|dir| dir.join("pdftoppm").is_file() || dir.join("pdftoppm.exe").is_file())
-        })
+    std::env::var_os("PATH").is_some_and(|p| {
+        std::env::split_paths(&p)
+            .any(|dir| dir.join("pdftoppm").is_file() || dir.join("pdftoppm.exe").is_file())
+    })
 }
 
 /// Renderer detection for the merge-path tests (render_pages_png_opts order:
@@ -270,14 +268,12 @@ fn test_split_pages_reports_same_verdicts() {
     assert_eq!(a.calls.get(), 0);
     assert_eq!(b.calls.get(), 0);
     assert_eq!(
-        split_combined.metadata.page_quality,
-        opts_combined.metadata.page_quality,
+        split_combined.metadata.page_quality, opts_combined.metadata.page_quality,
         "combined verdicts identical"
     );
     assert_eq!(split_pages.len(), 1);
     assert_eq!(
-        split_pages[0].1.metadata.page_quality,
-        opts_combined.metadata.page_quality,
+        split_pages[0].1.metadata.page_quality, opts_combined.metadata.page_quality,
         "the single page doc carries the same verdict"
     );
 
@@ -294,8 +290,9 @@ fn test_split_pages_reports_same_verdicts() {
         parse_pdf_split(&bytes, Some(split_dyn), 150, PAGE_TEXT_THRESHOLD, false)
             .expect("split parse");
     let mut opts_engine = CountingEngine::default();
-    let opts_combined = parse_with_page_ocr_opts(&bytes, &mut opts_engine, 150, PAGE_TEXT_THRESHOLD, false)
-        .expect("opts parse");
+    let opts_combined =
+        parse_with_page_ocr_opts(&bytes, &mut opts_engine, 150, PAGE_TEXT_THRESHOLD, false)
+            .expect("opts parse");
     assert_eq!(split_engine.calls.get(), 1, "page 2 (image-only) routed");
     assert_eq!(opts_engine.calls.get(), 1, "page 2 (image-only) routed");
     let a = split_combined
@@ -377,7 +374,10 @@ fn test_pdf_quality_mirrored_in_metadata_extra() {
             .expect("page mirror");
         assert_eq!(m.len(), 1);
         assert_eq!(m[0]["page"], serde_json::json!(s[0].page));
-        assert_eq!(m[0]["verdict"], serde_json::to_value(&s[0].verdict).unwrap());
+        assert_eq!(
+            m[0]["verdict"],
+            serde_json::to_value(&s[0].verdict).unwrap()
+        );
         assert_eq!(&s[0], &cq[i], "page doc record matches combined position");
     }
 }
@@ -427,15 +427,18 @@ fn test_document_rollup_uses_worst_page_for_routing() {
     );
 
     // Escalate NEVER adds a page — vision-LLM signal only.
-    assert_eq!(routing_rollup(&[
-        mk(1, PageVerdict::Trust),
-        mk(
-            2,
-            PageVerdict::Escalate {
-                complexity: Some("rotated page".to_string())
-            }
-        ),
-    ]), [] as [usize; 0]);
+    assert_eq!(
+        routing_rollup(&[
+            mk(1, PageVerdict::Trust),
+            mk(
+                2,
+                PageVerdict::Escalate {
+                    complexity: Some("rotated page".to_string())
+                }
+            ),
+        ]),
+        [] as [usize; 0]
+    );
 
     // End-to-end: pdf_mixed's doc-level value stays whatever its text layer
     // says, yet the image-only page 2 still routes.
@@ -450,8 +453,7 @@ fn test_document_rollup_uses_worst_page_for_routing() {
         .expect("routed parse");
     // The public pdf_text_quality enum keeps its document-level value.
     assert_eq!(
-        doc.metadata.pdf_text_quality,
-        plain.metadata.pdf_text_quality,
+        doc.metadata.pdf_text_quality, plain.metadata.pdf_text_quality,
         "doc-level enum is the summary, unchanged by routing"
     );
     assert_eq!(engine.calls.get(), 1, "only the worst page routed");

@@ -40,9 +40,6 @@ fn odt_span_styles_become_inline_marks() {
 
     // morph renderer emits the markers
     let md = office_parser::render::to_morph_markdown(&doc);
-    assert!(
-        md.contains("Plain **bold** and *italic*."),
-        "morph: {md}"
-    );
+    assert!(md.contains("Plain **bold** and *italic*."), "morph: {md}");
     assert!(md.contains("Both **~~stacked~~**"), "stacked morph: {md}");
 }

@@ -446,9 +446,8 @@ fn cli_json_can_omit_embedded_image_bytes() -> Result<()> {
         .status()?;
     assert!(status.success());
 
-    let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
-        out_dir.join("book.json"),
-    )?)?;
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(out_dir.join("book.json"))?)?;
     assert!(json["images"][0].get("bytes_b64").is_none());
     assert_eq!(json["images"][0]["filename"], "asset/cover.png");
 
@@ -552,7 +551,10 @@ fn cli_markdown_emits_okf_frontmatter() -> Result<()> {
     let out_dir = fresh_temp_dir();
     std::fs::create_dir_all(&out_dir)?;
     let input_path = out_dir.join("in.rtf");
-    std::fs::write(&input_path, r"{\rtf1\ansi Report Title\par Body text here.}")?;
+    std::fs::write(
+        &input_path,
+        r"{\rtf1\ansi Report Title\par Body text here.}",
+    )?;
 
     let exe = std::env::var("CARGO_BIN_EXE_office-parser-cli")
         .unwrap_or_else(|_| env!("CARGO_BIN_EXE_office-parser-cli").to_string());
@@ -566,8 +568,14 @@ fn cli_markdown_emits_okf_frontmatter() -> Result<()> {
     assert!(status.success());
 
     let md = std::fs::read_to_string(out_dir.join("in.md"))?;
-    assert!(md.starts_with("---\ntype: document\n"), "missing OKF frontmatter: {md}");
-    assert!(md.contains("description: \"Report Title\""), "missing description: {md}");
+    assert!(
+        md.starts_with("---\ntype: document\n"),
+        "missing OKF frontmatter: {md}"
+    );
+    assert!(
+        md.contains("description: \"Report Title\""),
+        "missing description: {md}"
+    );
     assert!(md.contains("tags: [rtf]\n"), "missing format tag: {md}");
     assert!(md.contains("Body text here."));
 
@@ -676,13 +684,22 @@ fn cli_pptx_markdown_emits_morph_deck() -> Result<()> {
     assert!(md.contains("slides: 16:9\n"), "deck ratio: {md}");
     // L1 per slide + hr divider between deck sections
     assert!(md.contains("# First Slide"));
-    assert!(md.contains("---\n\n# Second Slide"), "hr-delimited sections: {md}");
+    assert!(
+        md.contains("---\n\n# Second Slide"),
+        "hr-delimited sections: {md}"
+    );
     // paragraph line that would re-detect as a bullet is escaped
     assert!(md.contains("\\- looks like a bullet"), "escaped: {md}");
     // speaker note rides the slide section as a `::: note` fence
-    assert!(md.contains("::: note\nMention Q4 numbers\n:::"), "note fence: {md}");
+    assert!(
+        md.contains("::: note\nMention Q4 numbers\n:::"),
+        "note fence: {md}"
+    );
 
-    assert!(md.find("::: note").unwrap() < md.find("---\n\n# Second Slide").unwrap(), "note inside slide 1 section");
+    assert!(
+        md.find("::: note").unwrap() < md.find("---\n\n# Second Slide").unwrap(),
+        "note inside slide 1 section"
+    );
 
     let _ = std::fs::remove_dir_all(&out_dir);
     Ok(())

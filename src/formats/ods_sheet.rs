@@ -272,12 +272,13 @@ fn parse_ods(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeDo
         }
 
         if let Some(m) = sheets_meta.last_mut()
-            && let Some(o) = m.as_object_mut() {
-                o.insert(
-                    "emitted_tables".to_string(),
-                    serde_json::json!(emitted_tables),
-                );
-            }
+            && let Some(o) = m.as_object_mut()
+        {
+            o.insert(
+                "emitted_tables".to_string(),
+                serde_json::json!(emitted_tables),
+            );
+        }
     }
 
     let mut extra = serde_json::json!({

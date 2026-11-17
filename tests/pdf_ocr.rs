@@ -14,7 +14,10 @@ const SCAN: &str = "tests/fixtures/pdf_scanned.pdf";
 fn scanned_fixture_classifies_as_image_only() {
     let bytes = std::fs::read(SCAN).expect("fixture");
     let doc = office_parser::pdf::parse(&bytes).expect("parses");
-    assert_eq!(doc.metadata.pdf_text_quality, Some(PdfTextQuality::ImageOnly));
+    assert_eq!(
+        doc.metadata.pdf_text_quality,
+        Some(PdfTextQuality::ImageOnly)
+    );
     // nearly no text without OCR
     let chars: usize = doc
         .blocks
@@ -25,21 +28,21 @@ fn scanned_fixture_classifies_as_image_only() {
             _ => 0,
         })
         .sum();
-    assert!(chars < 50, "scanned fixture should carry almost no text layer, got {chars}");
+    assert!(
+        chars < 50,
+        "scanned fixture should carry almost no text layer, got {chars}"
+    );
 }
-
 
 /// Empty-text and page-furniture blocks are dropped; consecutive List-items
 
 /// Full pipeline: render → indra subprocess → blocks.
 
 fn which_available(bin: &str) -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|p| {
-            std::env::split_paths(&p).any(|dir| {
-                dir.join(bin).is_file() || dir.join(format!("{bin}.exe")).is_file()
-            })
-        })
+    std::env::var_os("PATH").is_some_and(|p| {
+        std::env::split_paths(&p)
+            .any(|dir| dir.join(bin).is_file() || dir.join(format!("{bin}.exe")).is_file())
+    })
 }
 
 /// Mode B: the native (in-process ort) engine on the same fixture must
@@ -68,7 +71,11 @@ fn native_engine_end_to_end() {
         })
         .collect();
     // The Python engine (golden JSONL) finds all three section headers.
-    for expected in ["Quarterly Field Report", "Network Maintenance Summary", "Recommendations"] {
+    for expected in [
+        "Quarterly Field Report",
+        "Network Maintenance Summary",
+        "Recommendations",
+    ] {
         assert!(
             headings.iter().any(|h| h.contains(expected)),
             "missing heading {expected:?}; got {headings:?}"
@@ -121,11 +128,17 @@ fn mixed_pdf_routes_per_page() {
     // text-layer page content survived…
     assert!(joined.contains("Quarterly Field Report"), "got {joined:?}");
     // …AND the scanned page was OCR'd (its content is the same document, rasterized)
-    assert!(joined.contains("eleven hours"), "scanned page missing; got {joined:?}");
+    assert!(
+        joined.contains("eleven hours"),
+        "scanned page missing; got {joined:?}"
+    );
 
     let ocr = doc.metadata.extra.get("ocr").expect("ocr metadata");
     assert_eq!(ocr["pages_ocr"], 1, "exactly one page routed to OCR");
-    assert_eq!(doc.metadata.pdf_text_quality, Some(PdfTextQuality::TextSparse));
+    assert_eq!(
+        doc.metadata.pdf_text_quality,
+        Some(PdfTextQuality::TextSparse)
+    );
 }
 
 /// Table reconstruction: a scanned table page comes back as a real Table
@@ -151,12 +164,23 @@ fn native_table_reconstruction() {
             _ => None,
         })
         .collect();
-    assert!(!tables.is_empty(), "no Table block; blocks: {:#?}", doc.blocks.iter().map(|b| match b {
-        Block::Table { rows, .. } => format!("Table {}x{}", rows.len(), rows.first().map_or(0, std::vec::Vec::len)),
-        Block::Paragraph { text, .. } => format!("Para({text})"),
-        Block::Heading { text, .. } => format!("Head({text})"),
-        _ => "other".into(),
-    }).collect::<Vec<_>>());
+    assert!(
+        !tables.is_empty(),
+        "no Table block; blocks: {:#?}",
+        doc.blocks
+            .iter()
+            .map(|b| match b {
+                Block::Table { rows, .. } => format!(
+                    "Table {}x{}",
+                    rows.len(),
+                    rows.first().map_or(0, std::vec::Vec::len)
+                ),
+                Block::Paragraph { text, .. } => format!("Para({text})"),
+                Block::Heading { text, .. } => format!("Head({text})"),
+                _ => "other".into(),
+            })
+            .collect::<Vec<_>>()
+    );
     let rows = tables[0];
     assert!(rows.len() >= 3, "expected >=3 rows, got {rows:?}");
     let flat: Vec<String> = rows
@@ -164,17 +188,26 @@ fn native_table_reconstruction() {
         .flat_map(|r| r.iter().map(|c| c.text.clone()))
         .collect();
     let joined = flat.join(" ");
-    for expected in ["DP Sensor", "12", "49.90", "Temp Probe", "Valve Kit", "120.00"] {
-        assert!(joined.contains(expected), "missing {expected:?} in {joined:?}");
+    for expected in [
+        "DP Sensor",
+        "12",
+        "49.90",
+        "Temp Probe",
+        "Valve Kit",
+        "120.00",
+    ] {
+        assert!(
+            joined.contains(expected),
+            "missing {expected:?} in {joined:?}"
+        );
     }
     // Qty digits land in a numeric cell (column index may shift ±1 when the
     // renderer's sharpness moves a word-gap across the cell-gap threshold —
     // best-effort alignment; exact grids are the vision-tier's job)
     assert!(
-        rows.iter()
-            .skip(1)
-            .all(|r| r.iter().any(|c| c.text.chars().all(|ch| ch.is_ascii_digit())
-                && !c.text.is_empty())),
+        rows.iter().skip(1).all(|r| r
+            .iter()
+            .any(|c| c.text.chars().all(|ch| ch.is_ascii_digit()) && !c.text.is_empty())),
         "Qty digits missing: {rows:?}"
     );
 }

@@ -4,8 +4,8 @@
 use crate::Renderer;
 use kurbo::{Affine, Rect};
 use std::sync::Arc;
-use vello_cpu::peniko::ImageQuality;
 use vello_cpu::Pixmap;
+use vello_cpu::peniko::ImageQuality;
 
 /// PdfCraft patch: the largest CMYK group drawn in ink passes, in pixels: the passes render on
 /// canvases of their own, and a larger group is drawn as before.
@@ -184,10 +184,10 @@ impl Renderer<'_> {
             width,
             height,
             vello_cpu::PixelMetadata::new(
-                    // PdfCraft patch (bug-hunter-002 P2-2): the composited
-                    // rgba above is STRAIGHT alpha; the default metadata is
-                    // AlphaPremultiplied, which made AA edges composite
-                    // bright when the pixmap is drawn.
+                // PdfCraft patch (bug-hunter-002 P2-2): the composited
+                // rgba above is STRAIGHT alpha; the default metadata is
+                // AlphaPremultiplied, which made AA edges composite
+                // bright when the pixmap is drawn.
                 vello_cpu::peniko::ImageAlphaType::Alpha,
                 true,
             ),

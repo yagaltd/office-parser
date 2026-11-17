@@ -320,10 +320,9 @@ fn capture_sp_tree_children(slide_xml: &str) -> Result<Vec<(String, Vec<u8>)>> {
                         // Flatten grouped shapes so their members become
                         // diagram nodes/edges (group transforms are ignored —
                         // mermaid lays out topologically, not spatially).
-                        if is_group
-                            && let Ok(inner) = capture_group_shape_children(&v) {
-                                out.extend(inner);
-                            }
+                        if is_group && let Ok(inner) = capture_group_shape_children(&v) {
+                            out.extend(inner);
+                        }
                         if in_tree {
                             depth = depth.saturating_sub(1);
                         }
@@ -461,17 +460,19 @@ fn parse_table_from_graphic_frame(xml: &[u8]) -> Result<Option<Vec<Vec<Cell>>>> 
                 _ => {}
             },
             Ok(Event::Empty(e)) => {
-                if in_tbl && in_tc
-                    && e.local_name().as_ref() == b"br"
-                        && !cur_cell.ends_with('\n') {
-                            cur_cell.push('\n');
-                        }
+                if in_tbl && in_tc && e.local_name().as_ref() == b"br" && !cur_cell.ends_with('\n')
+                {
+                    cur_cell.push('\n');
+                }
             }
             Ok(Event::Text(e)) => {
-                if in_tbl && in_tc && in_t
-                    && let Ok(t) = String::from_utf8(e.to_vec()) {
-                        cur_cell.push_str(&t);
-                    }
+                if in_tbl
+                    && in_tc
+                    && in_t
+                    && let Ok(t) = String::from_utf8(e.to_vec())
+                {
+                    cur_cell.push_str(&t);
+                }
             }
             Ok(Event::End(e)) => match e.local_name().as_ref() {
                 b"t" => in_t = false,
@@ -565,15 +566,16 @@ fn flush_list_block(
     cur_list: &mut Option<(bool, Vec<ListItem>)>,
 ) {
     if let Some((ordered, items)) = cur_list.take()
-        && !items.is_empty() {
-            blocks.push(Block::List {
-                block_index: *block_index,
-                ordered,
-                items,
-                source: SourceSpan::default(),
-            });
-            *block_index += 1;
-        }
+        && !items.is_empty()
+    {
+        blocks.push(Block::List {
+            block_index: *block_index,
+            ordered,
+            items,
+            source: SourceSpan::default(),
+        });
+        *block_index += 1;
+    }
 }
 
 fn push_paragraph_or_list_item(
@@ -594,7 +596,7 @@ fn push_paragraph_or_list_item(
                     text,
                     marks,
                     source: SourceSpan::default(),
-    });
+                });
             }
             _ => {
                 flush_list_block(blocks, block_index, cur_list);
@@ -605,7 +607,7 @@ fn push_paragraph_or_list_item(
                         text,
                         marks,
                         source: SourceSpan::default(),
-    }],
+                    }],
                 ));
             }
         }
@@ -706,17 +708,18 @@ fn extract_text_with_list_markers(xml: &[u8]) -> Result<Vec<PptxPara>> {
                         run_strike = false;
                     }
                     if e.local_name().as_ref() == b"rPr" {
-                        run_bold = attr_val_local(&e, b"b")
-                            .map_or(run_bold, |v| v == "1" || v == "true");
+                        run_bold =
+                            attr_val_local(&e, b"b").map_or(run_bold, |v| v == "1" || v == "true");
                         run_italic = attr_val_local(&e, b"i")
                             .map_or(run_italic, |v| v == "1" || v == "true");
                         run_strike = attr_val_local(&e, b"strike")
                             .map_or(run_strike, |v| v == "sngStrike" || v == "dblStrike");
                     }
                     if e.local_name().as_ref() == b"pPr"
-                        && let Some(v) = scan_attr(&e, b"lvl") {
-                            cur_lvl = v.parse::<u8>().unwrap_or(0);
-                        }
+                        && let Some(v) = scan_attr(&e, b"lvl")
+                    {
+                        cur_lvl = v.parse::<u8>().unwrap_or(0);
+                    }
                     if e.local_name().as_ref() == b"buAutoNum" {
                         cur_ordered = true;
                     }
@@ -737,8 +740,8 @@ fn extract_text_with_list_markers(xml: &[u8]) -> Result<Vec<PptxPara>> {
                         run_strike = false;
                     }
                     if e.local_name().as_ref() == b"rPr" {
-                        run_bold = attr_val_local(&e, b"b")
-                            .map_or(run_bold, |v| v == "1" || v == "true");
+                        run_bold =
+                            attr_val_local(&e, b"b").map_or(run_bold, |v| v == "1" || v == "true");
                         run_italic = attr_val_local(&e, b"i")
                             .map_or(run_italic, |v| v == "1" || v == "true");
                         run_strike = attr_val_local(&e, b"strike")
@@ -747,38 +750,37 @@ fn extract_text_with_list_markers(xml: &[u8]) -> Result<Vec<PptxPara>> {
                     if e.local_name().as_ref() == b"pPr"
                         && let Some(v) =
                             scan_attr(&e, b"lvl").or_else(|| attr_val_local(&e, b"lvl"))
-                        {
-                            cur_lvl = v.parse::<u8>().unwrap_or(0);
-                        }
+                    {
+                        cur_lvl = v.parse::<u8>().unwrap_or(0);
+                    }
                     if e.local_name().as_ref() == b"buAutoNum" {
                         cur_ordered = true;
                     }
                     if e.local_name().as_ref() == b"buChar" {
                         cur_bulleted = true;
                     }
-                    if e.local_name().as_ref() == b"br"
-                        && !cur_text.ends_with('\n') {
-                            cur_text.push('\n');
-                        }
+                    if e.local_name().as_ref() == b"br" && !cur_text.ends_with('\n') {
+                        cur_text.push('\n');
+                    }
                     if e.local_name().as_ref() == b"tab" {
                         cur_text.push('\t');
                     }
                 }
             }
             Ok(Event::Text(e)) => {
-                if in_p && in_t
-                    && let Ok(t) = String::from_utf8(e.to_vec()) {
-                        cur_text.push_str(&t);
-                    }
+                if in_p
+                    && in_t
+                    && let Ok(t) = String::from_utf8(e.to_vec())
+                {
+                    cur_text.push_str(&t);
+                }
             }
             Ok(Event::End(e)) => {
                 if in_p {
                     if e.local_name().as_ref() == b"t" {
                         in_t = false;
                         let end_char = cur_text.chars().count();
-                        if end_char > run_start_char
-                            && (run_bold || run_italic || run_strike)
-                        {
+                        if end_char > run_start_char && (run_bold || run_italic || run_strike) {
                             if run_bold {
                                 cur_marks.push(InlineMark {
                                     kind: MarkKind::Bold,
@@ -856,9 +858,10 @@ fn extract_slide_name(slide_xml: &str) -> Option<String> {
             Ok(Event::Start(e) | Event::Empty(e)) => {
                 if e.local_name().as_ref() == b"cSld"
                     && let Some(name) = attr_val_local(&e, b"name")
-                        && !name.trim().is_empty() {
-                            return Some(name);
-                        }
+                    && !name.trim().is_empty()
+                {
+                    return Some(name);
+                }
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -902,9 +905,10 @@ fn extract_shape_id(xml: &[u8]) -> Option<u32> {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e) | Event::Empty(e)) => {
                 if e.local_name().as_ref() == b"cNvPr"
-                    && let Some(id) = attr_val_local(&e, b"id").and_then(|v| v.parse().ok()) {
-                        return Some(id);
-                    }
+                    && let Some(id) = attr_val_local(&e, b"id").and_then(|v| v.parse().ok())
+                {
+                    return Some(id);
+                }
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -997,9 +1001,10 @@ fn extract_prst_geom(xml: &[u8]) -> Option<String> {
             Ok(Event::Start(e) | Event::Empty(e)) => {
                 if e.local_name().as_ref() == b"prstGeom"
                     && let Some(prst) = attr_val_local(&e, b"prst")
-                        && !prst.trim().is_empty() {
-                            return Some(prst);
-                        }
+                    && !prst.trim().is_empty()
+                {
+                    return Some(prst);
+                }
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -1037,7 +1042,9 @@ fn mermaid_shape_from_prst(prst: Option<&str>) -> &'static str {
         "flowChartManualOperation" => "trap-b",
         "flowChartManualInput" | "flowChartMerge" => "trap-t",
         "flowChartOr" | "flowChartSummingJunction" | "flowChartConnector" => "circle",
-        "flowChartOnlineStorage" | "flowChartStoredData" | "flowChartMagneticTape"
+        "flowChartOnlineStorage"
+        | "flowChartStoredData"
+        | "flowChartMagneticTape"
         | "flowChartPunchedTape" => "das",
         "flowChartMagneticDisk" | "flowChartMagneticDrum" => "cyl",
         "flowChartInternalStorage" => "lin-rect",
@@ -1064,19 +1071,21 @@ fn line_arrow_dir(xml: &[u8]) -> ArrowDir {
                 let ln = e.local_name();
                 let ln = ln.as_ref();
                 if ln == b"headEnd"
-                    && let Some(ty) = attr_val_local(&e, b"type") {
-                        let t = ty.trim().to_ascii_lowercase();
-                        if !t.is_empty() && t != "none" {
-                            head = true;
-                        }
+                    && let Some(ty) = attr_val_local(&e, b"type")
+                {
+                    let t = ty.trim().to_ascii_lowercase();
+                    if !t.is_empty() && t != "none" {
+                        head = true;
                     }
+                }
                 if ln == b"tailEnd"
-                    && let Some(ty) = attr_val_local(&e, b"type") {
-                        let t = ty.trim().to_ascii_lowercase();
-                        if !t.is_empty() && t != "none" {
-                            tail = true;
-                        }
+                    && let Some(ty) = attr_val_local(&e, b"type")
+                {
+                    let t = ty.trim().to_ascii_lowercase();
+                    if !t.is_empty() && t != "none" {
+                        tail = true;
                     }
+                }
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -1115,9 +1124,10 @@ fn extract_chart_rid_from_graphic_frame(xml: &[u8]) -> Option<String> {
             Ok(Event::Start(e) | Event::Empty(e)) => {
                 if e.local_name().as_ref() == b"chart"
                     && let Some(rid) = attr_val_local(&e, b"id")
-                        && !rid.trim().is_empty() {
-                            return Some(rid);
-                        }
+                    && !rid.trim().is_empty()
+                {
+                    return Some(rid);
+                }
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -1137,9 +1147,10 @@ fn graphic_frame_has_smartart(xml: &[u8]) -> bool {
             Ok(Event::Start(e) | Event::Empty(e)) => {
                 if e.local_name().as_ref() == b"graphicData"
                     && let Some(uri) = attr_val_local(&e, b"uri")
-                        && uri.contains("/diagram") {
-                            return true;
-                        }
+                    && uri.contains("/diagram")
+                {
+                    return true;
+                }
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -1272,17 +1283,18 @@ fn parse_chart_xml_cached_values(chart_xml: &str) -> Result<ChartDataParsed> {
                 }
                 b"numFmt" => {
                     if let Some(s) = cur_series.as_mut()
-                        && s.format_code.is_none() {
-                            for a in e.attributes().flatten() {
-                                if a.key.as_ref() == b"formatCode" {
-                                    let code = String::from_utf8_lossy(&a.value).to_string();
-                                    let code = code.trim().to_string();
-                                    if !code.is_empty() {
-                                        s.format_code = Some(code);
-                                    }
+                        && s.format_code.is_none()
+                    {
+                        for a in e.attributes().flatten() {
+                            if a.key.as_ref() == b"formatCode" {
+                                let code = String::from_utf8_lossy(&a.value).to_string();
+                                let code = code.trim().to_string();
+                                if !code.is_empty() {
+                                    s.format_code = Some(code);
                                 }
                             }
                         }
+                    }
                 }
                 b"v" => {
                     in_v = true;
@@ -1317,9 +1329,10 @@ fn parse_chart_xml_cached_values(chart_xml: &str) -> Result<ChartDataParsed> {
                                     cur_series = Some(Default::default());
                                 }
                                 if let Some(s) = cur_series.as_mut()
-                                    && s.format_code.is_none() {
-                                        s.format_code = Some(v.to_string());
-                                    }
+                                    && s.format_code.is_none()
+                                {
+                                    s.format_code = Some(v.to_string());
+                                }
                             }
                         }
                     }
@@ -1404,9 +1417,10 @@ fn unit_from_numfmt(code: Option<&str>) -> Option<String> {
         if let Some(end) = tail.find(']') {
             let inner = &tail[..end];
             if let Some(sym) = inner.chars().next()
-                && !sym.is_ascii_alphanumeric() {
-                    return Some(sym.to_string());
-                }
+                && !sym.is_ascii_alphanumeric()
+            {
+                return Some(sym.to_string());
+            }
         }
     }
     // e.g. 0.0"kg" -> kg
@@ -1579,7 +1593,7 @@ fn parse_pptx_full_inner(
             text: heading_text,
             source: SourceSpan::default(),
             marks: Vec::new(),
-    });
+        });
         block_index += 1;
 
         let mut cur_list: Option<(bool, Vec<ListItem>)> = None;
@@ -1651,7 +1665,12 @@ fn parse_pptx_full_inner(
                 let (from, to) = extract_connector_endpoints(xml);
                 let label = extract_text_compact(xml)?;
                 let dir = line_arrow_dir(xml);
-                edges.push(Edge { from, to, label, dir });
+                edges.push(Edge {
+                    from,
+                    to,
+                    label,
+                    dir,
+                });
                 continue;
             }
 
@@ -1665,61 +1684,64 @@ fn parse_pptx_full_inner(
             let is_pic = tag.ends_with(":pic") || tag == "pic";
             if is_pic {
                 if let Some(rid) = extract_first_blip_embed(xml)
-                    && let Some((_ty, target)) = slide_rels.get(&rid).cloned() {
-                        let media_part = resolve_target(&slide_part, &target);
-                        if let Ok(img_bytes) = read_zip_file(bytes, &media_part) {
-                            embedded_images += 1;
-                            let filename = Some(basename(&media_part).to_string());
-                            let mime_type = filename
-                                .as_deref().map_or_else(|| "application/octet-stream".to_string(), mime_from_filename);
-                            let hash = sha256_hex(&img_bytes);
-                            let id = format!("sha256:{hash}");
-                            let alt = extract_cnvpr_alt(xml);
+                    && let Some((_ty, target)) = slide_rels.get(&rid).cloned()
+                {
+                    let media_part = resolve_target(&slide_part, &target);
+                    if let Ok(img_bytes) = read_zip_file(bytes, &media_part) {
+                        embedded_images += 1;
+                        let filename = Some(basename(&media_part).to_string());
+                        let mime_type = filename.as_deref().map_or_else(
+                            || "application/octet-stream".to_string(),
+                            mime_from_filename,
+                        );
+                        let hash = sha256_hex(&img_bytes);
+                        let id = format!("sha256:{hash}");
+                        let alt = extract_cnvpr_alt(xml);
 
-                            if let (Some(shape_id), Some((x, y, w, h))) =
-                                (extract_shape_id(xml), extract_bbox_emu(xml))
-                            {
-                                const EMUS_PER_INCH: f64 = 914_400.0;
-                                const PX_PER_INCH: f64 = 96.0;
-                                let f = PX_PER_INCH / EMUS_PER_INCH;
-                                let label = alt
-                                    .as_deref()
-                                    .map(str::trim)
-                                    .filter(|s| !s.is_empty())
-                                    .map(std::string::ToString::to_string)
-                                    .or_else(|| filename.clone())
-                                    .unwrap_or_else(|| "image".to_string());
-                                nodes.push(Node {
-                                    id: shape_id,
-                                    label,
-                                    kind: NodeKind::Image {
-                                        image_id: id.clone(),
-                                    },
-                                    mermaid_shape: "rect",
-                                    x: x as f64 * f,
-                                    y: y as f64 * f,
-                                    w: w as f64 * f,
-                                    h: h as f64 * f,
-                                });
-                            }
-                            images.push(ParsedImage {
-                                id: id.clone(),
-                                bytes: img_bytes,
-                                mime_type: mime_type.clone(),
-                                filename: filename.clone(),
+                        if let (Some(shape_id), Some((x, y, w, h))) =
+                            (extract_shape_id(xml), extract_bbox_emu(xml))
+                        {
+                            const EMUS_PER_INCH: f64 = 914_400.0;
+                            const PX_PER_INCH: f64 = 96.0;
+                            let f = PX_PER_INCH / EMUS_PER_INCH;
+                            let label = alt
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|s| !s.is_empty())
+                                .map(std::string::ToString::to_string)
+                                .or_else(|| filename.clone())
+                                .unwrap_or_else(|| "image".to_string());
+                            nodes.push(Node {
+                                id: shape_id,
+                                label,
+                                kind: NodeKind::Image {
+                                    image_id: id.clone(),
+                                },
+                                mermaid_shape: "rect",
+                                x: x as f64 * f,
+                                y: y as f64 * f,
+                                w: w as f64 * f,
+                                h: h as f64 * f,
                             });
-                            flush_list_block(&mut blocks, &mut block_index, &mut cur_list);
-                            blocks.push(Block::Image {
-                                block_index,
-                                id,
-                                filename,
-                                content_type: Some(mime_type),
-                                alt,
-                                source: SourceSpan::default(),
-                            });
-                            block_index += 1;
                         }
+                        images.push(ParsedImage {
+                            id: id.clone(),
+                            bytes: img_bytes,
+                            mime_type: mime_type.clone(),
+                            filename: filename.clone(),
+                        });
+                        flush_list_block(&mut blocks, &mut block_index, &mut cur_list);
+                        blocks.push(Block::Image {
+                            block_index,
+                            id,
+                            filename,
+                            content_type: Some(mime_type),
+                            alt,
+                            source: SourceSpan::default(),
+                        });
+                        block_index += 1;
                     }
+                }
                 continue;
             }
 
@@ -1742,127 +1764,124 @@ fn parse_pptx_full_inner(
                     if let Some((_ty, target)) = slide_rels.get(&rid).cloned() {
                         let chart_part = resolve_target(&slide_part, &target);
                         if let Ok(chart_xml) = read_zip_file_utf8(bytes, &chart_part)
-                            && let Ok(chart) = parse_chart_xml_cached_values(&chart_xml) {
-                                let chart_type =
-                                    chart_type_from_xml(&chart_xml).unwrap_or("unknown");
-                                charts_meta.push(serde_json::json!({
-                                    "slide": slide_idx_1,
-                                    "chart_type": chart_type,
-                                    "title": chart.title,
-                                    "categories": chart.categories,
-                                    "series": chart.series.iter().map(|s| serde_json::json!({
-                                        "name": s.name,
-                                        "values": s.values,
-                                        "unit": unit_from_numfmt(s.format_code.as_deref()),
-                                    })).collect::<Vec<_>>(),
-                                }));
+                            && let Ok(chart) = parse_chart_xml_cached_values(&chart_xml)
+                        {
+                            let chart_type = chart_type_from_xml(&chart_xml).unwrap_or("unknown");
+                            charts_meta.push(serde_json::json!({
+                                "slide": slide_idx_1,
+                                "chart_type": chart_type,
+                                "title": chart.title,
+                                "categories": chart.categories,
+                                "series": chart.series.iter().map(|s| serde_json::json!({
+                                    "name": s.name,
+                                    "values": s.values,
+                                    "unit": unit_from_numfmt(s.format_code.as_deref()),
+                                })).collect::<Vec<_>>(),
+                            }));
 
-                                flush_list_block(&mut blocks, &mut block_index, &mut cur_list);
-                                blocks.push(Block::Heading {
-                                    block_index,
-                                    level: 3,
-                                    text: chart
-                                        .title
+                            flush_list_block(&mut blocks, &mut block_index, &mut cur_list);
+                            blocks.push(Block::Heading {
+                                block_index,
+                                level: 3,
+                                text: chart.title.clone().unwrap_or_else(|| "Chart".to_string()),
+                                source: SourceSpan::default(),
+                                marks: Vec::new(),
+                            });
+                            block_index += 1;
+
+                            let chart_shape = if chart_type == "unknown" {
+                                "chart".to_string()
+                            } else {
+                                format!("{chart_type} chart")
+                            };
+                            let mut units: Vec<(String, String)> = Vec::new();
+                            for (i, s) in chart.series.iter().enumerate() {
+                                if let Some(u) = unit_from_numfmt(s.format_code.as_deref()) {
+                                    let name = s
+                                        .name
                                         .clone()
-                                        .unwrap_or_else(|| "Chart".to_string()),
-                                    source: SourceSpan::default(),
-                                    marks: Vec::new(),
-    });
-                                block_index += 1;
-
-                                let chart_shape = if chart_type == "unknown" {
-                                    "chart".to_string()
+                                        .filter(|t| !t.trim().is_empty())
+                                        .unwrap_or_else(|| format!("series{}", i + 1));
+                                    units.push((name, u));
+                                }
+                            }
+                            let mut note = format!("Note: {chart_shape}");
+                            if !units.is_empty() {
+                                let uniq = units
+                                    .iter()
+                                    .map(|(_n, u)| u.clone())
+                                    .collect::<std::collections::BTreeSet<_>>();
+                                if uniq.len() == 1 {
+                                    note.push_str(&format!(
+                                        "; units: {}",
+                                        uniq.iter().next().unwrap()
+                                    ));
                                 } else {
-                                    format!("{chart_type} chart")
-                                };
-                                let mut units: Vec<(String, String)> = Vec::new();
-                                for (i, s) in chart.series.iter().enumerate() {
-                                    if let Some(u) = unit_from_numfmt(s.format_code.as_deref()) {
-                                        let name = s
-                                            .name
-                                            .clone()
-                                            .filter(|t| !t.trim().is_empty())
-                                            .unwrap_or_else(|| format!("series{}", i + 1));
-                                        units.push((name, u));
-                                    }
+                                    note.push_str("; units: ");
+                                    note.push_str(
+                                        &units
+                                            .iter()
+                                            .map(|(n, u)| format!("{n}={u}"))
+                                            .collect::<Vec<_>>()
+                                            .join(", "),
+                                    );
                                 }
-                                let mut note = format!("Note: {chart_shape}");
-                                if !units.is_empty() {
-                                    let uniq = units
-                                        .iter()
-                                        .map(|(_n, u)| u.clone())
-                                        .collect::<std::collections::BTreeSet<_>>();
-                                    if uniq.len() == 1 {
-                                        note.push_str(&format!(
-                                            "; units: {}",
-                                            uniq.iter().next().unwrap()
-                                        ));
-                                    } else {
-                                        note.push_str("; units: ");
-                                        note.push_str(
-                                            &units
-                                                .iter()
-                                                .map(|(n, u)| format!("{n}={u}"))
-                                                .collect::<Vec<_>>()
-                                                .join(", "),
-                                        );
-                                    }
-                                }
-                                blocks.push(Block::Paragraph {
-                                    block_index,
-                                    text: note,
-                                    source: SourceSpan::default(),
-                                    marks: Vec::new(),
-    });
-                                block_index += 1;
+                            }
+                            blocks.push(Block::Paragraph {
+                                block_index,
+                                text: note,
+                                source: SourceSpan::default(),
+                                marks: Vec::new(),
+                            });
+                            block_index += 1;
 
-                                if !chart.categories.is_empty() && !chart.series.is_empty() {
-                                    let mut rows: Vec<Vec<Cell>> = Vec::new();
-                                    let mut hdr = Vec::new();
+                            if !chart.categories.is_empty() && !chart.series.is_empty() {
+                                let mut rows: Vec<Vec<Cell>> = Vec::new();
+                                let mut hdr = Vec::new();
+                                hdr.push(Cell {
+                                    text: "series".to_string(),
+                                    colspan: 1,
+                                    rowspan: 1,
+                                });
+                                for c in &chart.categories {
                                     hdr.push(Cell {
-                                        text: "series".to_string(),
+                                        text: c.clone(),
                                         colspan: 1,
                                         rowspan: 1,
                                     });
-                                    for c in &chart.categories {
-                                        hdr.push(Cell {
-                                            text: c.clone(),
-                                            colspan: 1,
-                                            rowspan: 1,
-                                        });
-                                    }
-                                    rows.push(hdr);
-
-                                    for s in &chart.series {
-                                        let unit = unit_from_numfmt(s.format_code.as_deref());
-                                        let mut r = Vec::new();
-                                        r.push(Cell {
-                                            text: s
-                                                .name
-                                                .clone()
-                                                .unwrap_or_else(|| "series".to_string()),
-                                            colspan: 1,
-                                            rowspan: 1,
-                                        });
-                                        for v in &s.values {
-                                            r.push(Cell {
-                                                text: format_value_with_unit(*v, unit.as_deref()),
-                                                colspan: 1,
-                                                rowspan: 1,
-                                            });
-                                        }
-                                        rows.push(r);
-                                    }
-
-                                    blocks.push(Block::Table {
-                                        block_index,
-                                        rows,
-                                        source: SourceSpan::default(),
-                                        widths: Vec::new(),
-                                    });
-                                    block_index += 1;
                                 }
+                                rows.push(hdr);
+
+                                for s in &chart.series {
+                                    let unit = unit_from_numfmt(s.format_code.as_deref());
+                                    let mut r = Vec::new();
+                                    r.push(Cell {
+                                        text: s
+                                            .name
+                                            .clone()
+                                            .unwrap_or_else(|| "series".to_string()),
+                                        colspan: 1,
+                                        rowspan: 1,
+                                    });
+                                    for v in &s.values {
+                                        r.push(Cell {
+                                            text: format_value_with_unit(*v, unit.as_deref()),
+                                            colspan: 1,
+                                            rowspan: 1,
+                                        });
+                                    }
+                                    rows.push(r);
+                                }
+
+                                blocks.push(Block::Table {
+                                    block_index,
+                                    rows,
+                                    source: SourceSpan::default(),
+                                    widths: Vec::new(),
+                                });
+                                block_index += 1;
                             }
+                        }
                     }
                 } else if graphic_frame_has_smartart(xml) {
                     smartart += 1;
@@ -1891,14 +1910,14 @@ fn parse_pptx_full_inner(
                 if prst.as_deref() == Some("line")
                     && let Some((x, y, w, h)) = extract_bbox_emu(xml)
                 {
-                        const EMUS_PER_INCH: f64 = 914_400.0;
-                        const PX_PER_INCH: f64 = 96.0;
-                        let f = PX_PER_INCH / EMUS_PER_INCH;
-                        let dir = line_arrow_dir(xml);
-                        if dir != ArrowDir::None {
-                            connectors += 1;
-                            slide_has_diagram = true;
-                        }
+                    const EMUS_PER_INCH: f64 = 914_400.0;
+                    const PX_PER_INCH: f64 = 96.0;
+                    let f = PX_PER_INCH / EMUS_PER_INCH;
+                    let dir = line_arrow_dir(xml);
+                    if dir != ArrowDir::None {
+                        connectors += 1;
+                        slide_has_diagram = true;
+                    }
                     lines.push(Line {
                         x1: x as f64 * f,
                         y1: y as f64 * f,
@@ -2002,8 +2021,8 @@ fn parse_pptx_full_inner(
                 if let (Some(from), Some(to)) = (from, to)
                     && from != to
                 {
-                        // Geometry was normalized so `from` is the tail end;
-                        // Both collapses into one `<-->` edge at emission.
+                    // Geometry was normalized so `from` is the tail end;
+                    // Both collapses into one `<-->` edge at emission.
                     edges.push(Edge {
                         from: Some(from),
                         to: Some(to),
@@ -2104,14 +2123,14 @@ fn parse_pptx_full_inner(
                     text: "Diagram".to_string(),
                     source: SourceSpan::default(),
                     marks: Vec::new(),
-    });
+                });
                 block_index += 1;
                 blocks.push(Block::Paragraph {
                     block_index,
                     text: mermaid,
                     source: SourceSpan::default(),
                     marks: Vec::new(),
-    });
+                });
                 block_index += 1;
             }
         }
@@ -2169,7 +2188,7 @@ fn parse_pptx_full_inner(
                         text: note_text,
                         source: SourceSpan::default(),
                         marks: Vec::new(),
-    });
+                    });
                     block_index += 1;
                 }
             }
@@ -2360,7 +2379,10 @@ mod group_capture_tests {
             .iter()
             .filter_map(|(_, x)| extract_text_compact(x).unwrap())
             .collect();
-        assert_eq!(texts, vec!["Grouped A".to_string(), "Grouped B".to_string()]);
+        assert_eq!(
+            texts,
+            vec!["Grouped A".to_string(), "Grouped B".to_string()]
+        );
     }
 }
 
@@ -2370,12 +2392,27 @@ mod preset_tests {
 
     #[test]
     fn preset_map_covers_common_flowchart_shapes() {
-        assert_eq!(mermaid_shape_from_prst(Some("flowChartTerminator")), "stadium");
-        assert_eq!(mermaid_shape_from_prst(Some("flowChartDecision")), "diamond");
-        assert_eq!(mermaid_shape_from_prst(Some("flowChartDocument")), "document");
+        assert_eq!(
+            mermaid_shape_from_prst(Some("flowChartTerminator")),
+            "stadium"
+        );
+        assert_eq!(
+            mermaid_shape_from_prst(Some("flowChartDecision")),
+            "diamond"
+        );
+        assert_eq!(
+            mermaid_shape_from_prst(Some("flowChartDocument")),
+            "document"
+        );
         assert_eq!(mermaid_shape_from_prst(Some("flowChartDelay")), "stadium");
-        assert_eq!(mermaid_shape_from_prst(Some("flowChartManualOperation")), "trap-b");
-        assert_eq!(mermaid_shape_from_prst(Some("flowChartMagneticDisk")), "cyl");
+        assert_eq!(
+            mermaid_shape_from_prst(Some("flowChartManualOperation")),
+            "trap-b"
+        );
+        assert_eq!(
+            mermaid_shape_from_prst(Some("flowChartMagneticDisk")),
+            "cyl"
+        );
         assert_eq!(mermaid_shape_from_prst(Some("flowChartStoredData")), "das");
         assert_eq!(mermaid_shape_from_prst(Some("flowChartPreparation")), "hex");
         assert_eq!(mermaid_shape_from_prst(Some("flowChartOr")), "circle");

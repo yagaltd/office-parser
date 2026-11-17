@@ -618,7 +618,12 @@ impl Renderer<'_> {
         );
     }
 
-    pub(crate) fn draw_pixmap(&mut self, pixmap: Arc<Pixmap>, quality: ImageQuality, transform: Affine) {
+    pub(crate) fn draw_pixmap(
+        &mut self,
+        pixmap: Arc<Pixmap>,
+        quality: ImageQuality,
+        transform: Affine,
+    ) {
         let (width, height) = (pixmap.width(), pixmap.height());
         let image = Image {
             image: ImageSource::Pixmap(pixmap),
@@ -863,12 +868,9 @@ fn resize_image_data_impl<const N: usize>(
         let plan = plan(scaler, source_size, target_size).ok()?;
         let mut out = image_buffer(len)?;
         out.resize(len, 0);
-        let mut dst = ImageStoreMut::<u8, N>::from_slice(
-            &mut out,
-            new_width as usize,
-            new_height as usize,
-        )
-        .ok()?;
+        let mut dst =
+            ImageStoreMut::<u8, N>::from_slice(&mut out, new_width as usize, new_height as usize)
+                .ok()?;
         plan.resample(&src, &mut dst).ok()?;
         Some(out)
     })();

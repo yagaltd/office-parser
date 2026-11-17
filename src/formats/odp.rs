@@ -3,7 +3,7 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 
 use crate::document_ast::{Block, Cell, InlineMark, ListItem, MarkKind, SourceSpan};
-use crate::formats::odt::{parse_odt_text_styles, SpanStyle};
+use crate::formats::odt::{SpanStyle, parse_odt_text_styles};
 
 use super::{
     ParsedImage, ParsedOfficeDocument, mime_from_filename, read_zip_file, read_zip_file_utf8,
@@ -88,15 +88,16 @@ fn flush_list_block(
     cur_list: &mut Option<(bool, Vec<ListItem>)>,
 ) {
     if let Some((ordered, items)) = cur_list.take()
-        && !items.is_empty() {
-            blocks.push(Block::List {
-                block_index: *block_index,
-                ordered,
-                items,
-                source: SourceSpan::default(),
-            });
-            *block_index += 1;
-        }
+        && !items.is_empty()
+    {
+        blocks.push(Block::List {
+            block_index: *block_index,
+            ordered,
+            items,
+            source: SourceSpan::default(),
+        });
+        *block_index += 1;
+    }
 }
 
 fn push_paragraph_or_list_item(
@@ -117,7 +118,7 @@ fn push_paragraph_or_list_item(
                     text,
                     marks,
                     source: SourceSpan::default(),
-    });
+                });
             }
             _ => {
                 flush_list_block(blocks, block_index, cur_list);
@@ -128,7 +129,7 @@ fn push_paragraph_or_list_item(
                         text,
                         marks,
                         source: SourceSpan::default(),
-    }],
+                    }],
                 ));
             }
         }
@@ -416,16 +417,17 @@ fn parse_odp_full_inner(
 
                         if e.name().as_ref() == b"draw:enhanced-geometry"
                             && let Some(t) = attr_val_exact(&e, b"draw:type")
-                                && let Some(last) = frame_shape_type_stack.last_mut()
-                                    && last.is_none() {
-                                        *last = Some(t);
-                                    }
+                            && let Some(last) = frame_shape_type_stack.last_mut()
+                            && last.is_none()
+                        {
+                            *last = Some(t);
+                        }
 
                         if e.name().as_ref() == b"draw:frame"
                             || e.name().as_ref() == b"draw:custom-shape"
                         {
-                            let is_title = attr_val_exact(&e, b"presentation:class")
-                                .is_some_and(|cls| {
+                            let is_title =
+                                attr_val_exact(&e, b"presentation:class").is_some_and(|cls| {
                                     let c = cls.to_ascii_lowercase();
                                     c == "title" || c == "subtitle"
                                 });
@@ -480,14 +482,12 @@ fn parse_odp_full_inner(
                                 .max(1);
                         }
 
-                        if e.name().as_ref() == b"text:list"
-                            && !in_table {
-                                list_depth = list_depth.saturating_add(1);
-                            }
-                        if e.name().as_ref() == b"text:list-item"
-                            && !in_table {
-                                in_list_item = true;
-                            }
+                        if e.name().as_ref() == b"text:list" && !in_table {
+                            list_depth = list_depth.saturating_add(1);
+                        }
+                        if e.name().as_ref() == b"text:list-item" && !in_table {
+                            in_list_item = true;
+                        }
 
                         if e.name().as_ref() == b"text:h" {
                             // ODF headings use text:outline-level (1..). We shift by +1 to keep
@@ -505,7 +505,7 @@ fn parse_odp_full_inner(
                             in_text_p = true;
                             cur_para_text.clear();
                         }
-                            mark_segments.clear();
+                        mark_segments.clear();
                         if e.name().as_ref() == b"presentation:notes" {
                             in_notes = true;
                             notes_lines.clear();
@@ -518,80 +518,77 @@ fn parse_odp_full_inner(
                             span_flags.push(flags);
                         }
                         if e.name().as_ref() == b"draw:image"
-                            && let Some(href) = attr_val_exact(&e, b"xlink:href") {
-                                let href = href.trim().trim_start_matches("./");
-                                if !href.is_empty()
-                                    && let Ok(img_bytes) = read_zip_file(bytes, href) {
-                                        embedded_images += 1;
-                                        let filename = Some(
-                                            href.rsplit('/').next().unwrap_or(href).to_string(),
-                                        );
-                                        let mime_type = filename
-                                            .as_deref().map_or_else(|| {
-                                                "application/octet-stream".to_string()
-                                            }, mime_from_filename);
-                                        let hash = sha256_hex(&img_bytes);
-                                        let id = format!("sha256:{hash}");
+                            && let Some(href) = attr_val_exact(&e, b"xlink:href")
+                        {
+                            let href = href.trim().trim_start_matches("./");
+                            if !href.is_empty()
+                                && let Ok(img_bytes) = read_zip_file(bytes, href)
+                            {
+                                embedded_images += 1;
+                                let filename =
+                                    Some(href.rsplit('/').next().unwrap_or(href).to_string());
+                                let mime_type = filename.as_deref().map_or_else(
+                                    || "application/octet-stream".to_string(),
+                                    mime_from_filename,
+                                );
+                                let hash = sha256_hex(&img_bytes);
+                                let id = format!("sha256:{hash}");
 
-                                        images.push(ParsedImage {
-                                            id: id.clone(),
-                                            bytes: img_bytes,
-                                            mime_type: mime_type.clone(),
-                                            filename: filename.clone(),
-                                        });
-                                        flush_list_block(
-                                            &mut blocks,
-                                            &mut block_index,
-                                            &mut cur_list,
-                                        );
-                                        blocks.push(Block::Image {
-                                            block_index,
-                                            id: id.clone(),
-                                            filename,
-                                            content_type: Some(mime_type),
-                                            alt: None,
-                                            source: SourceSpan::default(),
-                                        });
-                                        block_index += 1;
+                                images.push(ParsedImage {
+                                    id: id.clone(),
+                                    bytes: img_bytes,
+                                    mime_type: mime_type.clone(),
+                                    filename: filename.clone(),
+                                });
+                                flush_list_block(&mut blocks, &mut block_index, &mut cur_list);
+                                blocks.push(Block::Image {
+                                    block_index,
+                                    id: id.clone(),
+                                    filename,
+                                    content_type: Some(mime_type),
+                                    alt: None,
+                                    source: SourceSpan::default(),
+                                });
+                                block_index += 1;
 
-                                        if let Some((x, y, w, h)) =
-                                            frame_bbox_stack.last().copied().unwrap_or(None)
-                                        {
-                                            let node_id = if let Some(odf_id) =
-                                                frame_id_stack.last().cloned().unwrap_or(None)
-                                            {
-                                                node_id_for_odf(
-                                                    &odf_id,
-                                                    &mut next_node_id,
-                                                    &mut node_by_odf_id,
-                                                )
-                                            } else {
-                                                let nid = next_node_id;
-                                                next_node_id = next_node_id.saturating_add(1);
-                                                nid
-                                            };
+                                if let Some((x, y, w, h)) =
+                                    frame_bbox_stack.last().copied().unwrap_or(None)
+                                {
+                                    let node_id = if let Some(odf_id) =
+                                        frame_id_stack.last().cloned().unwrap_or(None)
+                                    {
+                                        node_id_for_odf(
+                                            &odf_id,
+                                            &mut next_node_id,
+                                            &mut node_by_odf_id,
+                                        )
+                                    } else {
+                                        let nid = next_node_id;
+                                        next_node_id = next_node_id.saturating_add(1);
+                                        nid
+                                    };
 
-                                            let n = Node {
-                                                id: node_id,
-                                                label: format!("office-image:{id}"),
-                                                kind: NodeKind::Image {
-                                                    _image_id: id.clone(),
-                                                },
-                                                mermaid_shape: "rect",
-                                                x,
-                                                y,
-                                                w,
-                                                h,
-                                            };
-                                            if let Some(&idx) = node_index_by_id.get(&node_id) {
-                                                nodes[idx] = n;
-                                            } else {
-                                                node_index_by_id.insert(node_id, nodes.len());
-                                                nodes.push(n);
-                                            }
-                                        }
+                                    let n = Node {
+                                        id: node_id,
+                                        label: format!("office-image:{id}"),
+                                        kind: NodeKind::Image {
+                                            _image_id: id.clone(),
+                                        },
+                                        mermaid_shape: "rect",
+                                        x,
+                                        y,
+                                        w,
+                                        h,
+                                    };
+                                    if let Some(&idx) = node_index_by_id.get(&node_id) {
+                                        nodes[idx] = n;
+                                    } else {
+                                        node_index_by_id.insert(node_id, nodes.len());
+                                        nodes.push(n);
                                     }
+                                }
                             }
+                        }
                     }
                     _ => {}
                 }
@@ -642,135 +639,130 @@ fn parse_odp_full_inner(
                     }
 
                     if e.name().as_ref() == b"draw:image"
-                        && let Some(href) = attr_val_exact(&e, b"xlink:href") {
-                            let href = href.trim().trim_start_matches("./");
-                            if !href.is_empty()
-                                && let Ok(img_bytes) = read_zip_file(bytes, href) {
-                                    embedded_images += 1;
-                                    let filename =
-                                        Some(href.rsplit('/').next().unwrap_or(href).to_string());
-                                    let mime_type = filename
-                                        .as_deref().map_or_else(|| "application/octet-stream".to_string(), mime_from_filename);
-                                    let hash = sha256_hex(&img_bytes);
-                                    let id = format!("sha256:{hash}");
+                        && let Some(href) = attr_val_exact(&e, b"xlink:href")
+                    {
+                        let href = href.trim().trim_start_matches("./");
+                        if !href.is_empty()
+                            && let Ok(img_bytes) = read_zip_file(bytes, href)
+                        {
+                            embedded_images += 1;
+                            let filename =
+                                Some(href.rsplit('/').next().unwrap_or(href).to_string());
+                            let mime_type = filename.as_deref().map_or_else(
+                                || "application/octet-stream".to_string(),
+                                mime_from_filename,
+                            );
+                            let hash = sha256_hex(&img_bytes);
+                            let id = format!("sha256:{hash}");
 
-                                    images.push(ParsedImage {
-                                        id: id.clone(),
-                                        bytes: img_bytes,
-                                        mime_type: mime_type.clone(),
-                                        filename: filename.clone(),
-                                    });
-                                    flush_list_block(&mut blocks, &mut block_index, &mut cur_list);
-                                    blocks.push(Block::Image {
-                                        block_index,
-                                        id: id.clone(),
-                                        filename,
-                                        content_type: Some(mime_type),
-                                        alt: None,
-                                        source: SourceSpan::default(),
-                                    });
-                                    block_index += 1;
+                            images.push(ParsedImage {
+                                id: id.clone(),
+                                bytes: img_bytes,
+                                mime_type: mime_type.clone(),
+                                filename: filename.clone(),
+                            });
+                            flush_list_block(&mut blocks, &mut block_index, &mut cur_list);
+                            blocks.push(Block::Image {
+                                block_index,
+                                id: id.clone(),
+                                filename,
+                                content_type: Some(mime_type),
+                                alt: None,
+                                source: SourceSpan::default(),
+                            });
+                            block_index += 1;
 
-                                    if let Some((x, y, w, h)) =
-                                        frame_bbox_stack.last().copied().unwrap_or(None)
-                                    {
-                                        let node_id = if let Some(odf_id) =
-                                            frame_id_stack.last().cloned().unwrap_or(None)
-                                        {
-                                            node_id_for_odf(
-                                                &odf_id,
-                                                &mut next_node_id,
-                                                &mut node_by_odf_id,
-                                            )
-                                        } else {
-                                            let nid = next_node_id;
-                                            next_node_id = next_node_id.saturating_add(1);
-                                            nid
-                                        };
+                            if let Some((x, y, w, h)) =
+                                frame_bbox_stack.last().copied().unwrap_or(None)
+                            {
+                                let node_id = if let Some(odf_id) =
+                                    frame_id_stack.last().cloned().unwrap_or(None)
+                                {
+                                    node_id_for_odf(&odf_id, &mut next_node_id, &mut node_by_odf_id)
+                                } else {
+                                    let nid = next_node_id;
+                                    next_node_id = next_node_id.saturating_add(1);
+                                    nid
+                                };
 
-                                        let n = Node {
-                                            id: node_id,
-                                            label: format!("office-image:{id}"),
-                                            kind: NodeKind::Image {
-                                                _image_id: id.clone(),
-                                            },
-                                            mermaid_shape: "rect",
-                                            x,
-                                            y,
-                                            w,
-                                            h,
-                                        };
-                                        if let Some(&idx) = node_index_by_id.get(&node_id) {
-                                            nodes[idx] = n;
-                                        } else {
-                                            node_index_by_id.insert(node_id, nodes.len());
-                                            nodes.push(n);
-                                        }
-                                    }
+                                let n = Node {
+                                    id: node_id,
+                                    label: format!("office-image:{id}"),
+                                    kind: NodeKind::Image {
+                                        _image_id: id.clone(),
+                                    },
+                                    mermaid_shape: "rect",
+                                    x,
+                                    y,
+                                    w,
+                                    h,
+                                };
+                                if let Some(&idx) = node_index_by_id.get(&node_id) {
+                                    nodes[idx] = n;
+                                } else {
+                                    node_index_by_id.insert(node_id, nodes.len());
+                                    nodes.push(n);
                                 }
+                            }
                         }
+                    }
                 }
             }
             Ok(Event::Text(e)) => {
-                if in_slide
-                    && let Ok(t) = String::from_utf8(e.to_vec()) {
-                        let trimmed = t.trim();
-                        if (in_text_p || in_text_span)
-                            && !trimmed.is_empty() {
-                                // segment start (single-space joins align with
-                                // the mark offsets only when contiguous; the
-                                // join space shifts are corrected by trim+shift)
-                                let seg_start = cur_para_text.chars().count()
-                                    + usize::from(!cur_para_text.is_empty());
-                                if !cur_para_text.is_empty() {
-                                    cur_para_text.push(' ');
-                                }
-                                cur_para_text.push_str(trimmed);
-                                let seg_end = cur_para_text.chars().count();
-                                let flags = span_flags.iter().fold(
-                                    (false, false, false),
-                                    |a, f| (a.0 | f.0, a.1 | f.1, a.2 | f.2),
-                                );
-                                if flags != (false, false, false)
-                                    && !in_table
-                                    && !in_connector
-                                    && !title_frame
-                                    && seg_end > seg_start
-                                {
-                                    mark_segments.push((seg_start, seg_end, flags));
-                                }
+                if in_slide && let Ok(t) = String::from_utf8(e.to_vec()) {
+                    let trimmed = t.trim();
+                    if (in_text_p || in_text_span) && !trimmed.is_empty() {
+                        // segment start (single-space joins align with
+                        // the mark offsets only when contiguous; the
+                        // join space shifts are corrected by trim+shift)
+                        let seg_start =
+                            cur_para_text.chars().count() + usize::from(!cur_para_text.is_empty());
+                        if !cur_para_text.is_empty() {
+                            cur_para_text.push(' ');
+                        }
+                        cur_para_text.push_str(trimmed);
+                        let seg_end = cur_para_text.chars().count();
+                        let flags = span_flags.iter().fold((false, false, false), |a, f| {
+                            (a.0 | f.0, a.1 | f.1, a.2 | f.2)
+                        });
+                        if flags != (false, false, false)
+                            && !in_table
+                            && !in_connector
+                            && !title_frame
+                            && seg_end > seg_start
+                        {
+                            mark_segments.push((seg_start, seg_end, flags));
+                        }
 
-                                if in_connector {
-                                    if !connector_text.is_empty() {
-                                        connector_text.push(' ');
-                                    }
-                                    connector_text.push_str(trimmed);
-                                }
-
-                                if let Some(t) = frame_text_stack.last_mut() {
-                                    if !t.is_empty() {
-                                        t.push(' ');
-                                    }
-                                    t.push_str(trimmed);
-                                }
+                        if in_connector {
+                            if !connector_text.is_empty() {
+                                connector_text.push(' ');
                             }
+                            connector_text.push_str(trimmed);
+                        }
 
-                        if in_table_cell
-                            && !trimmed.is_empty() {
-                                if !cur_cell_text.is_empty() {
-                                    cur_cell_text.push(' ');
-                                }
-                                cur_cell_text.push_str(trimmed);
+                        if let Some(t) = frame_text_stack.last_mut() {
+                            if !t.is_empty() {
+                                t.push(' ');
                             }
-
-                        if title_frame
-                            && !trimmed.is_empty() {
-                                if !title_text.is_empty() {
-                                    title_text.push(' ');
-                                }
-                                title_text.push_str(trimmed);
-                            }
+                            t.push_str(trimmed);
+                        }
                     }
+
+                    if in_table_cell && !trimmed.is_empty() {
+                        if !cur_cell_text.is_empty() {
+                            cur_cell_text.push(' ');
+                        }
+                        cur_cell_text.push_str(trimmed);
+                    }
+
+                    if title_frame && !trimmed.is_empty() {
+                        if !title_text.is_empty() {
+                            title_text.push(' ');
+                        }
+                        title_text.push_str(trimmed);
+                    }
+                }
             }
             Ok(Event::End(e)) => {
                 if in_slide {
@@ -859,20 +851,18 @@ fn parse_odp_full_inner(
                                 text: txt,
                                 source: SourceSpan::default(),
                                 marks: Vec::new(),
-    });
+                            });
                             block_index += 1;
                         }
                         heading_level = None;
                         cur_para_text.clear();
                     }
-                    if e.name().as_ref() == b"text:list-item"
-                        && !in_table {
-                            in_list_item = false;
-                        }
-                    if e.name().as_ref() == b"text:list"
-                        && !in_table {
-                            list_depth = list_depth.saturating_sub(1);
-                        }
+                    if e.name().as_ref() == b"text:list-item" && !in_table {
+                        in_list_item = false;
+                    }
+                    if e.name().as_ref() == b"text:list" && !in_table {
+                        list_depth = list_depth.saturating_sub(1);
+                    }
                     if e.name().as_ref() == b"draw:frame"
                         || e.name().as_ref() == b"draw:custom-shape"
                     {
@@ -892,41 +882,36 @@ fn parse_odp_full_inner(
                         let t = text.trim();
                         if !is_title
                             && let Some((x, y, w, h)) = bbox
-                                && !t.is_empty() {
-                                    text_boxes = text_boxes.saturating_add(1);
-                                    let node_id = if let Some(odf_id) = odf_id.as_deref() {
-                                        node_id_for_odf(
-                                            odf_id,
-                                            &mut next_node_id,
-                                            &mut node_by_odf_id,
-                                        )
-                                    } else {
-                                        let nid = next_node_id;
-                                        next_node_id = next_node_id.saturating_add(1);
-                                        nid
-                                    };
+                            && !t.is_empty()
+                        {
+                            text_boxes = text_boxes.saturating_add(1);
+                            let node_id = if let Some(odf_id) = odf_id.as_deref() {
+                                node_id_for_odf(odf_id, &mut next_node_id, &mut node_by_odf_id)
+                            } else {
+                                let nid = next_node_id;
+                                next_node_id = next_node_id.saturating_add(1);
+                                nid
+                            };
 
-                                    let n = Node {
-                                        id: node_id,
-                                        label: t.to_string(),
-                                        kind: NodeKind::Text,
-                                        mermaid_shape: mermaid_shape_from_odf_type(
-                                            shape_type.as_deref(),
-                                        ),
-                                        x,
-                                        y,
-                                        w,
-                                        h,
-                                    };
-                                    if let Some(&idx) = node_index_by_id.get(&node_id) {
-                                        if matches!(nodes[idx].kind, NodeKind::Text) {
-                                            nodes[idx] = n;
-                                        }
-                                    } else {
-                                        node_index_by_id.insert(node_id, nodes.len());
-                                        nodes.push(n);
-                                    }
+                            let n = Node {
+                                id: node_id,
+                                label: t.to_string(),
+                                kind: NodeKind::Text,
+                                mermaid_shape: mermaid_shape_from_odf_type(shape_type.as_deref()),
+                                x,
+                                y,
+                                w,
+                                h,
+                            };
+                            if let Some(&idx) = node_index_by_id.get(&node_id) {
+                                if matches!(nodes[idx].kind, NodeKind::Text) {
+                                    nodes[idx] = n;
                                 }
+                            } else {
+                                node_index_by_id.insert(node_id, nodes.len());
+                                nodes.push(n);
+                            }
+                        }
                     }
 
                     if e.name().as_ref() == b"draw:connector" || e.name().as_ref() == b"draw:line" {
@@ -957,10 +942,9 @@ fn parse_odp_full_inner(
                         cur_cell_colspan = 1;
                         cur_cell_rowspan = 1;
                     }
-                    if e.name().as_ref() == b"table:table-row" && in_table
-                        && !cur_row.is_empty() {
-                            table_rows.push(std::mem::take(&mut cur_row));
-                        }
+                    if e.name().as_ref() == b"table:table-row" && in_table && !cur_row.is_empty() {
+                        table_rows.push(std::mem::take(&mut cur_row));
+                    }
                     if e.name().as_ref() == b"table:table" && in_table {
                         // End of table: emit a Block::Table.
                         in_table = false;
@@ -983,7 +967,7 @@ fn parse_odp_full_inner(
                                     text: note,
                                     source: SourceSpan::default(),
                                     marks: Vec::new(),
-    });
+                                });
                                 block_index += 1;
                             }
                             blocks.push(Block::Table {
@@ -1032,7 +1016,7 @@ fn parse_odp_full_inner(
                                 text: note_text,
                                 source: SourceSpan::default(),
                                 marks: Vec::new(),
-    });
+                            });
                             block_index += 1;
                         }
 
@@ -1174,14 +1158,14 @@ fn parse_odp_full_inner(
                                     text: "Diagram".to_string(),
                                     source: SourceSpan::default(),
                                     marks: Vec::new(),
-    });
+                                });
                                 block_index += 1;
                                 blocks.push(Block::Paragraph {
                                     block_index,
                                     text: mermaid,
                                     source: SourceSpan::default(),
                                     marks: Vec::new(),
-    });
+                                });
                                 block_index += 1;
                             }
                         }
@@ -1291,7 +1275,7 @@ fn parse_odp_full_inner(
                                 text: heading_text,
                                 source: SourceSpan::default(),
                                 marks: Vec::new(),
-    },
+                            },
                         );
 
                         // Renumber block_index fields deterministically after insertion.
@@ -1304,7 +1288,7 @@ fn parse_odp_full_inner(
                                 | Block::Table { block_index, .. }
                                 | Block::Image { block_index, .. }
                                 | Block::Link { block_index, .. } => *block_index = idx,
-            | Block::Note { block_index, .. } => *block_index = idx,
+                                Block::Note { block_index, .. } => *block_index = idx,
                             }
                         }
                         block_index = blocks.len();

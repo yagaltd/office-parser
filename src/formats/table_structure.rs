@@ -170,8 +170,7 @@ fn enrich_with_model(page: OcrPage, page_png: &[u8], model_path: Option<&Path>) 
     let Some(regions) = &page.layout_regions else {
         return page; // no geometry on this page: nothing to enrich, no warning
     };
-    let regions: Vec<&OcrLayoutRegion> =
-        regions.iter().filter(|r| r.label == "Table").collect();
+    let regions: Vec<&OcrLayoutRegion> = regions.iter().filter(|r| r.label == "Table").collect();
     if regions.is_empty() {
         return page;
     }
@@ -236,7 +235,13 @@ fn crop_region(page: &PageRgb, region: &OcrLayoutRegion) -> Option<Crop> {
         let start = (y as usize * page.w + px0 as usize) * 3;
         rgb.extend_from_slice(&page.buf[start..start + w * 3]);
     }
-    Some(Crop { x0: px0, y0: py0, w, h, rgb })
+    Some(Crop {
+        x0: px0,
+        y0: py0,
+        w,
+        h,
+        rgb,
+    })
 }
 
 const SLANET_MAX_LEN: usize = 488;
@@ -318,7 +323,14 @@ fn preprocess_488(crop: &Crop) -> (Vec<f32>, [f64; 6]) {
     }
     (
         chw,
-        [h as f64, w as f64, ratio, ratio, SLANET_MAX_LEN as f64, SLANET_MAX_LEN as f64],
+        [
+            h as f64,
+            w as f64,
+            ratio,
+            ratio,
+            SLANET_MAX_LEN as f64,
+            SLANET_MAX_LEN as f64,
+        ],
     )
 }
 
@@ -329,9 +341,9 @@ fn run_slanet(
     model_path: &Path,
     input: Vec<f32>,
 ) -> Result<(Vec<f32>, Vec<i64>, Vec<f32>, Vec<i64>), String> {
-    use rten::{ValueOrView};
-    use rten_tensor::prelude::*;
+    use rten::ValueOrView;
     use rten_tensor::Tensor;
+    use rten_tensor::prelude::*;
     let model = rten::Model::load_file(model_path)
         .map_err(|e| format!("slanet load ({}): {e}", model_path.display()))?;
     let inputs = model.input_ids().to_vec();
@@ -385,7 +397,9 @@ fn decode_structure(
     let classes = probs_shape.get(2).copied().unwrap_or(0).max(0) as usize;
     let loc_w = loc_shape.get(2).copied().unwrap_or(0).max(0) as usize;
     if classes == 0 || loc_w != 8 {
-        return Err(format!("slanet shapes: probs {probs_shape:?}, loc {loc_shape:?}"));
+        return Err(format!(
+            "slanet shapes: probs {probs_shape:?}, loc {loc_shape:?}"
+        ));
     }
     let [_h, _w, ratio_h, ratio_w, pad_h, pad_w] = *shape_list;
     let mut tokens = Vec::new();
@@ -418,8 +432,16 @@ fn decode_structure(
             let mut pts = [0f64; 8];
             for (k, v) in pts.iter_mut().enumerate() {
                 // _bbox_decode: even (x) *= pad_w / ratio_w; odd (y) *= pad_h / ratio_h
-                let (num, den) = if k % 2 == 0 { (pad_w, ratio_w) } else { (pad_h, ratio_h) };
-                *v = if den == 0.0 { f64::from(b[k]) } else { f64::from(b[k]) * num / den };
+                let (num, den) = if k % 2 == 0 {
+                    (pad_w, ratio_w)
+                } else {
+                    (pad_h, ratio_h)
+                };
+                *v = if den == 0.0 {
+                    f64::from(b[k])
+                } else {
+                    f64::from(b[k]) * num / den
+                };
             }
             let xs = [pts[0], pts[2], pts[4], pts[6]];
             let ys = [pts[1], pts[3], pts[5], pts[7]];
@@ -606,13 +628,17 @@ fn table_region_html(
     let mut dts: Vec<[f64; 4]> = Vec::new();
     let mut texts: Vec<String> = Vec::new();
     for w in cells {
-        let inside = w.x0 < region.x1 && w.x1 > region.x0
-            && w.y0 < region.y1 && w.y1 > region.y0;
+        let inside = w.x0 < region.x1 && w.x1 > region.x0 && w.y0 < region.y1 && w.y1 > region.y0;
         if !inside {
             continue;
         }
         let (cx, cy) = (crop.x0 as f32, crop.y0 as f32);
-        dts.push([f64::from(w.x0 - cx), f64::from(w.y0 - cy), f64::from(w.x1 - cx), f64::from(w.y1 - cy)]);
+        dts.push([
+            f64::from(w.x0 - cx),
+            f64::from(w.y0 - cy),
+            f64::from(w.x1 - cx),
+            f64::from(w.y1 - cy),
+        ]);
         texts.push(w.text.clone());
     }
     let matched = match_cells(&dts, &res.boxes);
@@ -655,7 +681,10 @@ mod tests {
         let mut matched = BTreeMap::new();
         matched.insert(0, vec![7]);
         let contents = vec!["only".to_string()];
-        assert_eq!(render_table_html(&tokens, &matched, &contents), "<table><td></td></table>");
+        assert_eq!(
+            render_table_html(&tokens, &matched, &contents),
+            "<table><td></td></table>"
+        );
     }
 
     use super::*;
@@ -699,16 +728,28 @@ mod tests {
         // sos(0), thead(1), eos(49), tr(5) — eos at step 2 (>0) breaks.
         let (probs, probs_shape) = one_hot(&[0, 1, 49, 5]);
         let (loc, loc_shape) = loc_zero(4);
-        let res = decode_structure(&loc, &loc_shape, &probs, &probs_shape,
-            &[100.0, 100.0, 1.0, 1.0, 488.0, 488.0]).expect("decode");
+        let res = decode_structure(
+            &loc,
+            &loc_shape,
+            &probs,
+            &probs_shape,
+            &[100.0, 100.0, 1.0, 1.0, 488.0, 488.0],
+        )
+        .expect("decode");
         assert_eq!(res.tokens, ["<thead>"]);
         assert_eq!(res.boxes, [] as [[f64; 4]; 0]);
         // degenerate: eos at step 0 does not break (upstream idx>0 guard) but
         // is ignored; a beg-only stream decodes empty.
         let (probs, probs_shape) = one_hot(&[49, 5, 49]);
         let (loc, loc_shape) = loc_zero(3);
-        let res = decode_structure(&loc, &loc_shape, &probs, &probs_shape,
-            &[100.0, 100.0, 1.0, 1.0, 488.0, 488.0]).expect("decode");
+        let res = decode_structure(
+            &loc,
+            &loc_shape,
+            &probs,
+            &probs_shape,
+            &[100.0, 100.0, 1.0, 1.0, 488.0, 488.0],
+        )
+        .expect("decode");
         assert_eq!(res.tokens, ["<tr>"]);
     }
 
@@ -722,8 +763,14 @@ mod tests {
         let pts = [0.25f32, 0.5, 0.5, 0.5, 0.5, 1.0, 0.25, 1.0];
         loc[0..8].copy_from_slice(&pts);
         let loc_shape = vec![1i64, 2, 8];
-        let res = decode_structure(&loc, &loc_shape, &probs, &probs_shape,
-            &[100.0, 200.0, 0.25, 0.5, 488.0, 488.0]).expect("decode");
+        let res = decode_structure(
+            &loc,
+            &loc_shape,
+            &probs,
+            &probs_shape,
+            &[100.0, 200.0, 0.25, 0.5, 488.0, 488.0],
+        )
+        .expect("decode");
         assert_eq!(res.tokens, ["<td"]);
         // x = v * pad_w / ratio_w = v * 488 / 0.25; y = v * 488 / 0.5
         assert_eq!(res.boxes.len(), 1);
@@ -763,7 +810,12 @@ mod tests {
 
     #[test]
     fn render_escapes_and_joins_multi_match_cells() {
-        let tokens = ["<tr>".to_string(), "<td>".to_string(), "</td>".to_string(), "</tr>".to_string()];
+        let tokens = [
+            "<tr>".to_string(),
+            "<td>".to_string(),
+            "</td>".to_string(),
+            "</tr>".to_string(),
+        ];
         let mut m = BTreeMap::new();
         m.insert(0usize, vec![0usize, 1usize]);
         let contents = ["a<b".to_string(), " b".to_string()];
@@ -786,12 +838,24 @@ mod tests {
     /// content and rows 244..488 are genuine zero-pad (a 1x1 crop would be
     /// upscaled to fill the whole 488x488 canvas — no padding to assert).
     fn crop_1x1() -> Crop {
-        Crop { x0: 0, y0: 0, w: 2, h: 1, rgb: vec![255, 128, 0, 255, 128, 0] }
+        Crop {
+            x0: 0,
+            y0: 0,
+            w: 2,
+            h: 1,
+            rgb: vec![255, 128, 0, 255, 128, 0],
+        }
     }
 
     #[test]
     fn preprocess_shape_list_ratio_and_truncation() {
-        let crop = Crop { x0: 0, y0: 0, w: 488, h: 976, rgb: vec![0; 488 * 976 * 3] };
+        let crop = Crop {
+            x0: 0,
+            y0: 0,
+            w: 488,
+            h: 976,
+            rgb: vec![0; 488 * 976 * 3],
+        };
         let (input, shape) = preprocess_488(&crop);
         assert_eq!(input.len(), 3 * 488 * 488);
         assert_eq!(shape, [976.0, 488.0, 0.5, 0.5, 488.0, 488.0]);
@@ -828,11 +892,17 @@ mod tests {
             confidence: Some(0.9),
             layout_regions: Some(vec![OcrLayoutRegion {
                 label: "Table".to_string(),
-                x0: 40.0, y0: 60.0, x1: 560.0, y1: 300.0,
+                x0: 40.0,
+                y0: 60.0,
+                x1: 560.0,
+                y1: 300.0,
             }]),
             word_boxes: Some(vec![OcrWordBox {
                 text: "alpha".to_string(),
-                x0: 40.0, y0: 62.0, x1: 280.0, y1: 80.0,
+                x0: 40.0,
+                y0: 62.0,
+                x1: 280.0,
+                y1: 80.0,
             }]),
             table_html: None,
         }

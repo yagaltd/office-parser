@@ -85,13 +85,12 @@ fn extract_docx_title(bytes: &[u8]) -> Option<String> {
                 }
             }
             Ok(Event::Text(e)) => {
-                if in_title
-                    && let Ok(t) = String::from_utf8(e.to_vec()) {
-                        let t = t.trim();
-                        if !t.is_empty() {
-                            return Some(t.to_string());
-                        }
+                if in_title && let Ok(t) = String::from_utf8(e.to_vec()) {
+                    let t = t.trim();
+                    if !t.is_empty() {
+                        return Some(t.to_string());
                     }
+                }
             }
             Ok(Event::End(e)) => {
                 if e.local_name().as_ref() == b"title" {
@@ -136,39 +135,43 @@ fn parse_styles_heading_levels(styles_xml: &str) -> Result<HashMap<String, u8>> 
                     }
                     if e.local_name().as_ref() == b"outlineLvl"
                         && let Some(v) = attr_val(&e, b"val")
-                            && let Ok(n) = v.parse::<u8>() {
-                                cur_outline = Some(n.saturating_add(1));
-                            }
+                        && let Ok(n) = v.parse::<u8>()
+                    {
+                        cur_outline = Some(n.saturating_add(1));
+                    }
                 }
             }
             Ok(Event::End(e)) => {
                 if e.local_name().as_ref() == b"style"
-                    && let Some(id) = cur_style_id.take() {
-                        let mut lvl = cur_outline;
+                    && let Some(id) = cur_style_id.take()
+                {
+                    let mut lvl = cur_outline;
 
-                        if lvl.is_none() {
-                            let id_l = id.to_ascii_lowercase();
-                            if let Some(n) = id_l.strip_prefix("heading")
-                                && let Ok(d) = n.parse::<u8>() {
-                                    lvl = Some(d.max(1));
-                                }
-                        }
-
-                        if lvl.is_none()
-                            && let Some(name) = cur_name.as_deref() {
-                                let nl = name.to_ascii_lowercase();
-                                if let Some(rest) = nl.strip_prefix("heading") {
-                                    let rest = rest.trim();
-                                    if let Ok(d) = rest.parse::<u8>() {
-                                        lvl = Some(d.max(1));
-                                    }
-                                }
-                            }
-
-                        if let Some(l) = lvl {
-                            out.insert(id, l);
+                    if lvl.is_none() {
+                        let id_l = id.to_ascii_lowercase();
+                        if let Some(n) = id_l.strip_prefix("heading")
+                            && let Ok(d) = n.parse::<u8>()
+                        {
+                            lvl = Some(d.max(1));
                         }
                     }
+
+                    if lvl.is_none()
+                        && let Some(name) = cur_name.as_deref()
+                    {
+                        let nl = name.to_ascii_lowercase();
+                        if let Some(rest) = nl.strip_prefix("heading") {
+                            let rest = rest.trim();
+                            if let Ok(d) = rest.parse::<u8>() {
+                                lvl = Some(d.max(1));
+                            }
+                        }
+                    }
+
+                    if let Some(l) = lvl {
+                        out.insert(id, l);
+                    }
+                }
             }
             Ok(Event::Eof) => break,
             Err(e) => return Err(anyhow!("styles xml parse error: {e}")),
@@ -210,14 +213,16 @@ fn parse_numbering(numbering_xml: &str) -> Result<NumberingIndex> {
                 if in_abs && ln.as_ref() == b"lvl" {
                     cur_ilvl = attr_val(&e, b"ilvl").and_then(|s| s.parse().ok());
                 }
-                if in_abs && ln.as_ref() == b"numFmt"
-                    && let (Some(abs), Some(ilvl)) = (cur_abs, cur_ilvl) {
-                        let fmt = attr_val(&e, b"val")
-                            .unwrap_or_default()
-                            .to_ascii_lowercase();
-                        let ordered = fmt != "bullet";
-                        idx.abs_lvl_ordered.insert((abs, ilvl), ordered);
-                    }
+                if in_abs
+                    && ln.as_ref() == b"numFmt"
+                    && let (Some(abs), Some(ilvl)) = (cur_abs, cur_ilvl)
+                {
+                    let fmt = attr_val(&e, b"val")
+                        .unwrap_or_default()
+                        .to_ascii_lowercase();
+                    let ordered = fmt != "bullet";
+                    idx.abs_lvl_ordered.insert((abs, ilvl), ordered);
+                }
                 if in_num && ln.as_ref() == b"abstractNumId" {
                     cur_num_abs = attr_val(&e, b"val").and_then(|s| s.parse().ok());
                 }
@@ -417,10 +422,7 @@ struct ParagraphParsed {
 }
 
 /// Resolved inline marks for a parsed paragraph: run styling + hyperlinks.
-fn para_marks(
-    p: &ParagraphParsed,
-    rels: &HashMap<String, (String, String)>,
-) -> Vec<InlineMark> {
+fn para_marks(p: &ParagraphParsed, rels: &HashMap<String, (String, String)>) -> Vec<InlineMark> {
     let mut marks = p.marks.clone();
     for (s, e, rid) in &p.link_ranges {
         if let Some((_ty, target)) = rels.get(rid) {
@@ -510,9 +512,10 @@ fn parse_paragraph_xml(
                 }
                 if ln.as_ref() == b"outlineLvl"
                     && let Some(v) = attr_val(&e, b"val")
-                        && let Ok(n) = v.parse::<u8>() {
-                            cur_outline = Some(n.saturating_add(1));
-                        }
+                    && let Ok(n) = v.parse::<u8>()
+                {
+                    cur_outline = Some(n.saturating_add(1));
+                }
                 if ln.as_ref() == b"hyperlink" {
                     in_hyperlink = true;
                     link_start_char = out.text.chars().count();
@@ -540,9 +543,10 @@ fn parse_paragraph_xml(
                 }
                 if ln.as_ref() == b"outlineLvl"
                     && let Some(v) = attr_val(&e, b"val")
-                        && let Ok(n) = v.parse::<u8>() {
-                            cur_outline = Some(n.saturating_add(1));
-                        }
+                    && let Ok(n) = v.parse::<u8>()
+                {
+                    cur_outline = Some(n.saturating_add(1));
+                }
                 if ln.as_ref() == b"tab" {
                     out.text.push('\t');
                     if in_hyperlink {
@@ -556,22 +560,26 @@ fn parse_paragraph_xml(
                     }
                 }
                 if ln.as_ref() == b"numId"
-                    && let Some(v) = attr_val(&e, b"val") {
-                        cur_num_id = v.parse::<u32>().ok();
-                    }
+                    && let Some(v) = attr_val(&e, b"val")
+                {
+                    cur_num_id = v.parse::<u32>().ok();
+                }
                 if ln.as_ref() == b"ilvl"
-                    && let Some(v) = attr_val(&e, b"val") {
-                        cur_ilvl = v.parse::<u8>().ok();
-                    }
+                    && let Some(v) = attr_val(&e, b"val")
+                {
+                    cur_ilvl = v.parse::<u8>().ok();
+                }
                 if ln.as_ref() == b"blip"
-                    && let Some(rid) = attr_val(&e, b"embed") {
-                        out.image_rel_ids.push((rid, pending_alt.take()));
-                    }
+                    && let Some(rid) = attr_val(&e, b"embed")
+                {
+                    out.image_rel_ids.push((rid, pending_alt.take()));
+                }
                 if ln.as_ref() == b"chart"
                     && let Some(rid) = attr_val(&e, b"id")
-                        && !rid.trim().is_empty() {
-                            out.chart_rel_ids.push(rid);
-                        }
+                    && !rid.trim().is_empty()
+                {
+                    out.chart_rel_ids.push(rid);
+                }
                 if ln.as_ref() == b"docPr" {
                     pending_alt = attr_val(&e, b"descr").or_else(|| attr_val(&e, b"title"));
                 }
@@ -604,9 +612,7 @@ fn parse_paragraph_xml(
                 if ln.as_ref() == b"t" {
                     in_t = false;
                     let end_char = out.text.chars().count();
-                    if end_char > run_start_char
-                        && (run_bold || run_italic || run_strike)
-                    {
+                    if end_char > run_start_char && (run_bold || run_italic || run_strike) {
                         let mut push_mark = |kind| {
                             out.marks.push(InlineMark {
                                 kind,
@@ -634,7 +640,8 @@ fn parse_paragraph_xml(
                     let end_char = out.text.chars().count();
                     if let Some(rid) = cur_hyperlink_rid.take() {
                         if end_char > link_start_char && !rid.is_empty() {
-                            out.link_ranges.push((link_start_char, end_char, rid.clone()));
+                            out.link_ranges
+                                .push((link_start_char, end_char, rid.clone()));
                         }
                         let display = cur_hyperlink_text.trim().to_string();
                         out.links.push((
@@ -722,14 +729,16 @@ fn parse_table_xml(tbl_xml: &[u8]) -> Result<TableParsed> {
             Ok(Event::Empty(e)) => {
                 let ln = e.local_name();
                 if ln.as_ref() == b"gridCol"
-                    && let Some(w) = attr_val(&e, b"w").and_then(|v| v.parse::<u32>().ok()) {
-                        out.widths.push(w);
-                    }
+                    && let Some(w) = attr_val(&e, b"w").and_then(|v| v.parse::<u32>().ok())
+                {
+                    out.widths.push(w);
+                }
                 if in_tc {
                     if ln.as_ref() == b"gridSpan"
-                        && let Some(v) = attr_val(&e, b"val") {
-                            cell_colspan = v.parse::<usize>().unwrap_or(1).max(1);
-                        }
+                        && let Some(v) = attr_val(&e, b"val")
+                    {
+                        cell_colspan = v.parse::<usize>().unwrap_or(1).max(1);
+                    }
                     if ln.as_ref() == b"vMerge" {
                         let val = attr_val(&e, b"val")
                             .unwrap_or_default()
@@ -776,9 +785,10 @@ fn parse_table_xml(tbl_xml: &[u8]) -> Result<TableParsed> {
                             for c in cur_col..(cur_col + colspan) {
                                 if let Some((sr, sc)) = active_vmerge.get(c).and_then(|x| *x)
                                     && let Some(row) = out.rows.get_mut(sr)
-                                        && let Some(cell) = row.get_mut(sc) {
-                                            cell.rowspan = cell.rowspan.saturating_add(1);
-                                        }
+                                    && let Some(cell) = row.get_mut(sc)
+                                {
+                                    cell.rowspan = cell.rowspan.saturating_add(1);
+                                }
                             }
                             cur_row.push(Cell {
                                 text: txt,
@@ -933,17 +943,18 @@ fn parse_chart_xml_cached_values(chart_xml: &str) -> Result<ChartDataParsed> {
                 }
                 b"numFmt" => {
                     if let Some(s) = cur_series.as_mut()
-                        && s.format_code.is_none() {
-                            for a in e.attributes().flatten() {
-                                if a.key.as_ref() == b"formatCode" {
-                                    let code = String::from_utf8_lossy(&a.value).to_string();
-                                    let code = code.trim().to_string();
-                                    if !code.is_empty() {
-                                        s.format_code = Some(code);
-                                    }
+                        && s.format_code.is_none()
+                    {
+                        for a in e.attributes().flatten() {
+                            if a.key.as_ref() == b"formatCode" {
+                                let code = String::from_utf8_lossy(&a.value).to_string();
+                                let code = code.trim().to_string();
+                                if !code.is_empty() {
+                                    s.format_code = Some(code);
                                 }
                             }
                         }
+                    }
                 }
                 b"v" => {
                     in_v = true;
@@ -977,9 +988,10 @@ fn parse_chart_xml_cached_values(chart_xml: &str) -> Result<ChartDataParsed> {
                                 cur_series = Some(Default::default());
                             }
                             if let Some(s) = cur_series.as_mut()
-                                && s.format_code.is_none() {
-                                    s.format_code = Some(v.to_string());
-                                }
+                                && s.format_code.is_none()
+                            {
+                                s.format_code = Some(v.to_string());
+                            }
                         }
                     }
                 }
@@ -1059,9 +1071,10 @@ fn unit_from_numfmt(code: Option<&str>) -> Option<String> {
         if let Some(end) = tail.find(']') {
             let inner = &tail[..end];
             if let Some(sym) = inner.chars().next()
-                && !sym.is_ascii_alphanumeric() {
-                    return Some(sym.to_string());
-                }
+                && !sym.is_ascii_alphanumeric()
+            {
+                return Some(sym.to_string());
+            }
         }
     }
     if let Some(q1) = code.find('"') {
@@ -1306,10 +1319,9 @@ fn extract_connector_endpoints(xml: &[u8]) -> (Option<u32>, Option<u32>) {
                         from = attr_val(&e, b"id").and_then(|s| s.trim().parse::<u32>().ok());
                     }
                 }
-                b"endCxn"
-                    if to.is_none() => {
-                        to = attr_val(&e, b"id").and_then(|s| s.trim().parse::<u32>().ok());
-                    }
+                b"endCxn" if to.is_none() => {
+                    to = attr_val(&e, b"id").and_then(|s| s.trim().parse::<u32>().ok());
+                }
                 _ => {}
             },
             Ok(Event::Eof) => break,
@@ -1517,37 +1529,43 @@ fn diagram_from_drawing_xml(
 
             // Image node?
             if let Some(rid) = extract_first_blip_embed(xml)
-                && let Some((_ty, target)) = rels.get(&rid) {
-                    let entry = resolve_target("word/", target);
-                    if let Ok(img_bytes) = read_zip_file(bytes, &entry) {
-                        let hash = sha256_hex(&img_bytes);
-                        let _idx = *image_by_hash.entry(hash.clone()).or_insert_with(|| {
-                            let filename = entry.split('/').next_back().map(std::string::ToString::to_string);
-                            let mime = filename
-                                .as_deref().map_or_else(|| "application/octet-stream".to_string(), mime_from_filename);
-                            images.push(ParsedImage {
-                                id: format!("sha256:{hash}"),
-                                bytes: img_bytes,
-                                mime_type: mime.clone(),
-                                filename: filename.clone(),
-                            });
-                            images.len() - 1
+                && let Some((_ty, target)) = rels.get(&rid)
+            {
+                let entry = resolve_target("word/", target);
+                if let Ok(img_bytes) = read_zip_file(bytes, &entry) {
+                    let hash = sha256_hex(&img_bytes);
+                    let _idx = *image_by_hash.entry(hash.clone()).or_insert_with(|| {
+                        let filename = entry
+                            .split('/')
+                            .next_back()
+                            .map(std::string::ToString::to_string);
+                        let mime = filename.as_deref().map_or_else(
+                            || "application/octet-stream".to_string(),
+                            mime_from_filename,
+                        );
+                        images.push(ParsedImage {
+                            id: format!("sha256:{hash}"),
+                            bytes: img_bytes,
+                            mime_type: mime.clone(),
+                            filename: filename.clone(),
                         });
+                        images.len() - 1
+                    });
 
-                        let image_id = format!("sha256:{hash}");
-                        nodes.push(DiagramNode {
-                            id,
-                            label: format!("office-image:{image_id}"),
-                            kind: DiagramNodeKind::Image { image_id },
-                            mermaid_shape: "rect",
-                            x: x as f64 * f,
-                            y: y as f64 * f,
-                            w: w as f64 * f,
-                            h: h as f64 * f,
-                        });
-                        continue;
-                    }
+                    let image_id = format!("sha256:{hash}");
+                    nodes.push(DiagramNode {
+                        id,
+                        label: format!("office-image:{image_id}"),
+                        kind: DiagramNodeKind::Image { image_id },
+                        mermaid_shape: "rect",
+                        x: x as f64 * f,
+                        y: y as f64 * f,
+                        w: w as f64 * f,
+                        h: h as f64 * f,
+                    });
+                    continue;
                 }
+            }
 
             if let Some(text) = extract_text_compact(xml)? {
                 let text = text.trim();
@@ -1786,10 +1804,9 @@ pub fn parse_docx(bytes: &[u8]) -> Result<Vec<Block>> {
 
 pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
     let doc_xml = read_zip_file(bytes, "word/document.xml")?;
-    let rels_xml = read_zip_file_utf8(bytes, "word/_rels/document.xml.rels")
-        .unwrap_or_else(|_| String::new());
-    let styles_xml =
-        read_zip_file_utf8(bytes, "word/styles.xml").unwrap_or_else(|_| String::new());
+    let rels_xml =
+        read_zip_file_utf8(bytes, "word/_rels/document.xml.rels").unwrap_or_else(|_| String::new());
+    let styles_xml = read_zip_file_utf8(bytes, "word/styles.xml").unwrap_or_else(|_| String::new());
     let numbering_xml =
         read_zip_file_utf8(bytes, "word/numbering.xml").unwrap_or_else(|_| String::new());
 
@@ -1807,8 +1824,7 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
     // sectPr describes the section that ENDS there); the body-level
     // w:sectPr governs the trailing section. cols >= 2 sections drive
     // `::: columns` emission in the Morph renderer.
-    let body_sectpr_cols = extract_body_sectpr(&doc_xml)
-        .map_or(1, |x| sectpr_cols(&x));
+    let body_sectpr_cols = extract_body_sectpr(&doc_xml).map_or(1, |x| sectpr_cols(&x));
     let mut break_cols: HashMap<usize, u32> = HashMap::new();
     for (i, (kind, xml)) in body_elems.iter().enumerate() {
         if kind == "p" {
@@ -1914,7 +1930,7 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                                     len,
                                 ),
                                 source: SourceSpan::default(),
-    });
+                            });
                         }
                         j += 1;
                     }
@@ -1951,12 +1967,14 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                                     let hash = sha256_hex(&img_bytes);
                                     let idx =
                                         *image_by_hash.entry(hash.clone()).or_insert_with(|| {
-                                            let filename =
-                                                entry.split('/').next_back().map(std::string::ToString::to_string);
-                                            let mime = filename
-                                                .as_deref().map_or_else(|| {
-                                                    "application/octet-stream".to_string()
-                                                }, mime_from_filename);
+                                            let filename = entry
+                                                .split('/')
+                                                .next_back()
+                                                .map(std::string::ToString::to_string);
+                                            let mime = filename.as_deref().map_or_else(
+                                                || "application/octet-stream".to_string(),
+                                                mime_from_filename,
+                                            );
                                             images.push(ParsedImage {
                                                 id: format!("sha256:{hash}"),
                                                 bytes: img_bytes,
@@ -2010,7 +2028,7 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                                 text: chart.title.clone().unwrap_or_else(|| "Chart".to_string()),
                                 source: SourceSpan::default(),
                                 marks: Vec::new(),
-    });
+                            });
                             next_block_index += 1;
 
                             let chart_shape = if chart_type == "unknown" {
@@ -2056,7 +2074,7 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                                 text: note,
                                 source: SourceSpan::default(),
                                 marks: Vec::new(),
-    });
+                            });
                             next_block_index += 1;
 
                             if !chart.categories.is_empty() && !chart.series.is_empty() {
@@ -2121,14 +2139,14 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                                     text: "Diagram".to_string(),
                                     source: SourceSpan::default(),
                                     marks: Vec::new(),
-    });
+                                });
                                 next_block_index += 1;
                                 blocks.push(Block::Paragraph {
                                     block_index: next_block_index,
                                     text: mermaid,
                                     source: SourceSpan::default(),
                                     marks: Vec::new(),
-    });
+                                });
                                 next_block_index += 1;
                                 diagram_graphs_meta.push(graph_json);
                             }
@@ -2148,7 +2166,7 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                             text: p.text.clone(),
                             marks: para_marks(p, &rels),
                             source: SourceSpan::default(),
-    });
+                        });
                         next_block_index += 1;
                     }
                 } else if !p.text.trim().is_empty() {
@@ -2157,7 +2175,7 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                         text: p.text.clone(),
                         marks: para_marks(p, &rels),
                         source: SourceSpan::default(),
-    });
+                    });
                     next_block_index += 1;
                 }
 
@@ -2186,9 +2204,14 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                     }
                     let hash = sha256_hex(&img_bytes);
                     let idx = *image_by_hash.entry(hash.clone()).or_insert_with(|| {
-                        let filename = entry.split('/').next_back().map(std::string::ToString::to_string);
-                        let mime = filename
-                            .as_deref().map_or_else(|| "application/octet-stream".to_string(), mime_from_filename);
+                        let filename = entry
+                            .split('/')
+                            .next_back()
+                            .map(std::string::ToString::to_string);
+                        let mime = filename.as_deref().map_or_else(
+                            || "application/octet-stream".to_string(),
+                            mime_from_filename,
+                        );
                         images.push(ParsedImage {
                             id: format!("sha256:{hash}"),
                             bytes: img_bytes,
@@ -2240,7 +2263,7 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                         text: chart.title.clone().unwrap_or_else(|| "Chart".to_string()),
                         source: SourceSpan::default(),
                         marks: Vec::new(),
-    });
+                    });
                     next_block_index += 1;
 
                     let chart_shape = if chart_type == "unknown" {
@@ -2283,7 +2306,7 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                         text: note,
                         source: SourceSpan::default(),
                         marks: Vec::new(),
-    });
+                    });
                     next_block_index += 1;
 
                     if !chart.categories.is_empty() && !chart.series.is_empty() {
@@ -2345,14 +2368,14 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                             text: "Diagram".to_string(),
                             source: SourceSpan::default(),
                             marks: Vec::new(),
-    });
+                        });
                         next_block_index += 1;
                         blocks.push(Block::Paragraph {
                             block_index: next_block_index,
                             text: mermaid,
                             source: SourceSpan::default(),
                             marks: Vec::new(),
-    });
+                        });
                         next_block_index += 1;
                         diagram_graphs_meta.push(graph_json);
                     }
@@ -2394,7 +2417,7 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
             | Block::Table { block_index, .. }
             | Block::Image { block_index, .. }
             | Block::Link { block_index, .. } => *block_index = idx,
-            | Block::Note { block_index, .. } => *block_index = idx,
+            Block::Note { block_index, .. } => *block_index = idx,
         }
     }
 

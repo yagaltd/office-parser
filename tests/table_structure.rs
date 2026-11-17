@@ -1,4 +1,8 @@
-#![cfg(all(feature = "pdf", feature = "ocr-indra-native", feature = "ocr-table-structure"))]
+#![cfg(all(
+    feature = "pdf",
+    feature = "ocr-indra-native",
+    feature = "ocr-table-structure"
+))]
 //! TASK 13 (own-table-structure): the contract transfers from
 //! `tests/ocr_rusto_tables.rs` (deleted with vendored rusto-core).
 //!
@@ -19,7 +23,9 @@
 //!   loudly without the model).
 
 use office_parser::document_ast::{Block, Cell, SourceSpan};
-use office_parser::formats::pdf::{parse_pdf_split, OcrLayoutRegion, OcrPage, OcrWordBox, PageOcrEngine};
+use office_parser::formats::pdf::{
+    OcrLayoutRegion, OcrPage, OcrWordBox, PageOcrEngine, parse_pdf_split,
+};
 use office_parser::formats::table_structure::TABLE_MODEL_ENV;
 
 const SCAN: &str = "tests/fixtures/pdf_scanned.pdf";
@@ -37,7 +43,9 @@ static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 impl EnvScope {
     fn acquire() -> Self {
         Self {
-            _mutex: ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+            _mutex: ENV_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
             prior: std::env::var_os(TABLE_MODEL_ENV),
         }
     }
@@ -142,10 +150,34 @@ impl PageOcrEngine for GeometryEngine {
                 y1: 300.0,
             }]),
             word_boxes: Some(vec![
-                OcrWordBox { text: "alpha".into(), x0: 40.0, y0: 62.0, x1: 280.0, y1: 80.0 },
-                OcrWordBox { text: "beta".into(), x0: 300.0, y0: 62.0, x1: 560.0, y1: 80.0 },
-                OcrWordBox { text: "gamma".into(), x0: 40.0, y0: 90.0, x1: 280.0, y1: 110.0 },
-                OcrWordBox { text: "delta".into(), x0: 300.0, y0: 90.0, x1: 560.0, y1: 110.0 },
+                OcrWordBox {
+                    text: "alpha".into(),
+                    x0: 40.0,
+                    y0: 62.0,
+                    x1: 280.0,
+                    y1: 80.0,
+                },
+                OcrWordBox {
+                    text: "beta".into(),
+                    x0: 300.0,
+                    y0: 62.0,
+                    x1: 560.0,
+                    y1: 80.0,
+                },
+                OcrWordBox {
+                    text: "gamma".into(),
+                    x0: 40.0,
+                    y0: 90.0,
+                    x1: 280.0,
+                    y1: 110.0,
+                },
+                OcrWordBox {
+                    text: "delta".into(),
+                    x0: 300.0,
+                    y0: 90.0,
+                    x1: 560.0,
+                    y1: 110.0,
+                },
             ]),
             table_html: None,
         })
@@ -180,9 +212,13 @@ fn test_transcripts_identical_with_model_on_and_off() {
 
     let _scope = EnvScope::acquire();
     pin_model_env(&model);
-    let doc_on = engine.parse_document(&bytes, 0.60).expect("parse (model on)");
+    let doc_on = engine
+        .parse_document(&bytes, 0.60)
+        .expect("parse (model on)");
     hide_model_env();
-    let doc_off = engine.parse_document(&bytes, 0.60).expect("parse (model off)");
+    let doc_off = engine
+        .parse_document(&bytes, 0.60)
+        .expect("parse (model off)");
     drop(_scope);
 
     assert_eq!(
@@ -192,11 +228,14 @@ fn test_transcripts_identical_with_model_on_and_off() {
     );
     assert_eq!(doc_on.blocks.len(), doc_off.blocks.len());
     let ocr_on = doc_on.metadata.extra.get("ocr").expect("ocr metadata (on)");
-    let ocr_off = doc_off.metadata.extra.get("ocr").expect("ocr metadata (off)");
+    let ocr_off = doc_off
+        .metadata
+        .extra
+        .get("ocr")
+        .expect("ocr metadata (off)");
     assert_eq!(ocr_on["pages_ocr"], ocr_off["pages_ocr"]);
     assert_eq!(
-        ocr_on["low_confidence_pages"],
-        ocr_off["low_confidence_pages"],
+        ocr_on["low_confidence_pages"], ocr_off["low_confidence_pages"],
         "confidence-derived rollup identical"
     );
 }
@@ -316,8 +355,14 @@ fn test_table_html_populated_for_table_scan_fixture() {
             "model present + table geometry ⇒ table_html must be Some \
              (SLANet produced no td tokens?)",
         );
-    assert!(html.starts_with("<table>"), "html must open a table element: {html}");
-    assert!(html.ends_with("</table>"), "html must close the table element: {html}");
+    assert!(
+        html.starts_with("<table>"),
+        "html must open a table element: {html}"
+    );
+    assert!(
+        html.ends_with("</table>"),
+        "html must close the table element: {html}"
+    );
     let opens = html.matches("<td").count();
     let closes = html.matches("</td>").count();
     if opens > 0 {

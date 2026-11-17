@@ -16,7 +16,7 @@
 
 use office_parser::document_ast::{Block, SourceSpan};
 use office_parser::formats::pdf::{
-    parse_pdf_split, OcrLayoutRegion, OcrPage, OcrWordBox, PageOcrEngine,
+    OcrLayoutRegion, OcrPage, OcrWordBox, PageOcrEngine, parse_pdf_split,
 };
 
 const SCANNED: &str = "tests/fixtures/pdf_scanned.pdf";
@@ -44,7 +44,9 @@ fn test_legacy_engine_implementing_only_ocr_page_png_still_works() {
         }
     }
 
-    let (png_blocks, png_conf) = LegacyEngine.ocr_page_png(b"\x89PNG-fake").expect("ocr_page_png");
+    let (png_blocks, png_conf) = LegacyEngine
+        .ocr_page_png(b"\x89PNG-fake")
+        .expect("ocr_page_png");
 
     let mut engine = LegacyEngine;
     let dyn_engine: &mut dyn PageOcrEngine = &mut engine;
@@ -54,7 +56,10 @@ fn test_legacy_engine_implementing_only_ocr_page_png_still_works() {
 
     assert_eq!(page.blocks, png_blocks, "blocks match ocr_page_png");
     assert_eq!(page.confidence, png_conf, "confidence matches ocr_page_png");
-    assert!(page.layout_regions.is_none(), "legacy engine: no layout regions");
+    assert!(
+        page.layout_regions.is_none(),
+        "legacy engine: no layout regions"
+    );
     assert!(page.word_boxes.is_none(), "legacy engine: no word boxes");
     assert!(page.table_html.is_none(), "legacy engine: no table html");
 }
@@ -147,15 +152,15 @@ fn test_optional_fields_threaded_into_ocr_metadata() {
     let (doc, _pages) = parse_pdf_split(&bytes, Some(engine), 150, 50, true).expect("split parse");
     let ocr = doc.metadata.extra.get("ocr").expect("ocr metadata present");
     assert_eq!(ocr["engine"], "rich-test");
-    assert_eq!(ocr["pages_ocr"], 2, "both scanned pages routed to the engine");
+    assert_eq!(
+        ocr["pages_ocr"], 2,
+        "both scanned pages routed to the engine"
+    );
 
     let table_html = ocr["table_html"].as_array().expect("table_html threaded");
     assert_eq!(table_html.len(), 2, "one record per OCR'd page");
     assert_eq!(table_html[0]["page"], serde_json::json!(1));
-    assert_eq!(
-        table_html[0]["html"],
-        "<table><tr><td>Q1</td></tr></table>"
-    );
+    assert_eq!(table_html[0]["html"], "<table><tr><td>Q1</td></tr></table>");
 
     let word_boxes = ocr["word_boxes"].as_array().expect("word_boxes threaded");
     assert_eq!(word_boxes[0]["page"], serde_json::json!(1));
@@ -176,8 +181,14 @@ fn test_optional_fields_threaded_into_ocr_metadata() {
     let (doc, _pages) = parse_pdf_split(&bytes, Some(engine), 150, 50, true).expect("split parse");
     let ocr = doc.metadata.extra.get("ocr").expect("ocr metadata present");
     assert_eq!(ocr["pages_ocr"], 2);
-    assert!(ocr.get("table_html").is_none(), "table_html absent, not null");
-    assert!(ocr.get("word_boxes").is_none(), "word_boxes absent, not null");
+    assert!(
+        ocr.get("table_html").is_none(),
+        "table_html absent, not null"
+    );
+    assert!(
+        ocr.get("word_boxes").is_none(),
+        "word_boxes absent, not null"
+    );
     assert!(
         ocr.get("layout_regions").is_none(),
         "layout_regions absent, not null"
@@ -185,9 +196,8 @@ fn test_optional_fields_threaded_into_ocr_metadata() {
 }
 
 fn pdftoppm_available() -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|p| {
-            std::env::split_paths(&p)
-                .any(|dir| dir.join("pdftoppm").is_file() || dir.join("pdftoppm.exe").is_file())
-        })
+    std::env::var_os("PATH").is_some_and(|p| {
+        std::env::split_paths(&p)
+            .any(|dir| dir.join("pdftoppm").is_file() || dir.join("pdftoppm.exe").is_file())
+    })
 }

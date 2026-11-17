@@ -12,7 +12,10 @@ fn toml_to_json(v: toml::Value) -> serde_json::Value {
     match v {
         toml::Value::String(s) => serde_json::Value::String(s),
         toml::Value::Integer(i) => serde_json::Value::Number(i.into()),
-        toml::Value::Float(f) => serde_json::Number::from_f64(f).map_or_else(|| serde_json::Value::String(f.to_string()), serde_json::Value::Number),
+        toml::Value::Float(f) => serde_json::Number::from_f64(f).map_or_else(
+            || serde_json::Value::String(f.to_string()),
+            serde_json::Value::Number,
+        ),
         toml::Value::Boolean(b) => serde_json::Value::Bool(b),
         toml::Value::Datetime(dt) => serde_json::Value::String(dt.to_string()),
         toml::Value::Array(a) => {

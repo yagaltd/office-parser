@@ -109,9 +109,10 @@ fn parse_list_style_ordered(styles_xml: &str) -> HashMap<String, bool> {
             }
             Ok(Event::End(e)) => {
                 if e.name().as_ref() == b"text:list-style"
-                    && let Some(name) = cur.take() {
-                        out.insert(name, cur_ordered);
-                    }
+                    && let Some(name) = cur.take()
+                {
+                    out.insert(name, cur_ordered);
+                }
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -138,13 +139,12 @@ fn extract_odt_title(bytes: &[u8]) -> Option<String> {
                 }
             }
             Ok(Event::Text(e)) => {
-                if in_title
-                    && let Ok(t) = String::from_utf8(e.to_vec()) {
-                        let t = t.trim();
-                        if !t.is_empty() {
-                            return Some(t.to_string());
-                        }
+                if in_title && let Ok(t) = String::from_utf8(e.to_vec()) {
+                    let t = t.trim();
+                    if !t.is_empty() {
+                        return Some(t.to_string());
                     }
+                }
             }
             Ok(Event::End(e)) => {
                 if e.local_name().as_ref() == b"title" {
@@ -273,23 +273,25 @@ pub(crate) fn parse_odt_text_styles(content_xml: &str) -> HashMap<String, SpanSt
                         cur = Some((name, parent, (false, false, false)));
                     }
                 } else if ln.as_ref() == b"text-properties"
-                    && let Some((_, _, flags)) = cur.as_mut() {
-                        if let Some(w) = attr_val(&e, b"fo:font-weight") {
-                            flags.0 = w.eq_ignore_ascii_case("bold");
-                        }
-                        if let Some(st) = attr_val(&e, b"fo:font-style") {
-                            flags.1 = st.eq_ignore_ascii_case("italic");
-                        }
-                        if let Some(lt) = attr_val(&e, b"style:text-line-through-style") {
-                            flags.2 = !lt.eq_ignore_ascii_case("none");
-                        }
+                    && let Some((_, _, flags)) = cur.as_mut()
+                {
+                    if let Some(w) = attr_val(&e, b"fo:font-weight") {
+                        flags.0 = w.eq_ignore_ascii_case("bold");
                     }
+                    if let Some(st) = attr_val(&e, b"fo:font-style") {
+                        flags.1 = st.eq_ignore_ascii_case("italic");
+                    }
+                    if let Some(lt) = attr_val(&e, b"style:text-line-through-style") {
+                        flags.2 = !lt.eq_ignore_ascii_case("none");
+                    }
+                }
             }
             Ok(Event::End(e)) => {
                 if e.local_name().as_ref() == b"style"
-                    && let Some(c) = cur.take() {
-                        raw.push(c);
-                    }
+                    && let Some(c) = cur.take()
+                {
+                    raw.push(c);
+                }
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -298,8 +300,7 @@ pub(crate) fn parse_odt_text_styles(content_xml: &str) -> HashMap<String, SpanSt
         buf.clear();
     }
     // resolve parent chains (2 passes covers chains in practice)
-    let mut map: HashMap<String, SpanStyle> =
-        raw.iter().map(|(n, _, f)| (n.clone(), *f)).collect();
+    let mut map: HashMap<String, SpanStyle> = raw.iter().map(|(n, _, f)| (n.clone(), *f)).collect();
     let parents: Vec<(String, Option<String>)> =
         raw.iter().map(|(n, p, _)| (n.clone(), p.clone())).collect();
     for _ in 0..2 {
@@ -320,7 +321,10 @@ pub(crate) fn parse_odt_text_styles(content_xml: &str) -> HashMap<String, SpanSt
 /// (text, links, inline marks) extracted from an ODF text element.
 type ExtractedText = (String, Vec<(String, Option<String>)>, Vec<InlineMark>);
 
-fn extract_text_and_links(xml: &[u8], styles: &HashMap<String, SpanStyle>) -> Result<ExtractedText> {
+fn extract_text_and_links(
+    xml: &[u8],
+    styles: &HashMap<String, SpanStyle>,
+) -> Result<ExtractedText> {
     let mut reader = Reader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
@@ -337,9 +341,9 @@ fn extract_text_and_links(xml: &[u8], styles: &HashMap<String, SpanStyle>) -> Re
     let mut cur_text = String::new();
 
     let effective = |stack: &[SpanStyle]| {
-        stack
-            .iter()
-            .fold((false, false, false), |a, f| (a.0 | f.0, a.1 | f.1, a.2 | f.2))
+        stack.iter().fold((false, false, false), |a, f| {
+            (a.0 | f.0, a.1 | f.1, a.2 | f.2)
+        })
     };
 
     loop {
@@ -409,9 +413,10 @@ fn extract_text_and_links(xml: &[u8], styles: &HashMap<String, SpanStyle>) -> Re
                     in_a = false;
                     let end_char = out.chars().count();
                     if let Some(href) = cur_href.as_ref()
-                        && end_char > a_start {
-                            link_ranges.push((a_start, end_char, href.clone()));
-                        }
+                        && end_char > a_start
+                    {
+                        link_ranges.push((a_start, end_char, href.clone()));
+                    }
                     if let Some(href) = cur_href.take() {
                         let display = cur_text.trim().to_string();
                         links.push((
@@ -438,13 +443,25 @@ fn extract_text_and_links(xml: &[u8], styles: &HashMap<String, SpanStyle>) -> Re
     let mut marks: Vec<InlineMark> = Vec::new();
     for (s0, e0, f) in segments {
         if f.0 {
-            marks.push(InlineMark { kind: MarkKind::Bold, start: s0, end: e0 });
+            marks.push(InlineMark {
+                kind: MarkKind::Bold,
+                start: s0,
+                end: e0,
+            });
         }
         if f.1 {
-            marks.push(InlineMark { kind: MarkKind::Italic, start: s0, end: e0 });
+            marks.push(InlineMark {
+                kind: MarkKind::Italic,
+                start: s0,
+                end: e0,
+            });
         }
         if f.2 {
-            marks.push(InlineMark { kind: MarkKind::Strikethrough, start: s0, end: e0 });
+            marks.push(InlineMark {
+                kind: MarkKind::Strikethrough,
+                start: s0,
+                end: e0,
+            });
         }
     }
     for (s0, e0, href) in link_ranges {
@@ -475,10 +492,12 @@ fn parse_heading(
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
-                if depth == 0 && e.name().as_ref() == b"text:h"
-                    && let Some(v) = attr_val(&e, b"text:outline-level") {
-                        level = v.parse::<u8>().unwrap_or(1).max(1);
-                    }
+                if depth == 0
+                    && e.name().as_ref() == b"text:h"
+                    && let Some(v) = attr_val(&e, b"text:outline-level")
+                {
+                    level = v.parse::<u8>().unwrap_or(1).max(1);
+                }
                 depth += 1;
                 write_start_tag(&mut inner, &e);
             }
@@ -573,7 +592,7 @@ fn parse_list(
                                 text: t,
                                 marks: m,
                                 source: SourceSpan::default(),
-    });
+                            });
                         }
                     } else {
                         capturing_p = Some((v, d, lvl));
@@ -702,15 +721,16 @@ fn extract_draw_object_hrefs(xml: &[u8]) -> Vec<String> {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e) | Event::Empty(e)) => {
                 if (e.name().as_ref() == b"draw:object" || e.name().as_ref() == b"draw:object-ole")
-                    && let Some(href) = attr_val(&e, b"xlink:href") {
-                        let mut p = href.trim().to_string();
-                        while p.starts_with("./") {
-                            p = p.trim_start_matches("./").to_string();
-                        }
-                        if !p.is_empty() {
-                            out.push(p);
-                        }
+                    && let Some(href) = attr_val(&e, b"xlink:href")
+                {
+                    let mut p = href.trim().to_string();
+                    while p.starts_with("./") {
+                        p = p.trim_start_matches("./").to_string();
                     }
+                    if !p.is_empty() {
+                        out.push(p);
+                    }
+                }
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -781,13 +801,11 @@ fn extract_chart_type_and_title(xml: &str) -> (Option<String>, Option<String>) {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
-                if e.name().as_ref() == b"chart:chart"
-                    && chart_type.is_none() {
-                        chart_type =
-                            attr_val(&e, b"chart:class").or_else(|| attr_val(&e, b"class"));
-                        chart_type = chart_type
-                            .map(|v| v.rsplit(':').next().unwrap_or(v.as_str()).to_string());
-                    }
+                if e.name().as_ref() == b"chart:chart" && chart_type.is_none() {
+                    chart_type = attr_val(&e, b"chart:class").or_else(|| attr_val(&e, b"class"));
+                    chart_type =
+                        chart_type.map(|v| v.rsplit(':').next().unwrap_or(v.as_str()).to_string());
+                }
                 if e.name().as_ref() == b"chart:title" {
                     in_chart_title = true;
                     title.clear();
@@ -941,9 +959,10 @@ fn diagram_from_xml(xml: &[u8]) -> Result<Option<(String, serde_json::Value)>> {
                 }
                 b"draw:enhanced-geometry" => {
                     if let Some((_, shape_type, _, _)) = pending_frame.last_mut()
-                        && shape_type.is_none() {
-                            *shape_type = attr_val(&e, b"draw:type");
-                        }
+                        && shape_type.is_none()
+                    {
+                        *shape_type = attr_val(&e, b"draw:type");
+                    }
                 }
                 _ => {}
             },
@@ -985,29 +1004,28 @@ fn diagram_from_xml(xml: &[u8]) -> Result<Option<(String, serde_json::Value)>> {
             }
             Ok(Event::End(e)) => {
                 if (e.name().as_ref() == b"draw:frame" || e.name().as_ref() == b"draw:custom-shape")
-                    && let Some((id, shape_type, bbox, text)) = pending_frame.pop() {
-                        let t = text.trim();
-                        if let (Some(id_s), Some((x, y, w, h))) = (id.as_deref(), bbox)
-                            && !t.is_empty() {
-                                let node_id =
-                                    *node_by_id.entry(id_s.to_string()).or_insert_with(|| {
-                                        let id = next_id;
-                                        next_id = next_id.saturating_add(1);
-                                        id
-                                    });
-                                nodes.push(Node {
-                                    id: node_id,
-                                    label: t.to_string(),
-                                    mermaid_shape: mermaid_shape_from_odf_type(
-                                        shape_type.as_deref(),
-                                    ),
-                                    x,
-                                    y,
-                                    w,
-                                    h,
-                                });
-                            }
+                    && let Some((id, shape_type, bbox, text)) = pending_frame.pop()
+                {
+                    let t = text.trim();
+                    if let (Some(id_s), Some((x, y, w, h))) = (id.as_deref(), bbox)
+                        && !t.is_empty()
+                    {
+                        let node_id = *node_by_id.entry(id_s.to_string()).or_insert_with(|| {
+                            let id = next_id;
+                            next_id = next_id.saturating_add(1);
+                            id
+                        });
+                        nodes.push(Node {
+                            id: node_id,
+                            label: t.to_string(),
+                            mermaid_shape: mermaid_shape_from_odf_type(shape_type.as_deref()),
+                            x,
+                            y,
+                            w,
+                            h,
+                        });
                     }
+                }
                 if e.name().as_ref() == b"draw:connector" || e.name().as_ref() == b"draw:line" {
                     in_connector = false;
                     if let Some(last) = conns.last_mut() {
@@ -1052,14 +1070,15 @@ fn diagram_from_xml(xml: &[u8]) -> Result<Option<(String, serde_json::Value)>> {
         let mut from = s.as_deref().and_then(|id| node_by_id.get(id).copied());
         let mut to = t.as_deref().and_then(|id| node_by_id.get(id).copied());
         if (from.is_none() || to.is_none())
-            && let Some((x1, y1, x2, y2)) = coords {
-                if from.is_none() {
-                    from = nearest(x1, y1);
-                }
-                if to.is_none() {
-                    to = nearest(x2, y2);
-                }
+            && let Some((x1, y1, x2, y2)) = coords
+        {
+            if from.is_none() {
+                from = nearest(x1, y1);
             }
+            if to.is_none() {
+                to = nearest(x2, y2);
+            }
+        }
         let (Some(from), Some(to)) = (from, to) else {
             continue;
         };
@@ -1155,19 +1174,20 @@ fn extract_odt_images(
                     pending_alt = attr_val(&e, b"draw:name");
                 }
                 if e.name().as_ref() == b"draw:image"
-                    && let Some(href) = attr_val(&e, b"xlink:href") {
-                        let mut p = href.clone();
-                        while p.starts_with("./") {
-                            p = p.trim_start_matches("./").to_string();
-                        }
-                        let entry = p;
-                        if let Ok(img_bytes) = read_zip_file(bytes, &entry) {
-                            let filename = entry.split('/').next_back().unwrap_or("").to_string();
-                            let _mime = mime_from_filename(&filename);
-                            out.push((href, pending_alt.take(), img_bytes, filename));
-                            pending_alt = None;
-                        }
+                    && let Some(href) = attr_val(&e, b"xlink:href")
+                {
+                    let mut p = href.clone();
+                    while p.starts_with("./") {
+                        p = p.trim_start_matches("./").to_string();
                     }
+                    let entry = p;
+                    if let Ok(img_bytes) = read_zip_file(bytes, &entry) {
+                        let filename = entry.split('/').next_back().unwrap_or("").to_string();
+                        let _mime = mime_from_filename(&filename);
+                        out.push((href, pending_alt.take(), img_bytes, filename));
+                        pending_alt = None;
+                    }
+                }
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -1253,14 +1273,14 @@ pub fn parse_odt_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                             text: title.clone().unwrap_or_else(|| "Chart".to_string()),
                             source: SourceSpan::default(),
                             marks: Vec::new(),
-    });
+                        });
                         next_block_index += 1;
                         blocks.push(Block::Paragraph {
                             block_index: next_block_index,
                             text: note,
                             source: SourceSpan::default(),
                             marks: Vec::new(),
-    });
+                        });
                         next_block_index += 1;
                         blocks.push(Block::Table {
                             block_index: next_block_index,
@@ -1294,7 +1314,7 @@ pub fn parse_odt_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                         text,
                         marks: hmarks,
                         source: SourceSpan::default(),
-    });
+                    });
                     next_block_index += 1;
                 }
                 for (href, t) in links {
@@ -1316,7 +1336,7 @@ pub fn parse_odt_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                         text,
                         marks: pmarks,
                         source: SourceSpan::default(),
-    });
+                    });
                     next_block_index += 1;
                 }
                 for (href, t) in links {
@@ -1338,9 +1358,10 @@ pub fn parse_odt_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                     let mut b = Vec::new();
                     let mut name: Option<String> = None;
                     if let Ok(Event::Start(e)) = reader.read_event_into(&mut b)
-                        && e.name().as_ref() == b"text:list" {
-                            name = attr_val(&e, b"text:style-name");
-                        }
+                        && e.name().as_ref() == b"text:list"
+                    {
+                        name = attr_val(&e, b"text:style-name");
+                    }
                     name
                 };
                 let ordered = style_name
@@ -1399,14 +1420,14 @@ pub fn parse_odt_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                 text: "Diagram".to_string(),
                 source: SourceSpan::default(),
                 marks: Vec::new(),
-    });
+            });
             next_block_index += 1;
             blocks.push(Block::Paragraph {
                 block_index: next_block_index,
                 text: mermaid,
                 source: SourceSpan::default(),
                 marks: Vec::new(),
-    });
+            });
             next_block_index += 1;
             diagram_graphs_meta.push(graph_json);
         }
@@ -1441,7 +1462,7 @@ pub fn parse_odt_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
             | Block::Table { block_index, .. }
             | Block::Image { block_index, .. }
             | Block::Link { block_index, .. } => *block_index = idx,
-            | Block::Note { block_index, .. } => *block_index = idx,
+            Block::Note { block_index, .. } => *block_index = idx,
         }
     }
 

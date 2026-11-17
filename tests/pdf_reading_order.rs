@@ -26,7 +26,7 @@
 //! plus exact `to_markdown` pins where the full bytes are known.
 
 use office_parser::document_ast::Block;
-use office_parser::formats::pdf::{parse_pdf_full, xy_cut_reading_regions, SpanBox};
+use office_parser::formats::pdf::{SpanBox, parse_pdf_full, xy_cut_reading_regions};
 use office_parser::{pdf, render};
 
 const MIXED: &str = "tests/fixtures/pdf_mixed.pdf";
@@ -156,7 +156,10 @@ fn test_single_column_output_unchanged() {
             "# Quarterly Field Report\n\n## Network Maintenance Summary\n\n{MIXED_P1}\n\n{MIXED_P2}\n\n[image:sha256:1f5353555f1f"
         );
         assert!(md.starts_with(&prefix), "markdown drift: {md}");
-        assert!(md.ends_with(" alt=\"\"]\n\n"), "markdown image tail drift: {md}");
+        assert!(
+            md.ends_with(" alt=\"\"]\n\n"),
+            "markdown image tail drift: {md}"
+        );
     }
 }
 
@@ -187,7 +190,9 @@ fn test_mixed_fixture_columns_not_interleaved() {
 
     // Reading order: H1 < H2 < P1 < P2 — on known words, not a snapshot hash.
     let h1 = md.find("# Quarterly Field Report").expect("H1 present");
-    let h2 = md.find("## Network Maintenance Summary").expect("H2 present");
+    let h2 = md
+        .find("## Network Maintenance Summary")
+        .expect("H2 present");
     let p1 = md.find(MIXED_P1).expect("P1 present");
     let p2 = md.find(MIXED_P2).expect("P2 present");
     assert!(h1 < h2 && h2 < p1 && p1 < p2, "block reading order drifted");
@@ -227,8 +232,15 @@ fn test_empty_page_ordering_returns_no_blocks() {
     let parsed = parse_pdf_full(&bytes).expect("parses");
     assert_eq!(parsed.pages_geometry.len(), 2);
     for g in &parsed.pages_geometry {
-        assert!(g.spans.is_empty(), "page {}: unexpected spans", g.page_number);
-        assert_eq!(xy_cut_reading_regions(&g.spans), [] as [std::vec::Vec<u32>; 0]);
+        assert!(
+            g.spans.is_empty(),
+            "page {}: unexpected spans",
+            g.page_number
+        );
+        assert_eq!(
+            xy_cut_reading_regions(&g.spans),
+            [] as [std::vec::Vec<u32>; 0]
+        );
     }
     assert_eq!(parsed.blocks, [] as [office_parser::document_ast::Block; 0]);
 
@@ -239,7 +251,11 @@ fn test_empty_page_ordering_returns_no_blocks() {
     assert_eq!(p2.page_number, 2);
     // "Empty" means no TEXT spans — the page's embedded scan is still extracted
     // as exactly one Image block (ExtractedImage feature, rot90 precedent).
-    assert_eq!(p2.block_end - p2.block_start, 1, "one Image block for the scan");
+    assert_eq!(
+        p2.block_end - p2.block_start,
+        1,
+        "one Image block for the scan"
+    );
     match &parsed.blocks[p2.block_start] {
         Block::Image { id, .. } => assert!(id.starts_with("sha256:"), "id: {id}"),
         b => panic!("expected the page-scan Image block, got {b:?}"),
@@ -250,7 +266,10 @@ fn test_empty_page_ordering_returns_no_blocks() {
         .find(|g| g.page_number == 2)
         .expect("PageGeometry for page 2");
     assert_eq!(g2.spans, [] as [office_parser::formats::pdf::SpanBox; 0]);
-    assert_eq!(xy_cut_reading_regions(&g2.spans), [] as [std::vec::Vec<u32>; 0]);
+    assert_eq!(
+        xy_cut_reading_regions(&g2.spans),
+        [] as [std::vec::Vec<u32>; 0]
+    );
 }
 
 /// Minimal one-page PDF builder: `MediaBox` [0 0 612 792], one Helvetica font,
@@ -350,7 +369,11 @@ BT /F1 12 Tf 312 700 Td (Beta ten eleven twelve.) Tj ET";
         "Beta seven eight nine.",
         "Beta ten eleven twelve.",
     ];
-    assert_eq!(doc.blocks.len(), expected.len(), "four paragraphs, no cover heading");
+    assert_eq!(
+        doc.blocks.len(),
+        expected.len(),
+        "four paragraphs, no cover heading"
+    );
     for (i, want) in expected.iter().enumerate() {
         match &doc.blocks[i] {
             Block::Paragraph { text, .. } => assert_eq!(text, want, "block {i}"),
@@ -371,7 +394,7 @@ fn test_xy_cut_full_width_header_above_two_columns() {
     // horizontal band cut peels the header first, then the vertical cut
     // separates the columns (task-6 spec diagram: vertical fails => horizontal).
     let spans = [
-        span(0, 72.0, 60.0, 540.0, 76.0),   // full-width header (bridges gutter)
+        span(0, 72.0, 60.0, 540.0, 76.0), // full-width header (bridges gutter)
         span(1, 72.0, 120.0, 200.0, 132.0), // left col line 1
         span(2, 72.0, 150.0, 200.0, 162.0), // left col line 2
         span(3, 312.0, 120.0, 440.0, 132.0), // right col line 1

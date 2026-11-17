@@ -38,7 +38,7 @@ fn push_list(blocks: &mut Vec<Block>, next_idx: &mut usize, items: Vec<String>) 
                 text: t,
                 source: SourceSpan::default(),
                 marks: Vec::new(),
-    })
+            })
             .collect(),
         source: SourceSpan::default(),
     });

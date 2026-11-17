@@ -193,9 +193,7 @@ fn is_repeated_header_row(row: &[CellDisplay], header_row: &[CellDisplay]) -> bo
     let mut header_non_empty = 0usize;
     let mut matches = 0usize;
     for ci in 0..cols {
-        let h = header_row
-            .get(ci)
-            .map_or_default(|c| norm_cmp(&c.text));
+        let h = header_row.get(ci).map_or_default(|c| norm_cmp(&c.text));
         if h.is_empty() {
             continue;
         }
@@ -239,13 +237,15 @@ pub(crate) fn semantic_row_ranges(
 
     for i in start0..rows.len() {
         if let Some(h) = header_row
-            && i > cur + 3 && is_repeated_header_row(&rows[i], h) {
-                if i > cur {
-                    out.push((cur, i));
-                }
-                cur = i + 1; // skip the repeated header row
-                continue;
+            && i > cur + 3
+            && is_repeated_header_row(&rows[i], h)
+        {
+            if i > cur {
+                out.push((cur, i));
             }
+            cur = i + 1; // skip the repeated header row
+            continue;
+        }
 
         if is_totalish_row(&rows[i]) {
             let end = i + 1;
@@ -302,21 +302,22 @@ pub(crate) fn resolve_group_by_col_and_label(
 
     if spec_t.chars().all(|c| c.is_ascii_alphabetic())
         && let Some(ci) = excel_col_index_from_name(spec_t)
-            && ci >= col_start && ci < col_end {
-                return Some((ci, excel_col_name(ci)));
-            }
+        && ci >= col_start
+        && ci < col_end
+    {
+        return Some((ci, excel_col_name(ci)));
+    }
 
-    if has_header
-        && let Some(h) = rows.first() {
-            let want = norm_cmp(spec_t);
-            for ci in col_start..col_end {
-                let got = h.get(ci).map_or_default(|c| norm_cmp(&c.text));
-                if !got.is_empty() && got == want {
-                    let label = h.get(ci).map_or("key", |c| c.text.trim());
-                    return Some((ci, label.to_string()));
-                }
+    if has_header && let Some(h) = rows.first() {
+        let want = norm_cmp(spec_t);
+        for ci in col_start..col_end {
+            let got = h.get(ci).map_or_default(|c| norm_cmp(&c.text));
+            if !got.is_empty() && got == want {
+                let label = h.get(ci).map_or("key", |c| c.text.trim());
+                return Some((ci, label.to_string()));
             }
         }
+    }
 
     None
 }
