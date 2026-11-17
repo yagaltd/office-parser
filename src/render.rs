@@ -22,13 +22,14 @@ impl Default for JsonRenderOptions {
     }
 }
 
+#[must_use]
 pub fn to_markdown(doc: &Document) -> String {
     let mut blocks = doc.blocks.clone();
     crate::document_ast::render_blocks_to_extracted_text(&mut blocks)
 }
 
 fn escape_markdown_table_cell(s: &str) -> String {
-    s.replace('|', "\\|").replace('\n', " ").replace('\r', " ")
+    s.replace('|', "\\|").replace(['\n', '\r'], " ")
 }
 
 fn render_block(b: &Block) -> String {
@@ -67,7 +68,7 @@ fn render_block(b: &Block) -> String {
             out
         }
         Block::Table { rows, widths, .. } => {
-            let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0).max(1);
+            let cols = rows.iter().map(std::vec::Vec::len).max().unwrap_or(0).max(1);
             if rows.is_empty() {
                 return "| |\n|---|\n\n".to_string();
             }
@@ -78,7 +79,7 @@ fn render_block(b: &Block) -> String {
             if !widths.is_empty() {
                 let list = widths
                     .iter()
-                    .map(|w| w.to_string())
+                    .map(std::string::ToString::to_string)
                     .collect::<Vec<_>>()
                     .join(",");
                 out.push_str(&format!("::: table {{widths=[{list}]}}\n"));
@@ -88,8 +89,7 @@ fn render_block(b: &Block) -> String {
                 for c in 0..cols {
                     let txt = row
                         .get(c)
-                        .map(|cc| escape_markdown_table_cell(cc.text.as_str()))
-                        .unwrap_or_default();
+                        .map_or_default(|cc| escape_markdown_table_cell(cc.text.as_str()));
                     out.push(' ');
                     out.push_str(&txt);
                     out.push(' ');
@@ -143,7 +143,7 @@ fn render_block(b: &Block) -> String {
 
 fn render_table_pieces(rows: &[Vec<Cell>], max_chars: usize) -> Vec<String> {
     let max_chars = max_chars.max(1);
-    let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0).max(1);
+    let cols = rows.iter().map(std::vec::Vec::len).max().unwrap_or(0).max(1);
     if rows.is_empty() {
         return vec!["| |\n|---|\n\n".to_string()];
     }
@@ -154,8 +154,7 @@ fn render_table_pieces(rows: &[Vec<Cell>], max_chars: usize) -> Vec<String> {
         for c in 0..cols {
             let txt = row
                 .get(c)
-                .map(|cc| escape_markdown_table_cell(cc.text.as_str()))
-                .unwrap_or_default();
+                .map_or_default(|cc| escape_markdown_table_cell(cc.text.as_str()));
             out.push(' ');
             out.push_str(&txt);
             out.push(' ');
@@ -202,11 +201,11 @@ fn render_table_pieces(rows: &[Vec<Cell>], max_chars: usize) -> Vec<String> {
         cur.push_str(&line);
     }
 
-    if cur != header {
+    if cur == header {
+        pieces.push(full);
+    } else {
         cur.push('\n');
         pieces.push(cur);
-    } else {
-        pieces.push(full);
     }
 
     pieces
@@ -219,6 +218,7 @@ fn render_block_pieces(b: &Block, max_chars: usize) -> Vec<String> {
     }
 }
 
+#[must_use]
 pub fn to_chunks(doc: &Document, max_chars: usize) -> Vec<Chunk> {
     let max_chars = max_chars.max(1);
     let mut out: Vec<Chunk> = Vec::new();
@@ -276,13 +276,15 @@ pub fn to_json(doc: &Document) -> Result<String> {
 
 pub fn to_json_with_options(doc: &Document, opts: JsonRenderOptions) -> Result<String> {
     let v = to_json_value_with_options(doc, opts);
-    Ok(serde_json::to_string_pretty(&v).map_err(|e| crate::Error::Render(e.into()))?)
+    serde_json::to_string_pretty(&v).map_err(|e| crate::Error::Render(e.into()))
 }
 
+#[must_use]
 pub fn to_json_value(doc: &Document) -> serde_json::Value {
     to_json_value_with_options(doc, JsonRenderOptions::default())
 }
 
+#[must_use]
 pub fn to_json_value_with_options(doc: &Document, opts: JsonRenderOptions) -> serde_json::Value {
     let blocks = doc
         .blocks
@@ -412,7 +414,7 @@ mod tests {
 }
 
 /// Escape one line that would re-detect as another block type in
-/// MorphEditor's BlockModel (`PARAGRAPH_ESCAPE_RULES`): heading, bullet,
+/// `MorphEditor`'s `BlockModel` (`PARAGRAPH_ESCAPE_RULES`): heading, bullet,
 /// ordered item, quote, code fence, hr. Ordered items escape the dot,
 /// CommonMark-style (`1\.`). Byte-mirrors `escapeParagraphSigils`.
 pub(crate) fn escape_morph_line(line: &str) -> String {
@@ -425,7 +427,7 @@ pub(crate) fn escape_morph_line(line: &str) -> String {
     let hashes = b.iter().take_while(|&&c| c == b'#').count();
     let is_heading = (1..=6).contains(&hashes) && b.get(hashes) == Some(&b' ');
     let is_list =
-        matches!(b.first(), Some(b'-') | Some(b'*') | Some(b'+')) && b.get(1) == Some(&b' ');
+        matches!(b.first(), Some(b'-' | b'*' | b'+')) && b.get(1) == Some(&b' ');
     let digits = b.iter().take_while(|c| c.is_ascii_digit()).count();
     let is_ordered = digits > 0 && b.get(digits) == Some(&b'.') && b.get(digits + 1) == Some(&b' ');
     let is_quote = b.first() == Some(&b'>');
@@ -447,7 +449,7 @@ pub(crate) fn escape_morph_line(line: &str) -> String {
 }
 
 /// Paragraphs that ARE fenced diagrams (```mermaid … ```) stay unescaped
-/// so MorphEditor parses them as code-fence blocks, not escaped text.
+/// so `MorphEditor` parses them as code-fence blocks, not escaped text.
 fn escape_morph_paragraph(text: &str) -> String {
     let t = text.trim_start();
     if t.starts_with("```") && t.trim_end().ends_with("```") {
@@ -462,10 +464,10 @@ fn escape_morph_paragraph(text: &str) -> String {
 /// Render as MorphEditor-compatible markdown (the dialect BlockModel.js
 /// parses): sigil-escaped paragraphs, fenced diagrams preserved, and for
 /// presentations (PPTX/ODP) a `---` divider before every level-1 heading
-/// — decks are hr-delimited sections in MorphEditor deck mode. Pairs with
+/// — decks are hr-delimited sections in `MorphEditor` deck mode. Pairs with
 /// the CLI's OKF frontmatter; `slides:` there selects deck rendering.
 /// Column groups parsed from metadata (`multi_column_sections`):
-/// (block_first, block_last, cols), non-overlapping, ascending.
+/// (`block_first`, `block_last`, cols), non-overlapping, ascending.
 fn column_sections(
     doc: &Document,
 ) -> Vec<(usize, usize, usize)> {
@@ -473,7 +475,7 @@ fn column_sections(
         .extra
         .get("multi_column_sections")
         .and_then(|v| v.as_array())
-        .map(|arr| {
+        .map_or_default(|arr| {
             arr.iter()
                 .filter_map(|s| {
                     Some((
@@ -485,7 +487,6 @@ fn column_sections(
                 .filter(|(f, l, c)| l >= f && *c >= 2)
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 /// Split `len` blocks into `cols` even groups by cumulative text volume.
@@ -516,6 +517,7 @@ fn column_boundaries(first: usize, last: usize, cols: usize, doc: &Document) -> 
     cuts
 }
 
+#[must_use]
 pub fn to_morph_markdown(doc: &Document) -> String {
     let is_deck = matches!(doc.metadata.format, crate::Format::Pptx | crate::Format::Odp);
     let sections = column_sections(doc);
@@ -592,8 +594,8 @@ mod morph_tests {
     }
 }
 
-/// Render clean text + inline marks as MorphEditor markdown.
-/// Port of BlockModel serializeMarks semantics: same-range bold+italic
+/// Render clean text + inline marks as `MorphEditor` markdown.
+/// Port of `BlockModel` serializeMarks semantics: same-range bold+italic
 /// clusters as `***`, adjacent same-kind marks merge, partial overlaps
 /// nest (`**bo*ld*er**`), links wrap structurally (`[text](href)`).
 pub(crate) fn serialize_inline(text: &str, marks: &[crate::document_ast::InlineMark]) -> String {
@@ -615,7 +617,7 @@ pub(crate) fn serialize_inline(text: &str, marks: &[crate::document_ast::InlineM
                 MarkKind::Italic => (1, "*", "*".into()),
                 MarkKind::Code => (2, "`", "`".into()),
                 MarkKind::Strikethrough => (3, "~~", "~~".into()),
-                MarkKind::Link { url } => (4, "[", format!("]({})", url)),
+                MarkKind::Link { url } => (4, "[", format!("]({url})")),
             };
             Some((m.start, m.end, spec.1, spec.2))
         })
@@ -653,7 +655,7 @@ pub(crate) fn serialize_inline(text: &str, marks: &[crate::document_ast::InlineM
             }
         }
         // open marks starting here (order: links outermost, then **, *, `, ~~)
-        for (s, e, open, close) in merged.iter() {
+        for (s, e, open, close) in &merged {
             if *s == pt {
                 let _ = (e, close);
                 out.push_str(open);

@@ -119,7 +119,7 @@ fn parse_container_opf_path(container_xml: &str) -> Result<String> {
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
+            Ok(Event::Empty(e) | Event::Start(e)) => {
                 if e.local_name().as_ref() == b"rootfile" {
                     for a in e.attributes().flatten() {
                         if a.key.as_ref().ends_with(b"full-path") {
@@ -199,14 +199,13 @@ fn parse_opf(
                 }
                 if ln == b"itemref" {
                     for a in e.attributes().flatten() {
-                        if a.key.as_ref().ends_with(b"idref") {
-                            if let Ok(v) = a.unescape_value() {
+                        if a.key.as_ref().ends_with(b"idref")
+                            && let Ok(v) = a.unescape_value() {
                                 let v = v.trim();
                                 if !v.is_empty() {
                                     spine.push(v.to_string());
                                 }
                             }
-                        }
                     }
                 }
             }
@@ -240,26 +239,24 @@ fn parse_opf(
                 }
                 if ln == b"itemref" {
                     for a in e.attributes().flatten() {
-                        if a.key.as_ref().ends_with(b"idref") {
-                            if let Ok(v) = a.unescape_value() {
+                        if a.key.as_ref().ends_with(b"idref")
+                            && let Ok(v) = a.unescape_value() {
                                 let v = v.trim();
                                 if !v.is_empty() {
                                     spine.push(v.to_string());
                                 }
                             }
-                        }
                     }
                 }
             }
             Ok(Event::Text(t)) => {
-                if in_title && title.is_none() {
-                    if let Ok(s) = t.decode() {
+                if in_title && title.is_none()
+                    && let Ok(s) = t.decode() {
                         let s = normalize_ws(&s);
                         if !s.is_empty() {
                             title = Some(s);
                         }
                     }
-                }
             }
             Ok(Event::End(e)) => {
                 if e.local_name().as_ref() == b"title" {
@@ -421,11 +418,10 @@ fn parse_xhtml_to_blocks(
                                 if let Ok(v) = a.unescape_value() {
                                     src = Some(v.to_string());
                                 }
-                            } else if k.ends_with(b"alt") {
-                                if let Ok(v) = a.unescape_value() {
+                            } else if k.ends_with(b"alt")
+                                && let Ok(v) = a.unescape_value() {
                                     alt = Some(v.to_string());
                                 }
-                            }
                         }
                         if let Some(src) = src {
                             let img_zip_path = resolve_path(xhtml_path, &src);
@@ -470,11 +466,10 @@ fn parse_xhtml_to_blocks(
                     "a" => {
                         let mut href: Option<String> = None;
                         for a in e.attributes().flatten() {
-                            if a.key.as_ref().ends_with(b"href") {
-                                if let Ok(v) = a.unescape_value() {
+                            if a.key.as_ref().ends_with(b"href")
+                                && let Ok(v) = a.unescape_value() {
                                     href = Some(v.to_string());
                                 }
-                            }
                         }
                         if let Some(href) = href {
                             in_a = Some(href);
@@ -505,11 +500,10 @@ fn parse_xhtml_to_blocks(
                                 if let Ok(v) = a.unescape_value() {
                                     src = Some(v.to_string());
                                 }
-                            } else if k.ends_with(b"alt") {
-                                if let Ok(v) = a.unescape_value() {
+                            } else if k.ends_with(b"alt")
+                                && let Ok(v) = a.unescape_value() {
                                     alt = Some(v.to_string());
                                 }
-                            }
                         }
                         if let Some(src) = src {
                             let img_zip_path = resolve_path(xhtml_path, &src);
@@ -570,11 +564,10 @@ fn parse_xhtml_to_blocks(
                 }
             }
             Ok(Event::CData(t)) => {
-                if let Ok(s) = t.decode() {
-                    if let Some(p) = cur_p.as_mut() {
+                if let Ok(s) = t.decode()
+                    && let Some(p) = cur_p.as_mut() {
                         append_text_glue(p, &s);
                     }
-                }
             }
             Ok(Event::End(e)) => {
                 let name = String::from_utf8_lossy(e.local_name().as_ref()).to_ascii_lowercase();
@@ -632,14 +625,14 @@ fn parse_xhtml_to_blocks(
 
     let title = {
         let t = normalize_ws(&title_buf);
-        if !t.is_empty() {
-            t
-        } else {
+        if t.is_empty() {
             std::path::Path::new(xhtml_path)
                 .file_name()
                 .and_then(|s| s.to_str())
                 .unwrap_or("chapter")
                 .to_string()
+        } else {
+            t
         }
     };
     if let Some(Block::Heading { text, .. }) = blocks.get_mut(heading_pos) {

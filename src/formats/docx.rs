@@ -34,7 +34,7 @@ impl NumberingIndex {
 fn attr_val(e: &quick_xml::events::BytesStart<'_>, key_local: &[u8]) -> Option<String> {
     for a in e.attributes().flatten() {
         let k = a.key.as_ref();
-        let local = k.split(|b| *b == b':').last().unwrap_or(k);
+        let local = k.split(|b| *b == b':').next_back().unwrap_or(k);
         if local == key_local {
             return Some(String::from_utf8_lossy(&a.value).to_string());
         }
@@ -51,7 +51,7 @@ fn parse_relationships(rels_xml: &str) -> Result<HashMap<String, (String, String
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
+            Ok(Event::Empty(e) | Event::Start(e)) => {
                 if e.local_name().as_ref() == b"Relationship" {
                     let id = attr_val(&e, b"Id").unwrap_or_default();
                     let ty = attr_val(&e, b"Type").unwrap_or_default();
@@ -85,14 +85,13 @@ fn extract_docx_title(bytes: &[u8]) -> Option<String> {
                 }
             }
             Ok(Event::Text(e)) => {
-                if in_title {
-                    if let Ok(t) = String::from_utf8(e.to_vec()) {
+                if in_title
+                    && let Ok(t) = String::from_utf8(e.to_vec()) {
                         let t = t.trim();
                         if !t.is_empty() {
                             return Some(t.to_string());
                         }
                     }
-                }
             }
             Ok(Event::End(e)) => {
                 if e.local_name().as_ref() == b"title" {
@@ -122,7 +121,7 @@ fn parse_styles_heading_levels(styles_xml: &str) -> Result<HashMap<String, u8>> 
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
                 if e.local_name().as_ref() == b"style" {
                     let ty = attr_val(&e, b"type").unwrap_or_default();
                     if ty == "paragraph" {
@@ -135,31 +134,28 @@ fn parse_styles_heading_levels(styles_xml: &str) -> Result<HashMap<String, u8>> 
                     if e.local_name().as_ref() == b"name" {
                         cur_name = attr_val(&e, b"val");
                     }
-                    if e.local_name().as_ref() == b"outlineLvl" {
-                        if let Some(v) = attr_val(&e, b"val") {
-                            if let Ok(n) = v.parse::<u8>() {
+                    if e.local_name().as_ref() == b"outlineLvl"
+                        && let Some(v) = attr_val(&e, b"val")
+                            && let Ok(n) = v.parse::<u8>() {
                                 cur_outline = Some(n.saturating_add(1));
                             }
-                        }
-                    }
                 }
             }
             Ok(Event::End(e)) => {
-                if e.local_name().as_ref() == b"style" {
-                    if let Some(id) = cur_style_id.take() {
+                if e.local_name().as_ref() == b"style"
+                    && let Some(id) = cur_style_id.take() {
                         let mut lvl = cur_outline;
 
                         if lvl.is_none() {
                             let id_l = id.to_ascii_lowercase();
-                            if let Some(n) = id_l.strip_prefix("heading") {
-                                if let Ok(d) = n.parse::<u8>() {
+                            if let Some(n) = id_l.strip_prefix("heading")
+                                && let Ok(d) = n.parse::<u8>() {
                                     lvl = Some(d.max(1));
                                 }
-                            }
                         }
 
-                        if lvl.is_none() {
-                            if let Some(name) = cur_name.as_deref() {
+                        if lvl.is_none()
+                            && let Some(name) = cur_name.as_deref() {
                                 let nl = name.to_ascii_lowercase();
                                 if let Some(rest) = nl.strip_prefix("heading") {
                                     let rest = rest.trim();
@@ -168,13 +164,11 @@ fn parse_styles_heading_levels(styles_xml: &str) -> Result<HashMap<String, u8>> 
                                     }
                                 }
                             }
-                        }
 
                         if let Some(l) = lvl {
                             out.insert(id, l);
                         }
                     }
-                }
             }
             Ok(Event::Eof) => break,
             Err(e) => return Err(anyhow!("styles xml parse error: {e}")),
@@ -202,7 +196,7 @@ fn parse_numbering(numbering_xml: &str) -> Result<NumberingIndex> {
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
                 let ln = e.local_name();
                 if ln.as_ref() == b"abstractNum" {
                     in_abs = true;
@@ -216,15 +210,14 @@ fn parse_numbering(numbering_xml: &str) -> Result<NumberingIndex> {
                 if in_abs && ln.as_ref() == b"lvl" {
                     cur_ilvl = attr_val(&e, b"ilvl").and_then(|s| s.parse().ok());
                 }
-                if in_abs && ln.as_ref() == b"numFmt" {
-                    if let (Some(abs), Some(ilvl)) = (cur_abs, cur_ilvl) {
+                if in_abs && ln.as_ref() == b"numFmt"
+                    && let (Some(abs), Some(ilvl)) = (cur_abs, cur_ilvl) {
                         let fmt = attr_val(&e, b"val")
                             .unwrap_or_default()
                             .to_ascii_lowercase();
                         let ordered = fmt != "bullet";
                         idx.abs_lvl_ordered.insert((abs, ilvl), ordered);
                     }
-                }
                 if in_num && ln.as_ref() == b"abstractNumId" {
                     cur_num_abs = attr_val(&e, b"val").and_then(|s| s.parse().ok());
                 }
@@ -304,12 +297,12 @@ fn sectpr_cols(xml: &[u8]) -> u32 {
         Some(p) => p,
         None => return 1,
     };
-    let tag_end = s[cols_pos..].find('>').map(|e| cols_pos + e).unwrap_or(s.len());
+    let tag_end = s[cols_pos..].find('>').map_or(s.len(), |e| cols_pos + e);
     let tag = &s[cols_pos..tag_end];
     if let Some(num_pos) = tag.find("w:num=\"") {
         let v: String = tag[num_pos + 7..]
             .chars()
-            .take_while(|c| c.is_ascii_digit())
+            .take_while(char::is_ascii_digit)
             .collect();
         if let Ok(n) = v.parse::<u32>() {
             return n.max(1);
@@ -505,8 +498,7 @@ fn parse_paragraph_xml(
                 }
                 if in_rpr && matches!(ln.as_ref(), b"b" | b"i" | b"strike") {
                     let on = attr_val(&e, b"val")
-                        .map(|v| !matches!(v.as_str(), "false" | "0" | "none"))
-                        .unwrap_or(true);
+                        .is_none_or(|v| !matches!(v.as_str(), "false" | "0" | "none"));
                     match ln.as_ref() {
                         b"b" => run_bold = on,
                         b"i" => run_italic = on,
@@ -516,13 +508,11 @@ fn parse_paragraph_xml(
                 if ln.as_ref() == b"pStyle" {
                     cur_p_style = attr_val(&e, b"val");
                 }
-                if ln.as_ref() == b"outlineLvl" {
-                    if let Some(v) = attr_val(&e, b"val") {
-                        if let Ok(n) = v.parse::<u8>() {
+                if ln.as_ref() == b"outlineLvl"
+                    && let Some(v) = attr_val(&e, b"val")
+                        && let Ok(n) = v.parse::<u8>() {
                             cur_outline = Some(n.saturating_add(1));
                         }
-                    }
-                }
                 if ln.as_ref() == b"hyperlink" {
                     in_hyperlink = true;
                     link_start_char = out.text.chars().count();
@@ -538,8 +528,7 @@ fn parse_paragraph_xml(
                 }
                 if in_rpr && matches!(ln.as_ref(), b"b" | b"i" | b"strike") {
                     let on = attr_val(&e, b"val")
-                        .map(|v| !matches!(v.as_str(), "false" | "0" | "none"))
-                        .unwrap_or(true);
+                        .is_none_or(|v| !matches!(v.as_str(), "false" | "0" | "none"));
                     match ln.as_ref() {
                         b"b" => run_bold = on,
                         b"i" => run_italic = on,
@@ -549,13 +538,11 @@ fn parse_paragraph_xml(
                 if ln.as_ref() == b"pStyle" {
                     cur_p_style = attr_val(&e, b"val");
                 }
-                if ln.as_ref() == b"outlineLvl" {
-                    if let Some(v) = attr_val(&e, b"val") {
-                        if let Ok(n) = v.parse::<u8>() {
+                if ln.as_ref() == b"outlineLvl"
+                    && let Some(v) = attr_val(&e, b"val")
+                        && let Ok(n) = v.parse::<u8>() {
                             cur_outline = Some(n.saturating_add(1));
                         }
-                    }
-                }
                 if ln.as_ref() == b"tab" {
                     out.text.push('\t');
                     if in_hyperlink {
@@ -568,28 +555,23 @@ fn parse_paragraph_xml(
                         cur_hyperlink_text.push('\n');
                     }
                 }
-                if ln.as_ref() == b"numId" {
-                    if let Some(v) = attr_val(&e, b"val") {
+                if ln.as_ref() == b"numId"
+                    && let Some(v) = attr_val(&e, b"val") {
                         cur_num_id = v.parse::<u32>().ok();
                     }
-                }
-                if ln.as_ref() == b"ilvl" {
-                    if let Some(v) = attr_val(&e, b"val") {
+                if ln.as_ref() == b"ilvl"
+                    && let Some(v) = attr_val(&e, b"val") {
                         cur_ilvl = v.parse::<u8>().ok();
                     }
-                }
-                if ln.as_ref() == b"blip" {
-                    if let Some(rid) = attr_val(&e, b"embed") {
+                if ln.as_ref() == b"blip"
+                    && let Some(rid) = attr_val(&e, b"embed") {
                         out.image_rel_ids.push((rid, pending_alt.take()));
                     }
-                }
-                if ln.as_ref() == b"chart" {
-                    if let Some(rid) = attr_val(&e, b"id") {
-                        if !rid.trim().is_empty() {
+                if ln.as_ref() == b"chart"
+                    && let Some(rid) = attr_val(&e, b"id")
+                        && !rid.trim().is_empty() {
                             out.chart_rel_ids.push(rid);
                         }
-                    }
-                }
                 if ln.as_ref() == b"docPr" {
                     pending_alt = attr_val(&e, b"descr").or_else(|| attr_val(&e, b"title"));
                 }
@@ -739,17 +721,15 @@ fn parse_table_xml(tbl_xml: &[u8]) -> Result<TableParsed> {
             }
             Ok(Event::Empty(e)) => {
                 let ln = e.local_name();
-                if ln.as_ref() == b"gridCol" {
-                    if let Some(w) = attr_val(&e, b"w").and_then(|v| v.parse::<u32>().ok()) {
+                if ln.as_ref() == b"gridCol"
+                    && let Some(w) = attr_val(&e, b"w").and_then(|v| v.parse::<u32>().ok()) {
                         out.widths.push(w);
                     }
-                }
                 if in_tc {
-                    if ln.as_ref() == b"gridSpan" {
-                        if let Some(v) = attr_val(&e, b"val") {
+                    if ln.as_ref() == b"gridSpan"
+                        && let Some(v) = attr_val(&e, b"val") {
                             cell_colspan = v.parse::<usize>().unwrap_or(1).max(1);
                         }
-                    }
                     if ln.as_ref() == b"vMerge" {
                         let val = attr_val(&e, b"val")
                             .unwrap_or_default()
@@ -794,13 +774,11 @@ fn parse_table_xml(tbl_xml: &[u8]) -> Result<TableParsed> {
                         Some(false) => {
                             // Continue: increment starting cell's rowspan.
                             for c in cur_col..(cur_col + colspan) {
-                                if let Some((sr, sc)) = active_vmerge.get(c).and_then(|x| *x) {
-                                    if let Some(row) = out.rows.get_mut(sr) {
-                                        if let Some(cell) = row.get_mut(sc) {
+                                if let Some((sr, sc)) = active_vmerge.get(c).and_then(|x| *x)
+                                    && let Some(row) = out.rows.get_mut(sr)
+                                        && let Some(cell) = row.get_mut(sc) {
                                             cell.rowspan = cell.rowspan.saturating_add(1);
                                         }
-                                    }
-                                }
                             }
                             cur_row.push(Cell {
                                 text: txt,
@@ -870,7 +848,7 @@ fn chart_type_from_xml(chart_xml: &str) -> Option<&'static str> {
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => match e.local_name().as_ref() {
+            Ok(Event::Start(e) | Event::Empty(e)) => match e.local_name().as_ref() {
                 b"barChart" => return Some("bar"),
                 b"lineChart" => return Some("line"),
                 b"pieChart" => return Some("pie"),
@@ -954,8 +932,8 @@ fn parse_chart_xml_cached_values(chart_xml: &str) -> Result<ChartDataParsed> {
                     }
                 }
                 b"numFmt" => {
-                    if let Some(s) = cur_series.as_mut() {
-                        if s.format_code.is_none() {
+                    if let Some(s) = cur_series.as_mut()
+                        && s.format_code.is_none() {
                             for a in e.attributes().flatten() {
                                 if a.key.as_ref() == b"formatCode" {
                                     let code = String::from_utf8_lossy(&a.value).to_string();
@@ -966,7 +944,6 @@ fn parse_chart_xml_cached_values(chart_xml: &str) -> Result<ChartDataParsed> {
                                 }
                             }
                         }
-                    }
                 }
                 b"v" => {
                     in_v = true;
@@ -999,11 +976,10 @@ fn parse_chart_xml_cached_values(chart_xml: &str) -> Result<ChartDataParsed> {
                             if cur_series.is_none() {
                                 cur_series = Some(Default::default());
                             }
-                            if let Some(s) = cur_series.as_mut() {
-                                if s.format_code.is_none() {
+                            if let Some(s) = cur_series.as_mut()
+                                && s.format_code.is_none() {
                                     s.format_code = Some(v.to_string());
                                 }
-                            }
                         }
                     }
                 }
@@ -1025,15 +1001,13 @@ fn parse_chart_xml_cached_values(chart_xml: &str) -> Result<ChartDataParsed> {
                                 s.values.push(n);
                             }
                         }
-                    } else {
-                        if cur_series_name.is_none() {
-                            cur_series_name = Some(v.to_string());
-                            if cur_series.is_none() {
-                                cur_series = Some(Default::default());
-                            }
-                            if let Some(s) = cur_series.as_mut() {
-                                s.name = cur_series_name.clone();
-                            }
+                    } else if cur_series_name.is_none() {
+                        cur_series_name = Some(v.to_string());
+                        if cur_series.is_none() {
+                            cur_series = Some(Default::default());
+                        }
+                        if let Some(s) = cur_series.as_mut() {
+                            s.name = cur_series_name.clone();
                         }
                     }
                 }
@@ -1084,11 +1058,10 @@ fn unit_from_numfmt(code: Option<&str>) -> Option<String> {
         let tail = &code[start + 2..];
         if let Some(end) = tail.find(']') {
             let inner = &tail[..end];
-            if let Some(sym) = inner.chars().next() {
-                if !sym.is_ascii_alphanumeric() {
+            if let Some(sym) = inner.chars().next()
+                && !sym.is_ascii_alphanumeric() {
                     return Some(sym.to_string());
                 }
-            }
         }
     }
     if let Some(q1) = code.find('"') {
@@ -1122,13 +1095,13 @@ fn extract_prst_geom(xml: &[u8]) -> Option<String> {
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
                 if e.local_name().as_ref() == b"prstGeom" {
                     for a in e.attributes().flatten() {
                         if a.key
                             .as_ref()
                             .split(|b| *b == b':')
-                            .last()
+                            .next_back()
                             .unwrap_or(a.key.as_ref())
                             == b"prst"
                         {
@@ -1156,13 +1129,13 @@ fn extract_shape_id(xml: &[u8]) -> Option<u32> {
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
                 if e.local_name().as_ref() == b"cNvPr" {
                     for a in e.attributes().flatten() {
                         if a.key
                             .as_ref()
                             .split(|b| *b == b':')
-                            .last()
+                            .next_back()
                             .unwrap_or(a.key.as_ref())
                             == b"id"
                         {
@@ -1195,7 +1168,7 @@ fn extract_bbox_emu(xml: &[u8]) -> Option<(i64, i64, i64, i64)> {
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
                 let ln = e.local_name();
                 if ln.as_ref() == b"off" {
                     for a in e.attributes().flatten() {
@@ -1203,7 +1176,7 @@ fn extract_bbox_emu(xml: &[u8]) -> Option<(i64, i64, i64, i64)> {
                             .key
                             .as_ref()
                             .split(|b| *b == b':')
-                            .last()
+                            .next_back()
                             .unwrap_or(a.key.as_ref());
                         let v = String::from_utf8_lossy(&a.value).to_string();
                         if k == b"x" {
@@ -1220,7 +1193,7 @@ fn extract_bbox_emu(xml: &[u8]) -> Option<(i64, i64, i64, i64)> {
                             .key
                             .as_ref()
                             .split(|b| *b == b':')
-                            .last()
+                            .next_back()
                             .unwrap_or(a.key.as_ref());
                         let v = String::from_utf8_lossy(&a.value).to_string();
                         if k == b"cx" {
@@ -1291,14 +1264,14 @@ fn extract_first_blip_embed(xml: &[u8]) -> Option<String> {
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
                 if e.local_name().as_ref() == b"blip" {
                     for a in e.attributes().flatten() {
                         let k = a
                             .key
                             .as_ref()
                             .split(|b| *b == b':')
-                            .last()
+                            .next_back()
                             .unwrap_or(a.key.as_ref());
                         if k == b"embed" {
                             let v = String::from_utf8_lossy(&a.value).to_string();
@@ -1327,17 +1300,16 @@ fn extract_connector_endpoints(xml: &[u8]) -> (Option<u32>, Option<u32>) {
     let mut to: Option<u32> = None;
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => match e.local_name().as_ref() {
+            Ok(Event::Start(e) | Event::Empty(e)) => match e.local_name().as_ref() {
                 b"stCxn" => {
                     if from.is_none() {
                         from = attr_val(&e, b"id").and_then(|s| s.trim().parse::<u32>().ok());
                     }
                 }
-                b"endCxn" => {
-                    if to.is_none() {
+                b"endCxn"
+                    if to.is_none() => {
                         to = attr_val(&e, b"id").and_then(|s| s.trim().parse::<u32>().ok());
                     }
-                }
                 _ => {}
             },
             Ok(Event::Eof) => break,
@@ -1368,7 +1340,7 @@ fn line_arrow_dir(xml: &[u8]) -> ArrowDir {
     let mut tail = false;
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => match e.local_name().as_ref() {
+            Ok(Event::Start(e) | Event::Empty(e)) => match e.local_name().as_ref() {
                 b"headEnd" => head = true,
                 b"tailEnd" => tail = true,
                 _ => {}
@@ -1499,7 +1471,7 @@ fn diagram_from_drawing_xml(
     let mut connectors: usize = 0;
 
     for (tag, xml) in &parts {
-        let local = tag.split(':').last().unwrap_or(tag);
+        let local = tag.split(':').next_back().unwrap_or(tag);
         if local == "cxnSp" {
             connectors += 1;
             let (from, to) = extract_connector_endpoints(xml);
@@ -1544,17 +1516,15 @@ fn diagram_from_drawing_xml(
             let f = PX_PER_INCH / EMUS_PER_INCH;
 
             // Image node?
-            if let Some(rid) = extract_first_blip_embed(xml) {
-                if let Some((_ty, target)) = rels.get(&rid) {
+            if let Some(rid) = extract_first_blip_embed(xml)
+                && let Some((_ty, target)) = rels.get(&rid) {
                     let entry = resolve_target("word/", target);
                     if let Ok(img_bytes) = read_zip_file(bytes, &entry) {
                         let hash = sha256_hex(&img_bytes);
                         let _idx = *image_by_hash.entry(hash.clone()).or_insert_with(|| {
-                            let filename = entry.split('/').last().map(|s| s.to_string());
+                            let filename = entry.split('/').next_back().map(std::string::ToString::to_string);
                             let mime = filename
-                                .as_deref()
-                                .map(mime_from_filename)
-                                .unwrap_or_else(|| "application/octet-stream".to_string());
+                                .as_deref().map_or_else(|| "application/octet-stream".to_string(), mime_from_filename);
                             images.push(ParsedImage {
                                 id: format!("sha256:{hash}"),
                                 bytes: img_bytes,
@@ -1578,7 +1548,6 @@ fn diagram_from_drawing_xml(
                         continue;
                     }
                 }
-            }
 
             if let Some(text) = extract_text_compact(xml)? {
                 let text = text.trim();
@@ -1709,8 +1678,8 @@ fn diagram_from_drawing_xml(
     let mut mermaid = String::new();
     mermaid.push_str("```mermaid\n");
     mermaid.push_str("flowchart LR\n");
-    for id in node_ids.iter().copied() {
-        if let Some(n) = node_by_id.get(&id).copied() {
+    for id in &node_ids {
+        if let Some(n) = node_by_id.get(id).copied() {
             match &n.kind {
                 DiagramNodeKind::Text => {
                     mermaid.push_str(&format!(
@@ -1721,14 +1690,13 @@ fn diagram_from_drawing_xml(
                 }
                 DiagramNodeKind::Image { image_id } => {
                     mermaid.push_str(&format!(
-                        "  n{id}@{{ shape: rect, label: \"office-image:{}\" }}\n",
-                        image_id
+                        "  n{id}@{{ shape: rect, label: \"office-image:{image_id}\" }}\n"
                     ));
                 }
             }
         }
     }
-    for (from, to, dir, label) in edge_items.into_iter() {
+    for (from, to, dir, label) in edge_items {
         let op = match dir {
             ArrowDir::None => "---",
             ArrowDir::Forward => "-->",
@@ -1819,11 +1787,11 @@ pub fn parse_docx(bytes: &[u8]) -> Result<Vec<Block>> {
 pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
     let doc_xml = read_zip_file(bytes, "word/document.xml")?;
     let rels_xml = read_zip_file_utf8(bytes, "word/_rels/document.xml.rels")
-        .unwrap_or_else(|_| "".to_string());
+        .unwrap_or_else(|_| String::new());
     let styles_xml =
-        read_zip_file_utf8(bytes, "word/styles.xml").unwrap_or_else(|_| "".to_string());
+        read_zip_file_utf8(bytes, "word/styles.xml").unwrap_or_else(|_| String::new());
     let numbering_xml =
-        read_zip_file_utf8(bytes, "word/numbering.xml").unwrap_or_else(|_| "".to_string());
+        read_zip_file_utf8(bytes, "word/numbering.xml").unwrap_or_else(|_| String::new());
 
     let rels = parse_relationships(&rels_xml).unwrap_or_default();
     let heading_styles = parse_styles_heading_levels(&styles_xml).unwrap_or_default();
@@ -1840,28 +1808,24 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
     // w:sectPr governs the trailing section. cols >= 2 sections drive
     // `::: columns` emission in the Morph renderer.
     let body_sectpr_cols = extract_body_sectpr(&doc_xml)
-        .map(|x| sectpr_cols(&x))
-        .unwrap_or(1);
+        .map_or(1, |x| sectpr_cols(&x));
     let mut break_cols: HashMap<usize, u32> = HashMap::new();
     for (i, (kind, xml)) in body_elems.iter().enumerate() {
         if kind == "p" {
             let hay = String::from_utf8_lossy(xml);
             if hay.contains("<w:sectPr") {
                 let cols = {
-                    let pos = match hay.find("<w:sectPr") {
-                        Some(p) => p,
-                        None => 0,
-                    };
+                    let pos = hay.find("<w:sectPr").unwrap_or_default();
                     let frag = &hay[pos..];
                     match frag.find("<w:cols") {
                         Some(cp) => {
-                            let tag_end = frag[cp..].find('>').map(|e| cp + e).unwrap_or(frag.len());
+                            let tag_end = frag[cp..].find('>').map_or(frag.len(), |e| cp + e);
                             let tag = &frag[cp..tag_end];
                             match tag.find("w:num=\"") {
                                 Some(np) => {
                                     let digits: String = tag[np + 7..]
                                         .chars()
-                                        .take_while(|c| c.is_ascii_digit())
+                                        .take_while(char::is_ascii_digit)
                                         .collect();
                                     digits.parse::<u32>().unwrap_or(1).max(1)
                                 }
@@ -1988,13 +1952,11 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                                     let idx =
                                         *image_by_hash.entry(hash.clone()).or_insert_with(|| {
                                             let filename =
-                                                entry.split('/').last().map(|s| s.to_string());
+                                                entry.split('/').next_back().map(std::string::ToString::to_string);
                                             let mime = filename
-                                                .as_deref()
-                                                .map(mime_from_filename)
-                                                .unwrap_or_else(|| {
+                                                .as_deref().map_or_else(|| {
                                                     "application/octet-stream".to_string()
-                                                });
+                                                }, mime_from_filename);
                                             images.push(ParsedImage {
                                                 id: format!("sha256:{hash}"),
                                                 bytes: img_bytes,
@@ -2018,7 +1980,7 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                             }
                         }
 
-                        for rid in pp.chart_rel_ids.iter() {
+                        for rid in &pp.chart_rel_ids {
                             let Some((_ty, target)) = rels.get(rid) else {
                                 continue;
                             };
@@ -2145,7 +2107,7 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                             }
                         }
 
-                        for drawing in pp.drawings.iter() {
+                        for drawing in &pp.drawings {
                             if let Some((mermaid, graph_json)) = diagram_from_drawing_xml(
                                 drawing,
                                 bytes,
@@ -2224,11 +2186,9 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                     }
                     let hash = sha256_hex(&img_bytes);
                     let idx = *image_by_hash.entry(hash.clone()).or_insert_with(|| {
-                        let filename = entry.split('/').last().map(|s| s.to_string());
+                        let filename = entry.split('/').next_back().map(std::string::ToString::to_string);
                         let mime = filename
-                            .as_deref()
-                            .map(mime_from_filename)
-                            .unwrap_or_else(|| "application/octet-stream".to_string());
+                            .as_deref().map_or_else(|| "application/octet-stream".to_string(), mime_from_filename);
                         images.push(ParsedImage {
                             id: format!("sha256:{hash}"),
                             bytes: img_bytes,
@@ -2250,7 +2210,7 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                     next_block_index += 1;
                 }
 
-                for rid in p.chart_rel_ids.iter() {
+                for rid in &p.chart_rel_ids {
                     let Some((_ty, target)) = rels.get(rid) else {
                         continue;
                     };
@@ -2371,7 +2331,7 @@ pub fn parse_docx_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                     }
                 }
 
-                for drawing in p.drawings.iter() {
+                for drawing in &p.drawings {
                     if let Some((mermaid, graph_json)) = diagram_from_drawing_xml(
                         drawing,
                         bytes,

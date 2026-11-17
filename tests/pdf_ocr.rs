@@ -5,11 +5,11 @@
 //! two-page text PDF at 150 dpi (pdftoppm) and re-wrapping the PNGs into an
 //! image-only PDF — a genuine scanned document with no text layer.
 
-use office_parser::{Document, PdfTextQuality};
+use office_parser::PdfTextQuality;
 
 const SCAN: &str = "tests/fixtures/pdf_scanned.pdf";
 
-/// The scanned fixture must classify as ImageOnly — the OCR trigger.
+/// The scanned fixture must classify as `ImageOnly` — the OCR trigger.
 #[test]
 fn scanned_fixture_classifies_as_image_only() {
     let bytes = std::fs::read(SCAN).expect("fixture");
@@ -35,12 +35,11 @@ fn scanned_fixture_classifies_as_image_only() {
 
 fn which_available(bin: &str) -> bool {
     std::env::var_os("PATH")
-        .map(|p| {
+        .is_some_and(|p| {
             std::env::split_paths(&p).any(|dir| {
                 dir.join(bin).is_file() || dir.join(format!("{bin}.exe")).is_file()
             })
         })
-        .unwrap_or(false)
 }
 
 /// Mode B: the native (in-process ort) engine on the same fixture must
@@ -153,7 +152,7 @@ fn native_table_reconstruction() {
         })
         .collect();
     assert!(!tables.is_empty(), "no Table block; blocks: {:#?}", doc.blocks.iter().map(|b| match b {
-        Block::Table { rows, .. } => format!("Table {}x{}", rows.len(), rows.first().map_or(0, |r| r.len())),
+        Block::Table { rows, .. } => format!("Table {}x{}", rows.len(), rows.first().map_or(0, std::vec::Vec::len)),
         Block::Paragraph { text, .. } => format!("Para({text})"),
         Block::Heading { text, .. } => format!("Head({text})"),
         _ => "other".into(),
@@ -205,7 +204,7 @@ fn native_orientation_recovers_rotated_scan() {
     );
 }
 
-/// Session C: the script lane — CJK lines route through rec_cjk.onnx and
+/// Session C: the script lane — CJK lines route through `rec_cjk.onnx` and
 /// come back as Chinese text, not mojibake.
 #[test]
 fn native_cjk_script_lane() {

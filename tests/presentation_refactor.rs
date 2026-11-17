@@ -104,7 +104,7 @@ fn pptx_diagram_graph_contract_includes_mermaid_block() -> Result<()> {
     assert!(
         slides[0]
             .get("score")
-            .and_then(|v| v.as_f64())
+            .and_then(serde_json::value::Value::as_f64)
             .unwrap_or(0.0)
             > 0.0
     );
@@ -253,7 +253,7 @@ fn pptx_chart_data_json_contract() -> Result<()> {
         .and_then(|v| v.as_array())
         .expect("charts");
     assert_eq!(charts.len(), 1);
-    assert_eq!(charts[0].get("slide").and_then(|v| v.as_u64()), Some(1));
+    assert_eq!(charts[0].get("slide").and_then(serde_json::value::Value::as_u64), Some(1));
     assert_eq!(
         charts[0].get("chart_type").and_then(|v| v.as_str()),
         Some("bar")

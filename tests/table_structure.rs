@@ -1,21 +1,21 @@
 #![cfg(all(feature = "pdf", feature = "ocr-indra-native", feature = "ocr-table-structure"))]
 //! TASK 13 (own-table-structure): the contract transfers from
-//! tests/ocr_rusto_tables.rs (deleted with vendored rusto-core).
+//! `tests/ocr_rusto_tables.rs` (deleted with vendored rusto-core).
 //!
 //! Scenario split (spec Acceptance Criteria):
-//! - test_transcripts_identical_with_model_on_and_off — transcripts +
-//!   confidence identical with the SLANet model pinned vs hidden
-//!   (pdf_scanned.pdf, both arms in one binary via env toggling).
-//! - test_no_model_feature_off_payload_shape — on a fixture without tables,
+//! - `test_transcripts_identical_with_model_on_and_off` — transcripts +
+//!   confidence identical with the `SLANet` model pinned vs hidden
+//!   (`pdf_scanned.pdf`, both arms in one binary via env toggling).
+//! - `test_no_model_feature_off_payload_shape` — on a fixture without tables,
 //!   feature-on + no-model produces the exact feature-off payload shape
 //!   (no rich keys at all).
-//! - test_geometry_passthrough_and_no_html_without_model — the engine's
-//!   geometry (layout_regions/word_boxes) threads regardless of the model;
-//!   table_html stays absent without it.
-//! - test_table_html_populated_for_table_scan_fixture — deterministic stub
-//!   engine + real model ⇒ table_html present and structure-correct.
-//! - test_real_engine_produces_table_html_for_table_scan — IndraNative +
-//!   pdf_table_scan + real model (the gate's validated scenario; skips
+//! - `test_geometry_passthrough_and_no_html_without_model` — the engine's
+//!   geometry (`layout_regions/word_boxes`) threads regardless of the model;
+//!   `table_html` stays absent without it.
+//! - `test_table_html_populated_for_table_scan_fixture` — deterministic stub
+//!   engine + real model ⇒ `table_html` present and structure-correct.
+//! - `test_real_engine_produces_table_html_for_table_scan` — `IndraNative` +
+//!   `pdf_table_scan` + real model (the gate's validated scenario; skips
 //!   loudly without the model).
 
 use office_parser::document_ast::{Block, Cell, SourceSpan};
@@ -37,7 +37,7 @@ static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 impl EnvScope {
     fn acquire() -> Self {
         Self {
-            _mutex: ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner()),
+            _mutex: ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
             prior: std::env::var_os(TABLE_MODEL_ENV),
         }
     }
@@ -64,7 +64,7 @@ fn hide_model_env() {
 }
 
 fn pdftoppm_available() -> bool {
-    std::env::var_os("PATH").map_or(false, |p| {
+    std::env::var_os("PATH").is_some_and(|p| {
         std::env::split_paths(&p)
             .any(|dir| dir.join("pdftoppm").is_file() || dir.join("pdftoppm.exe").is_file())
     })
@@ -110,7 +110,7 @@ fn cell(text: &str) -> Cell {
 
 /// Deterministic engine exposing Indra-style table geometry (the task-13
 /// geometry contract) with cells known a priori; overrides `ocr_page` exactly
-/// like indra_native.rs does under the feature. Object-safety scenario: it is
+/// like `indra_native.rs` does under the feature. Object-safety scenario: it is
 /// used through `&mut dyn PageOcrEngine`.
 struct GeometryEngine;
 impl PageOcrEngine for GeometryEngine {
@@ -158,7 +158,7 @@ impl PageOcrEngine for GeometryEngine {
 
 /// Spec scenario: transcripts identical with the model pinned vs hidden.
 /// Both arms run in one binary; the hidden arm fails before any decode
-/// (enrichment provably no-op). pdf_scanned has no tables, so this locks the
+/// (enrichment provably no-op). `pdf_scanned` has no tables, so this locks the
 /// strongest statement: the feature changes NOTHING on table-free pages.
 #[test]
 fn test_transcripts_identical_with_model_on_and_off() {
@@ -280,10 +280,10 @@ fn test_geometry_passthrough_and_no_html_without_model() {
     }
 }
 
-/// Positive arm — stub geometry engine + real model: table_html must be
+/// Positive arm — stub geometry engine + real model: `table_html` must be
 /// present and structure-correct (one `<table>` wrapper, td open/close
 /// parity). Cell text assertions live in the module unit tests; which tokens
-/// SLANet emits over a synthetic raster is the model's business, not this
+/// `SLANet` emits over a synthetic raster is the model's business, not this
 /// test's. Skips loudly without the model.
 #[test]
 fn test_table_html_populated_for_table_scan_fixture() {
@@ -325,8 +325,8 @@ fn test_table_html_populated_for_table_scan_fixture() {
     }
 }
 
-/// Spec scenario: real model + real engine — pdf_table_scan produces
-/// table_html. Deterministic given the fixture (Indra det/rec are fixed);
+/// Spec scenario: real model + real engine — `pdf_table_scan` produces
+/// `table_html`. Deterministic given the fixture (Indra det/rec are fixed);
 /// skips loudly without the model so the default suite stays green.
 #[test]
 fn test_real_engine_produces_table_html_for_table_scan() {

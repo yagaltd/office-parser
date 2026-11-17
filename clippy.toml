@@ -1,0 +1,10 @@
+# BeautifulRust clippy configuration (see the [workspace.lints] block in
+# Cargo.toml): flag every bool parameter, and let tests panic/print freely.
+
+# A bool argument is unreadable at the call site (report(true)) and cannot grow
+# a third mode; use a two-variant enum or two methods.
+max-fn-params-bools = 0
+
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-print-in-tests = true

@@ -87,8 +87,8 @@ fn flush_list_block(
     block_index: &mut usize,
     cur_list: &mut Option<(bool, Vec<ListItem>)>,
 ) {
-    if let Some((ordered, items)) = cur_list.take() {
-        if !items.is_empty() {
+    if let Some((ordered, items)) = cur_list.take()
+        && !items.is_empty() {
             blocks.push(Block::List {
                 block_index: *block_index,
                 ordered,
@@ -97,7 +97,6 @@ fn flush_list_block(
             });
             *block_index += 1;
         }
-    }
 }
 
 fn push_paragraph_or_list_item(
@@ -415,25 +414,21 @@ fn parse_odp_full_inner(
                             });
                         }
 
-                        if e.name().as_ref() == b"draw:enhanced-geometry" {
-                            if let Some(t) = attr_val_exact(&e, b"draw:type") {
-                                if let Some(last) = frame_shape_type_stack.last_mut() {
-                                    if last.is_none() {
+                        if e.name().as_ref() == b"draw:enhanced-geometry"
+                            && let Some(t) = attr_val_exact(&e, b"draw:type")
+                                && let Some(last) = frame_shape_type_stack.last_mut()
+                                    && last.is_none() {
                                         *last = Some(t);
                                     }
-                                }
-                            }
-                        }
 
                         if e.name().as_ref() == b"draw:frame"
                             || e.name().as_ref() == b"draw:custom-shape"
                         {
                             let is_title = attr_val_exact(&e, b"presentation:class")
-                                .map(|cls| {
+                                .is_some_and(|cls| {
                                     let c = cls.to_ascii_lowercase();
                                     c == "title" || c == "subtitle"
-                                })
-                                .unwrap_or(false);
+                                });
                             if e.name().as_ref() == b"draw:frame" {
                                 if is_title {
                                     title_frame_depth = title_frame_depth.saturating_add(1);
@@ -485,16 +480,14 @@ fn parse_odp_full_inner(
                                 .max(1);
                         }
 
-                        if e.name().as_ref() == b"text:list" {
-                            if !in_table {
+                        if e.name().as_ref() == b"text:list"
+                            && !in_table {
                                 list_depth = list_depth.saturating_add(1);
                             }
-                        }
-                        if e.name().as_ref() == b"text:list-item" {
-                            if !in_table {
+                        if e.name().as_ref() == b"text:list-item"
+                            && !in_table {
                                 in_list_item = true;
                             }
-                        }
 
                         if e.name().as_ref() == b"text:h" {
                             // ODF headings use text:outline-level (1..). We shift by +1 to keep
@@ -524,21 +517,19 @@ fn parse_odp_full_inner(
                                 .unwrap_or((false, false, false));
                             span_flags.push(flags);
                         }
-                        if e.name().as_ref() == b"draw:image" {
-                            if let Some(href) = attr_val_exact(&e, b"xlink:href") {
+                        if e.name().as_ref() == b"draw:image"
+                            && let Some(href) = attr_val_exact(&e, b"xlink:href") {
                                 let href = href.trim().trim_start_matches("./");
-                                if !href.is_empty() {
-                                    if let Ok(img_bytes) = read_zip_file(bytes, href) {
+                                if !href.is_empty()
+                                    && let Ok(img_bytes) = read_zip_file(bytes, href) {
                                         embedded_images += 1;
                                         let filename = Some(
                                             href.rsplit('/').next().unwrap_or(href).to_string(),
                                         );
                                         let mime_type = filename
-                                            .as_deref()
-                                            .map(mime_from_filename)
-                                            .unwrap_or_else(|| {
+                                            .as_deref().map_or_else(|| {
                                                 "application/octet-stream".to_string()
-                                            });
+                                            }, mime_from_filename);
                                         let hash = sha256_hex(&img_bytes);
                                         let id = format!("sha256:{hash}");
 
@@ -600,9 +591,7 @@ fn parse_odp_full_inner(
                                             }
                                         }
                                     }
-                                }
                             }
-                        }
                     }
                     _ => {}
                 }
@@ -652,18 +641,16 @@ fn parse_odp_full_inner(
                         _ => {}
                     }
 
-                    if e.name().as_ref() == b"draw:image" {
-                        if let Some(href) = attr_val_exact(&e, b"xlink:href") {
+                    if e.name().as_ref() == b"draw:image"
+                        && let Some(href) = attr_val_exact(&e, b"xlink:href") {
                             let href = href.trim().trim_start_matches("./");
-                            if !href.is_empty() {
-                                if let Ok(img_bytes) = read_zip_file(bytes, href) {
+                            if !href.is_empty()
+                                && let Ok(img_bytes) = read_zip_file(bytes, href) {
                                     embedded_images += 1;
                                     let filename =
                                         Some(href.rsplit('/').next().unwrap_or(href).to_string());
                                     let mime_type = filename
-                                        .as_deref()
-                                        .map(mime_from_filename)
-                                        .unwrap_or_else(|| "application/octet-stream".to_string());
+                                        .as_deref().map_or_else(|| "application/octet-stream".to_string(), mime_from_filename);
                                     let hash = sha256_hex(&img_bytes);
                                     let id = format!("sha256:{hash}");
 
@@ -721,17 +708,15 @@ fn parse_odp_full_inner(
                                         }
                                     }
                                 }
-                            }
                         }
-                    }
                 }
             }
             Ok(Event::Text(e)) => {
-                if in_slide {
-                    if let Ok(t) = String::from_utf8(e.to_vec()) {
+                if in_slide
+                    && let Ok(t) = String::from_utf8(e.to_vec()) {
                         let trimmed = t.trim();
-                        if in_text_p || in_text_span {
-                            if !trimmed.is_empty() {
+                        if (in_text_p || in_text_span)
+                            && !trimmed.is_empty() {
                                 // segment start (single-space joins align with
                                 // the mark offsets only when contiguous; the
                                 // join space shifts are corrected by trim+shift)
@@ -769,27 +754,23 @@ fn parse_odp_full_inner(
                                     t.push_str(trimmed);
                                 }
                             }
-                        }
 
-                        if in_table_cell {
-                            if !trimmed.is_empty() {
+                        if in_table_cell
+                            && !trimmed.is_empty() {
                                 if !cur_cell_text.is_empty() {
                                     cur_cell_text.push(' ');
                                 }
                                 cur_cell_text.push_str(trimmed);
                             }
-                        }
 
-                        if title_frame {
-                            if !trimmed.is_empty() {
+                        if title_frame
+                            && !trimmed.is_empty() {
                                 if !title_text.is_empty() {
                                     title_text.push(' ');
                                 }
                                 title_text.push_str(trimmed);
                             }
-                        }
                     }
-                }
             }
             Ok(Event::End(e)) => {
                 if in_slide {
@@ -884,16 +865,14 @@ fn parse_odp_full_inner(
                         heading_level = None;
                         cur_para_text.clear();
                     }
-                    if e.name().as_ref() == b"text:list-item" {
-                        if !in_table {
+                    if e.name().as_ref() == b"text:list-item"
+                        && !in_table {
                             in_list_item = false;
                         }
-                    }
-                    if e.name().as_ref() == b"text:list" {
-                        if !in_table {
+                    if e.name().as_ref() == b"text:list"
+                        && !in_table {
                             list_depth = list_depth.saturating_sub(1);
                         }
-                    }
                     if e.name().as_ref() == b"draw:frame"
                         || e.name().as_ref() == b"draw:custom-shape"
                     {
@@ -911,9 +890,9 @@ fn parse_odp_full_inner(
                         }
 
                         let t = text.trim();
-                        if !is_title {
-                            if let Some((x, y, w, h)) = bbox {
-                                if !t.is_empty() {
+                        if !is_title
+                            && let Some((x, y, w, h)) = bbox
+                                && !t.is_empty() {
                                     text_boxes = text_boxes.saturating_add(1);
                                     let node_id = if let Some(odf_id) = odf_id.as_deref() {
                                         node_id_for_odf(
@@ -948,8 +927,6 @@ fn parse_odp_full_inner(
                                         nodes.push(n);
                                     }
                                 }
-                            }
-                        }
                     }
 
                     if e.name().as_ref() == b"draw:connector" || e.name().as_ref() == b"draw:line" {
@@ -980,11 +957,10 @@ fn parse_odp_full_inner(
                         cur_cell_colspan = 1;
                         cur_cell_rowspan = 1;
                     }
-                    if e.name().as_ref() == b"table:table-row" && in_table {
-                        if !cur_row.is_empty() {
+                    if e.name().as_ref() == b"table:table-row" && in_table
+                        && !cur_row.is_empty() {
                             table_rows.push(std::mem::take(&mut cur_row));
                         }
-                    }
                     if e.name().as_ref() == b"table:table" && in_table {
                         // End of table: emit a Block::Table.
                         in_table = false;
@@ -1149,8 +1125,8 @@ fn parse_odp_full_inner(
                                 let mut mermaid = String::new();
                                 mermaid.push_str("```mermaid\n");
                                 mermaid.push_str("flowchart LR\n");
-                                for id in node_ids.iter().copied() {
-                                    if let Some(n) = node_by_id.get(&id).copied() {
+                                for id in &node_ids {
+                                    if let Some(n) = node_by_id.get(id).copied() {
                                         let label = esc(&n.label);
                                         mermaid.push_str(&format!(
                                             "  n{id}@{{ shape: {}, label: \"{}\" }}\n",
@@ -1176,7 +1152,7 @@ fn parse_odp_full_inner(
                                     .collect::<Vec<_>>();
                                 edge_items.sort_by(|a, b| (a.0, a.1, &a.3).cmp(&(b.0, b.1, &b.3)));
 
-                                for (from, to, dir, label) in edge_items.into_iter() {
+                                for (from, to, dir, label) in edge_items {
                                     let op = match dir {
                                         ArrowDir::None => "---",
                                         ArrowDir::Forward => "-->",
@@ -1212,12 +1188,12 @@ fn parse_odp_full_inner(
 
                         let block_first = pending_slide_block_first.take().unwrap_or(block_index);
                         let raw_title = title_text.trim();
-                        let slide_title = if !raw_title.is_empty() {
-                            raw_title.to_string()
-                        } else {
+                        let slide_title = if raw_title.is_empty() {
                             slide_name
                                 .clone()
                                 .unwrap_or_else(|| format!("Slide {slide_idx_1}"))
+                        } else {
+                            raw_title.to_string()
                         };
                         let heading_text = slide_title.clone();
 

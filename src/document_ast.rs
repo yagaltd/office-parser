@@ -1,16 +1,13 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum SpanKind {
     /// Byte offsets into the rendered extracted text.
+    #[default]
     ExtractedTextByte,
 }
 
-impl Default for SpanKind {
-    fn default() -> Self {
-        SpanKind::ExtractedTextByte
-    }
-}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceSpan {
@@ -43,7 +40,7 @@ pub enum LinkKind {
     Unknown,
 }
 
-/// Inline styling kinds carried as data (MorphEditor BlockModel parity):
+/// Inline styling kinds carried as data (`MorphEditor` `BlockModel` parity):
 /// positions are char offsets into the CLEAN text (no markers).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MarkKind {
@@ -120,6 +117,7 @@ pub enum Block {
 }
 
 impl Block {
+    #[must_use]
     pub fn block_index(&self) -> usize {
         match self {
             Block::Heading { block_index, .. }
@@ -132,6 +130,7 @@ impl Block {
         }
     }
 
+    #[must_use]
     pub fn source(&self) -> SourceSpan {
         match self {
             Block::Heading { source, .. }
@@ -158,6 +157,7 @@ impl Block {
         }
     }
 
+    #[must_use]
     pub fn text_len_chars(&self) -> usize {
         match self {
             Block::Heading { text, .. } => text.chars().count(),
@@ -184,7 +184,8 @@ impl Block {
 }
 
 /// Merge adjacent/overlapping same-kind marks and drop empties.
-/// Keeps MorphEditor mark semantics: one mark per contiguous styled range.
+/// Keeps `MorphEditor` mark semantics: one mark per contiguous styled range.
+#[must_use]
 pub fn merge_marks(mut marks: Vec<InlineMark>) -> Vec<InlineMark> {
     marks.sort_by_key(|m| (m.start, m.end));
     let mut out: Vec<InlineMark> = Vec::new();
@@ -192,18 +193,18 @@ pub fn merge_marks(mut marks: Vec<InlineMark>) -> Vec<InlineMark> {
         if m.start >= m.end {
             continue;
         }
-        if let Some(last) = out.last_mut() {
-            if last.kind == m.kind && m.start <= last.end {
+        if let Some(last) = out.last_mut()
+            && last.kind == m.kind && m.start <= last.end {
                 last.end = last.end.max(m.end);
                 continue;
             }
-        }
         out.push(m);
     }
     out
 }
 
 /// Shift marks after a `trim_start` of `shift` chars; clamp to `len` chars.
+#[must_use]
 pub fn shift_marks(marks: Vec<InlineMark>, shift: usize, len: usize) -> Vec<InlineMark> {
     marks
         .into_iter()
@@ -233,7 +234,7 @@ fn classify_link_kind(url: &str) -> LinkKind {
 }
 
 fn escape_markdown_table_cell(s: &str) -> String {
-    s.replace('|', "\\|").replace('\n', " ").replace('\r', " ")
+    s.replace('|', "\\|").replace(['\n', '\r'], " ")
 }
 
 /// Deterministically render blocks into a markdown-ish extracted text string.
@@ -303,7 +304,7 @@ pub fn render_blocks_to_extracted_text(blocks: &mut [Block]) -> String {
                 };
             }
             Block::Table { rows, source, .. } => {
-                let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0).max(1);
+                let cols = rows.iter().map(std::vec::Vec::len).max().unwrap_or(0).max(1);
 
                 if rows.is_empty() {
                     out.push_str("| |\n|---|\n\n");
@@ -313,8 +314,7 @@ pub fn render_blocks_to_extracted_text(blocks: &mut [Block]) -> String {
                         for c in 0..cols {
                             let txt = row
                                 .get(c)
-                                .map(|cc| escape_markdown_table_cell(cc.text.as_str()))
-                                .unwrap_or_default();
+                                .map_or_default(|cc| escape_markdown_table_cell(cc.text.as_str()));
                             out.push(' ');
                             out.push_str(&txt);
                             out.push(' ');
@@ -355,8 +355,7 @@ pub fn render_blocks_to_extracted_text(blocks: &mut [Block]) -> String {
                 let file_s = filename.as_deref().unwrap_or("");
                 let ct_s = content_type.as_deref().unwrap_or("");
                 out.push_str(&format!(
-                    "[image:{} filename=\"{}\" content_type=\"{}\" alt=\"{}\"]\n\n",
-                    id, file_s, ct_s, alt_s
+                    "[image:{id} filename=\"{file_s}\" content_type=\"{ct_s}\" alt=\"{alt_s}\"]\n\n"
                 ));
                 *source = SourceSpan {
                     kind: SpanKind::ExtractedTextByte,

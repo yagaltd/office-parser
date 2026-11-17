@@ -88,14 +88,13 @@ fn parse_document_xml_root(xml: &str) -> Result<MindNode> {
                     let is_collapsed = e.attributes().flatten().any(|a| {
                         local_name(a.key.as_ref()) == "Collapsed"
                             && a.unescape_value()
-                                .map(|v| v.eq_ignore_ascii_case("true"))
-                                .unwrap_or(false)
+                                .is_ok_and(|v| v.eq_ignore_ascii_case("true"))
                     });
                     if let Some(top) = topic_stack.last_mut() {
                         top.collapsed = is_collapsed;
                     }
-                } else if n == "Text" {
-                    if let Some(top) = topic_stack.last_mut() {
+                } else if n == "Text"
+                    && let Some(top) = topic_stack.last_mut() {
                         let plain = e.attributes().flatten().find_map(|a| {
                             if local_name(a.key.as_ref()) == "PlainText" {
                                 a.unescape_value().ok().map(|v| v.to_string())
@@ -109,7 +108,6 @@ fn parse_document_xml_root(xml: &str) -> Result<MindNode> {
                             in_text = true;
                         }
                     }
-                }
             }
             Ok(quick_xml::events::Event::Empty(e)) => {
                 if !in_one_topic {
@@ -121,14 +119,13 @@ fn parse_document_xml_root(xml: &str) -> Result<MindNode> {
                     let is_collapsed = e.attributes().flatten().any(|a| {
                         local_name(a.key.as_ref()) == "Collapsed"
                             && a.unescape_value()
-                                .map(|v| v.eq_ignore_ascii_case("true"))
-                                .unwrap_or(false)
+                                .is_ok_and(|v| v.eq_ignore_ascii_case("true"))
                     });
                     if let Some(top) = topic_stack.last_mut() {
                         top.collapsed = is_collapsed;
                     }
-                } else if n == "Text" {
-                    if let Some(top) = topic_stack.last_mut() {
+                } else if n == "Text"
+                    && let Some(top) = topic_stack.last_mut() {
                         let plain = e.attributes().flatten().find_map(|a| {
                             if local_name(a.key.as_ref()) == "PlainText" {
                                 a.unescape_value().ok().map(|v| v.to_string())
@@ -140,11 +137,10 @@ fn parse_document_xml_root(xml: &str) -> Result<MindNode> {
                             top.title = t;
                         }
                     }
-                }
             }
             Ok(quick_xml::events::Event::Text(t)) => {
                 if in_one_topic && in_text {
-                    let s = t.decode().map(|v| v.to_string()).unwrap_or_default();
+                    let s = t.decode().map_or_default(|v| v.to_string());
                     if let Some(top) = topic_stack.last_mut() {
                         top.title.push_str(&s);
                     }
@@ -152,7 +148,7 @@ fn parse_document_xml_root(xml: &str) -> Result<MindNode> {
             }
             Ok(quick_xml::events::Event::CData(t)) => {
                 if in_one_topic && in_text {
-                    let s = t.decode().map(|v| v.to_string()).unwrap_or_default();
+                    let s = t.decode().map_or_default(|v| v.to_string());
                     if let Some(top) = topic_stack.last_mut() {
                         top.title.push_str(&s);
                     }
@@ -324,7 +320,7 @@ mod tests {
             .extra
             .get("mindmap")
             .and_then(|m| m.get("node_count"))
-            .and_then(|v| v.as_u64());
+            .and_then(serde_json::Value::as_u64);
         assert_eq!(node_count, Some(4));
     }
 }

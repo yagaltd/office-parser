@@ -1,5 +1,25 @@
 ## Unreleased
 
+### Review follow-up (post-20261108-002): renderer contract, budget unification, lints
+
+- `render_pages_png_opts` takes `RenderBudget` (`Clamped` / `Full`) instead
+  of a `bool` — one per-page megapixel rule now applies identically to
+  pdfium, hayro and poppler (pdfium's fixed 530×750 window was an
+  approximation of it; hayro previously ignored the flag entirely).
+- `OFFICE_PARSER_RENDERER` now really pins: a pinned backend that is not
+  compiled in or fails returns its error instead of silently rendering
+  with the next engine. Unpinned runs log each failed backend; a total
+  failure names all of them. An unknown value is an error.
+- The library no longer prints: progress and diagnostics go through
+  `office_parser::progress::set_sink` (the CLI installs a stderr sink).
+- `cargo build` is warning-free; `[workspace.lints]` carries the
+  BeautifulRust config with the backlog (≈740 pedantic warnings, mostly
+  `missing_errors_doc` and cast lints) recorded in `Cargo.toml`.
+- Fixed alongside: shared cell emitter for `table_structure` (skips
+  out-of-range model indices instead of panicking), JPX pre-decode gate
+  uses target ∩ declared dimensions, glyph stroke extent reuses
+  `x_y_advances`, `InkState::mark_unsupported`.
+
 ### Plan 20261108-002: vendored hayro upgraded to 0.9.0; renderer default re-measured (pdfium stays)
 
 - The vendored hayro stack moved from the PdfCraft 0.7.x patches to

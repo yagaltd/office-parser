@@ -17,7 +17,7 @@ const RELTYPE_NOTES_SLIDE: &str =
 fn attr_val_local(e: &quick_xml::events::BytesStart<'_>, key_local: &[u8]) -> Option<String> {
     for a in e.attributes().flatten() {
         let k = a.key.as_ref();
-        let local = k.split(|b| *b == b':').last().unwrap_or(k);
+        let local = k.split(|b| *b == b':').next_back().unwrap_or(k);
         if local == key_local {
             return Some(String::from_utf8_lossy(&a.value).to_string());
         }
@@ -77,7 +77,7 @@ fn parse_relationships(rels_xml: &str) -> Result<HashMap<String, (String, String
         let Some(end_rel) = bytes[start..].iter().position(|b| *b == b'>') else {
             break;
         };
-        let tag = &bytes[start..start + end_rel + 1];
+        let tag = &bytes[start..=(start + end_rel)];
 
         let id = scan_attr(tag, b"Id")
             .or_else(|| scan_attr(tag, b"id"))
@@ -117,7 +117,7 @@ fn resolve_target(base_part: &str, target: &str) -> String {
         return target.trim_start_matches('/').to_string();
     }
     let base_dir = dirname(base_part);
-    let joined = format!("{}{}", base_dir, target);
+    let joined = format!("{base_dir}{target}");
 
     // Normalize ./ and ../
     let mut stack: Vec<&str> = Vec::new();
@@ -320,11 +320,10 @@ fn capture_sp_tree_children(slide_xml: &str) -> Result<Vec<(String, Vec<u8>)>> {
                         // Flatten grouped shapes so their members become
                         // diagram nodes/edges (group transforms are ignored —
                         // mermaid lays out topologically, not spatially).
-                        if is_group {
-                            if let Ok(inner) = capture_group_shape_children(&v) {
+                        if is_group
+                            && let Ok(inner) = capture_group_shape_children(&v) {
                                 out.extend(inner);
                             }
-                        }
                         if in_tree {
                             depth = depth.saturating_sub(1);
                         }
@@ -352,7 +351,7 @@ fn extract_placeholder_type(xml: &[u8]) -> Option<String> {
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
+            Ok(Event::Empty(e) | Event::Start(e)) => {
                 if e.local_name().as_ref() == b"ph" {
                     if let Some(t) = attr_val_local(&e, b"type") {
                         return Some(t);
@@ -375,7 +374,7 @@ fn extract_cnvpr_alt(xml: &[u8]) -> Option<String> {
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
+            Ok(Event::Empty(e) | Event::Start(e)) => {
                 if e.local_name().as_ref() == b"cNvPr" {
                     let descr = attr_val_local(&e, b"descr").filter(|s| !s.trim().is_empty());
                     let title = attr_val_local(&e, b"title").filter(|s| !s.trim().is_empty());
@@ -462,20 +461,17 @@ fn parse_table_from_graphic_frame(xml: &[u8]) -> Result<Option<Vec<Vec<Cell>>>> 
                 _ => {}
             },
             Ok(Event::Empty(e)) => {
-                if in_tbl && in_tc {
-                    if e.local_name().as_ref() == b"br" {
-                        if !cur_cell.ends_with('\n') {
+                if in_tbl && in_tc
+                    && e.local_name().as_ref() == b"br"
+                        && !cur_cell.ends_with('\n') {
                             cur_cell.push('\n');
                         }
-                    }
-                }
             }
             Ok(Event::Text(e)) => {
-                if in_tbl && in_tc && in_t {
-                    if let Ok(t) = String::from_utf8(e.to_vec()) {
+                if in_tbl && in_tc && in_t
+                    && let Ok(t) = String::from_utf8(e.to_vec()) {
                         cur_cell.push_str(&t);
                     }
-                }
             }
             Ok(Event::End(e)) => match e.local_name().as_ref() {
                 b"t" => in_t = false,
@@ -533,7 +529,7 @@ fn extract_slide_rids(presentation_xml: &str) -> Result<Vec<String>> {
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
+            Ok(Event::Empty(e) | Event::Start(e)) => {
                 if e.name().as_ref().ends_with(b"sldId") {
                     for a in e.attributes().flatten() {
                         let v = String::from_utf8_lossy(&a.value).to_string();
@@ -568,8 +564,8 @@ fn flush_list_block(
     block_index: &mut usize,
     cur_list: &mut Option<(bool, Vec<ListItem>)>,
 ) {
-    if let Some((ordered, items)) = cur_list.take() {
-        if !items.is_empty() {
+    if let Some((ordered, items)) = cur_list.take()
+        && !items.is_empty() {
             blocks.push(Block::List {
                 block_index: *block_index,
                 ordered,
@@ -578,7 +574,6 @@ fn flush_list_block(
             });
             *block_index += 1;
         }
-    }
 }
 
 fn push_paragraph_or_list_item(
@@ -627,7 +622,7 @@ fn push_paragraph_or_list_item(
     *block_index += 1;
 }
 
-/// One DrawingML paragraph: text + list context + inline run marks.
+/// One `DrawingML` paragraph: text + list context + inline run marks.
 pub(crate) struct PptxPara {
     pub is_list: bool,
     pub ordered: bool,
@@ -712,20 +707,16 @@ fn extract_text_with_list_markers(xml: &[u8]) -> Result<Vec<PptxPara>> {
                     }
                     if e.local_name().as_ref() == b"rPr" {
                         run_bold = attr_val_local(&e, b"b")
-                            .map(|v| v == "1" || v == "true")
-                            .unwrap_or(run_bold);
+                            .map_or(run_bold, |v| v == "1" || v == "true");
                         run_italic = attr_val_local(&e, b"i")
-                            .map(|v| v == "1" || v == "true")
-                            .unwrap_or(run_italic);
+                            .map_or(run_italic, |v| v == "1" || v == "true");
                         run_strike = attr_val_local(&e, b"strike")
-                            .map(|v| v == "sngStrike" || v == "dblStrike")
-                            .unwrap_or(run_strike);
+                            .map_or(run_strike, |v| v == "sngStrike" || v == "dblStrike");
                     }
-                    if e.local_name().as_ref() == b"pPr" {
-                        if let Some(v) = scan_attr(&e.to_vec(), b"lvl") {
+                    if e.local_name().as_ref() == b"pPr"
+                        && let Some(v) = scan_attr(&e, b"lvl") {
                             cur_lvl = v.parse::<u8>().unwrap_or(0);
                         }
-                    }
                     if e.local_name().as_ref() == b"buAutoNum" {
                         cur_ordered = true;
                     }
@@ -747,44 +738,38 @@ fn extract_text_with_list_markers(xml: &[u8]) -> Result<Vec<PptxPara>> {
                     }
                     if e.local_name().as_ref() == b"rPr" {
                         run_bold = attr_val_local(&e, b"b")
-                            .map(|v| v == "1" || v == "true")
-                            .unwrap_or(run_bold);
+                            .map_or(run_bold, |v| v == "1" || v == "true");
                         run_italic = attr_val_local(&e, b"i")
-                            .map(|v| v == "1" || v == "true")
-                            .unwrap_or(run_italic);
+                            .map_or(run_italic, |v| v == "1" || v == "true");
                         run_strike = attr_val_local(&e, b"strike")
-                            .map(|v| v == "sngStrike" || v == "dblStrike")
-                            .unwrap_or(run_strike);
+                            .map_or(run_strike, |v| v == "sngStrike" || v == "dblStrike");
                     }
-                    if e.local_name().as_ref() == b"pPr" {
-                        if let Some(v) =
-                            scan_attr(&e.to_vec(), b"lvl").or_else(|| attr_val_local(&e, b"lvl"))
+                    if e.local_name().as_ref() == b"pPr"
+                        && let Some(v) =
+                            scan_attr(&e, b"lvl").or_else(|| attr_val_local(&e, b"lvl"))
                         {
                             cur_lvl = v.parse::<u8>().unwrap_or(0);
                         }
-                    }
                     if e.local_name().as_ref() == b"buAutoNum" {
                         cur_ordered = true;
                     }
                     if e.local_name().as_ref() == b"buChar" {
                         cur_bulleted = true;
                     }
-                    if e.local_name().as_ref() == b"br" {
-                        if !cur_text.ends_with('\n') {
+                    if e.local_name().as_ref() == b"br"
+                        && !cur_text.ends_with('\n') {
                             cur_text.push('\n');
                         }
-                    }
                     if e.local_name().as_ref() == b"tab" {
                         cur_text.push('\t');
                     }
                 }
             }
             Ok(Event::Text(e)) => {
-                if in_p && in_t {
-                    if let Ok(t) = String::from_utf8(e.to_vec()) {
+                if in_p && in_t
+                    && let Ok(t) = String::from_utf8(e.to_vec()) {
                         cur_text.push_str(&t);
                     }
-                }
             }
             Ok(Event::End(e)) => {
                 if in_p {
@@ -820,7 +805,9 @@ fn extract_text_with_list_markers(xml: &[u8]) -> Result<Vec<PptxPara>> {
                     }
                     if e.local_name().as_ref() == b"p" {
                         let trimmed = cur_text.trim();
-                        if !trimmed.is_empty() {
+                        if trimmed.is_empty() {
+                            cur_marks.clear();
+                        } else {
                             let shift =
                                 cur_text.chars().count() - cur_text.trim_start().chars().count();
                             let len = trimmed.chars().count();
@@ -838,8 +825,6 @@ fn extract_text_with_list_markers(xml: &[u8]) -> Result<Vec<PptxPara>> {
                                     len,
                                 ),
                             });
-                        } else {
-                            cur_marks.clear();
                         }
                         in_p = false;
                         p_depth = 0;
@@ -868,14 +853,12 @@ fn extract_slide_name(slide_xml: &str) -> Option<String> {
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                if e.local_name().as_ref() == b"cSld" {
-                    if let Some(name) = attr_val_local(&e, b"name") {
-                        if !name.trim().is_empty() {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
+                if e.local_name().as_ref() == b"cSld"
+                    && let Some(name) = attr_val_local(&e, b"name")
+                        && !name.trim().is_empty() {
                             return Some(name);
                         }
-                    }
-                }
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -893,7 +876,7 @@ fn extract_slide_size_emu(presentation_xml: &str) -> Option<(i64, i64)> {
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
                 if e.local_name().as_ref() == b"sldSz" {
                     let cx = attr_val_local(&e, b"cx").and_then(|v| v.parse::<i64>().ok());
                     let cy = attr_val_local(&e, b"cy").and_then(|v| v.parse::<i64>().ok());
@@ -917,12 +900,11 @@ fn extract_shape_id(xml: &[u8]) -> Option<u32> {
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                if e.local_name().as_ref() == b"cNvPr" {
-                    if let Some(id) = attr_val_local(&e, b"id").and_then(|v| v.parse().ok()) {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
+                if e.local_name().as_ref() == b"cNvPr"
+                    && let Some(id) = attr_val_local(&e, b"id").and_then(|v| v.parse().ok()) {
                         return Some(id);
                     }
-                }
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -943,7 +925,7 @@ fn extract_bbox_emu(xml: &[u8]) -> Option<(i64, i64, i64, i64)> {
     let mut h: Option<i64> = None;
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
                 if e.local_name().as_ref() == b"off" {
                     x = attr_val_local(&e, b"x").and_then(|v| v.parse().ok());
                     y = attr_val_local(&e, b"y").and_then(|v| v.parse().ok());
@@ -973,7 +955,7 @@ fn extract_connector_endpoints(xml: &[u8]) -> (Option<u32>, Option<u32>) {
     let mut to: Option<u32> = None;
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
                 if e.local_name().as_ref() == b"stCxn" {
                     from = attr_val_local(&e, b"id").and_then(|v| v.parse().ok());
                 }
@@ -1012,14 +994,12 @@ fn extract_prst_geom(xml: &[u8]) -> Option<String> {
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                if e.local_name().as_ref() == b"prstGeom" {
-                    if let Some(prst) = attr_val_local(&e, b"prst") {
-                        if !prst.trim().is_empty() {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
+                if e.local_name().as_ref() == b"prstGeom"
+                    && let Some(prst) = attr_val_local(&e, b"prst")
+                        && !prst.trim().is_empty() {
                             return Some(prst);
                         }
-                    }
-                }
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -1080,25 +1060,23 @@ fn line_arrow_dir(xml: &[u8]) -> ArrowDir {
     let mut tail = false;
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
                 let ln = e.local_name();
                 let ln = ln.as_ref();
-                if ln == b"headEnd" {
-                    if let Some(ty) = attr_val_local(&e, b"type") {
+                if ln == b"headEnd"
+                    && let Some(ty) = attr_val_local(&e, b"type") {
                         let t = ty.trim().to_ascii_lowercase();
                         if !t.is_empty() && t != "none" {
                             head = true;
                         }
                     }
-                }
-                if ln == b"tailEnd" {
-                    if let Some(ty) = attr_val_local(&e, b"type") {
+                if ln == b"tailEnd"
+                    && let Some(ty) = attr_val_local(&e, b"type") {
                         let t = ty.trim().to_ascii_lowercase();
                         if !t.is_empty() && t != "none" {
                             tail = true;
                         }
                     }
-                }
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -1134,14 +1112,12 @@ fn extract_chart_rid_from_graphic_frame(xml: &[u8]) -> Option<String> {
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                if e.local_name().as_ref() == b"chart" {
-                    if let Some(rid) = attr_val_local(&e, b"id") {
-                        if !rid.trim().is_empty() {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
+                if e.local_name().as_ref() == b"chart"
+                    && let Some(rid) = attr_val_local(&e, b"id")
+                        && !rid.trim().is_empty() {
                             return Some(rid);
                         }
-                    }
-                }
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -1158,14 +1134,12 @@ fn graphic_frame_has_smartart(xml: &[u8]) -> bool {
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                if e.local_name().as_ref() == b"graphicData" {
-                    if let Some(uri) = attr_val_local(&e, b"uri") {
-                        if uri.contains("/diagram") {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
+                if e.local_name().as_ref() == b"graphicData"
+                    && let Some(uri) = attr_val_local(&e, b"uri")
+                        && uri.contains("/diagram") {
                             return true;
                         }
-                    }
-                }
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -1197,7 +1171,7 @@ fn chart_type_from_xml(chart_xml: &str) -> Option<&'static str> {
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => match e.local_name().as_ref() {
+            Ok(Event::Start(e) | Event::Empty(e)) => match e.local_name().as_ref() {
                 b"barChart" => return Some("bar"),
                 b"lineChart" => return Some("line"),
                 b"pieChart" => return Some("pie"),
@@ -1297,8 +1271,8 @@ fn parse_chart_xml_cached_values(chart_xml: &str) -> Result<ChartDataParsed> {
                     }
                 }
                 b"numFmt" => {
-                    if let Some(s) = cur_series.as_mut() {
-                        if s.format_code.is_none() {
+                    if let Some(s) = cur_series.as_mut()
+                        && s.format_code.is_none() {
                             for a in e.attributes().flatten() {
                                 if a.key.as_ref() == b"formatCode" {
                                     let code = String::from_utf8_lossy(&a.value).to_string();
@@ -1309,7 +1283,6 @@ fn parse_chart_xml_cached_values(chart_xml: &str) -> Result<ChartDataParsed> {
                                 }
                             }
                         }
-                    }
                 }
                 b"v" => {
                     in_v = true;
@@ -1343,11 +1316,10 @@ fn parse_chart_xml_cached_values(chart_xml: &str) -> Result<ChartDataParsed> {
                                 if cur_series.is_none() {
                                     cur_series = Some(Default::default());
                                 }
-                                if let Some(s) = cur_series.as_mut() {
-                                    if s.format_code.is_none() {
+                                if let Some(s) = cur_series.as_mut()
+                                    && s.format_code.is_none() {
                                         s.format_code = Some(v.to_string());
                                     }
-                                }
                             }
                         }
                     }
@@ -1431,11 +1403,10 @@ fn unit_from_numfmt(code: Option<&str>) -> Option<String> {
         let tail = &code[start + 2..];
         if let Some(end) = tail.find(']') {
             let inner = &tail[..end];
-            if let Some(sym) = inner.chars().next() {
-                if !sym.is_ascii_alphanumeric() {
+            if let Some(sym) = inner.chars().next()
+                && !sym.is_ascii_alphanumeric() {
                     return Some(sym.to_string());
                 }
-            }
         }
     }
     // e.g. 0.0"kg" -> kg
@@ -1693,16 +1664,14 @@ fn parse_pptx_full_inner(
 
             let is_pic = tag.ends_with(":pic") || tag == "pic";
             if is_pic {
-                if let Some(rid) = extract_first_blip_embed(xml) {
-                    if let Some((_ty, target)) = slide_rels.get(&rid).cloned() {
+                if let Some(rid) = extract_first_blip_embed(xml)
+                    && let Some((_ty, target)) = slide_rels.get(&rid).cloned() {
                         let media_part = resolve_target(&slide_part, &target);
                         if let Ok(img_bytes) = read_zip_file(bytes, &media_part) {
                             embedded_images += 1;
                             let filename = Some(basename(&media_part).to_string());
                             let mime_type = filename
-                                .as_deref()
-                                .map(mime_from_filename)
-                                .unwrap_or_else(|| "application/octet-stream".to_string());
+                                .as_deref().map_or_else(|| "application/octet-stream".to_string(), mime_from_filename);
                             let hash = sha256_hex(&img_bytes);
                             let id = format!("sha256:{hash}");
                             let alt = extract_cnvpr_alt(xml);
@@ -1717,7 +1686,7 @@ fn parse_pptx_full_inner(
                                     .as_deref()
                                     .map(str::trim)
                                     .filter(|s| !s.is_empty())
-                                    .map(|s| s.to_string())
+                                    .map(std::string::ToString::to_string)
                                     .or_else(|| filename.clone())
                                     .unwrap_or_else(|| "image".to_string());
                                 nodes.push(Node {
@@ -1751,7 +1720,6 @@ fn parse_pptx_full_inner(
                             block_index += 1;
                         }
                     }
-                }
                 continue;
             }
 
@@ -1773,8 +1741,8 @@ fn parse_pptx_full_inner(
 
                     if let Some((_ty, target)) = slide_rels.get(&rid).cloned() {
                         let chart_part = resolve_target(&slide_part, &target);
-                        if let Ok(chart_xml) = read_zip_file_utf8(bytes, &chart_part) {
-                            if let Ok(chart) = parse_chart_xml_cached_values(&chart_xml) {
+                        if let Ok(chart_xml) = read_zip_file_utf8(bytes, &chart_part)
+                            && let Ok(chart) = parse_chart_xml_cached_values(&chart_xml) {
                                 let chart_type =
                                     chart_type_from_xml(&chart_xml).unwrap_or("unknown");
                                 charts_meta.push(serde_json::json!({
@@ -1895,7 +1863,6 @@ fn parse_pptx_full_inner(
                                     block_index += 1;
                                 }
                             }
-                        }
                     }
                 } else if graphic_frame_has_smartart(xml) {
                     smartart += 1;
@@ -2106,8 +2073,7 @@ fn parse_pptx_full_inner(
                                 // Mermaid image nodes are not universally supported across renderers.
                                 // Emit a plain rectangle node with the (rewritten) asset path as the label.
                                 mermaid.push_str(&format!(
-                                    "  n{id}@{{ shape: rect, label: \"office-image:{}\" }}\n",
-                                    image_id
+                                    "  n{id}@{{ shape: rect, label: \"office-image:{image_id}\" }}\n"
                                 ));
                             }
                         }
@@ -2115,7 +2081,7 @@ fn parse_pptx_full_inner(
                         mermaid.push_str(&format!("  n{id}@{{ shape: rect, label: \"n{id}\" }}\n"));
                     }
                 }
-                for (from, to, label, dir) in edge_items.into_iter() {
+                for (from, to, label, dir) in edge_items {
                     // Reverse connectors point at the original `from` shape:
                     // swap endpoints so mermaid's arrowhead lands there.
                     let (a, b, arrow) = match dir {
@@ -2243,7 +2209,7 @@ fn parse_pptx_full_inner(
                     })
                 })
                 .collect::<Vec<_>>();
-            complete_edges.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+            complete_edges.sort_by_key(|a| (a.0, a.1));
             let edges_json = complete_edges
                 .into_iter()
                 .map(|(from, to, label)| {

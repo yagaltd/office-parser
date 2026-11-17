@@ -80,7 +80,7 @@ fn test_page_ocr_engine_is_object_safe() {
 
     let mut engine = MinimalEngine;
     let page = ocr_page_through_dyn(&mut engine);
-    assert!(page.blocks.is_empty());
+    assert_eq!(page.blocks, [] as [office_parser::document_ast::Block; 0]);
     assert!(page.confidence.is_none());
     assert!(page.layout_regions.is_none());
     assert!(page.word_boxes.is_none());
@@ -186,9 +186,8 @@ fn test_optional_fields_threaded_into_ocr_metadata() {
 
 fn pdftoppm_available() -> bool {
     std::env::var_os("PATH")
-        .map(|p| {
+        .is_some_and(|p| {
             std::env::split_paths(&p)
                 .any(|dir| dir.join("pdftoppm").is_file() || dir.join("pdftoppm.exe").is_file())
         })
-        .unwrap_or(false)
 }

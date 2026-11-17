@@ -75,6 +75,7 @@ pub enum PageVerdict {
 /// Order matters: an image-only page (`text_richness == 0`) routes to OCR
 /// even when it is also rotated — the image gate comes first, exactly like
 /// `PdfTextQuality::ImageOnly` gates the document-level router.
+#[must_use]
 pub fn page_verdict(text_richness: u32, min_chars: usize, rotated: bool) -> PageVerdict {
     if text_richness == 0 {
         PageVerdict::Ocr {
@@ -157,6 +158,7 @@ pub const NO_INK_REASON: &str = "no-ink";
 /// is undefined/zero/NaN (no verdict from a zero-area page), or when the
 /// boxes corroborate the char count.
 #[cfg(feature = "pdf")]
+#[must_use]
 pub fn no_ink_reason(
     text_richness: u32,
     min_chars: usize,
@@ -212,7 +214,7 @@ fn median_font_size(spans: &[crate::formats::pdf::SpanBox]) -> Option<f32> {
     Some(if sizes.len() % 2 == 1 {
         sizes[mid]
     } else {
-        (sizes[mid - 1] + sizes[mid]) / 2.0
+        f32::midpoint(sizes[mid - 1], sizes[mid])
     })
 }
 

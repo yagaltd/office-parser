@@ -32,7 +32,7 @@ fn json_yaml_toml_emit_markdown_kv_with_max_depth_4_and_tables() -> Result<()> {
         matches!(b, office_parser::document_ast::Block::List { items, .. } if items.iter().any(|it| it.text == "x") && items.iter().any(|it| it.text == "y"))
     }));
 
-    let yaml = r#"
+    let yaml = r"
 a:
   b:
     c:
@@ -51,9 +51,9 @@ items:
 tags:
   - x
   - y
-"#;
+";
     let doc = office_parser::yaml::parse(yaml.as_bytes())?;
-    assert!(!doc.blocks.is_empty());
+    assert_ne!(doc.blocks, [] as [office_parser::document_ast::Block; 0]);
     assert!(
         doc.blocks
             .iter()
@@ -89,7 +89,7 @@ name = "bob"
 tags = ["x", "y"]
 "#;
     let doc = office_parser::toml::parse(toml.as_bytes())?;
-    assert!(!doc.blocks.is_empty());
+    assert_ne!(doc.blocks, [] as [office_parser::document_ast::Block; 0]);
     assert!(
         doc.blocks
             .iter()

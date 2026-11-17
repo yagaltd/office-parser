@@ -43,7 +43,7 @@ impl Renderer<'_> {
                 // pass canvas would read as inverted tints. Mark the group
                 // unsupported so the CMYK pass falls back to straight
                 // composition (documented in cmyk.rs).
-                self.ink.unsupported = true;
+                self.ink.mark_unsupported();
                 let path_transform = self.ctx.transform();
                 let bbox = {
                     let mut bbox = path_transform.transform_rect_bbox(path_bbox());

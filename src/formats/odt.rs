@@ -93,7 +93,7 @@ fn parse_list_style_ordered(styles_xml: &str) -> HashMap<String, bool> {
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
                 if e.name().as_ref() == b"text:list-style" {
                     cur = attr_val(&e, b"style:name");
                     cur_ordered = false;
@@ -108,11 +108,10 @@ fn parse_list_style_ordered(styles_xml: &str) -> HashMap<String, bool> {
                 }
             }
             Ok(Event::End(e)) => {
-                if e.name().as_ref() == b"text:list-style" {
-                    if let Some(name) = cur.take() {
+                if e.name().as_ref() == b"text:list-style"
+                    && let Some(name) = cur.take() {
                         out.insert(name, cur_ordered);
                     }
-                }
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -139,14 +138,13 @@ fn extract_odt_title(bytes: &[u8]) -> Option<String> {
                 }
             }
             Ok(Event::Text(e)) => {
-                if in_title {
-                    if let Ok(t) = String::from_utf8(e.to_vec()) {
+                if in_title
+                    && let Ok(t) = String::from_utf8(e.to_vec()) {
                         let t = t.trim();
                         if !t.is_empty() {
                             return Some(t.to_string());
                         }
                     }
-                }
             }
             Ok(Event::End(e)) => {
                 if e.local_name().as_ref() == b"title" {
@@ -265,7 +263,7 @@ pub(crate) fn parse_odt_text_styles(content_xml: &str) -> HashMap<String, SpanSt
     let mut cur: Option<(String, Option<String>, SpanStyle)> = None;
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
                 let ln = e.local_name();
                 if ln.as_ref() == b"style" {
                     let family = attr_val(&e, b"style:family").unwrap_or_default();
@@ -274,8 +272,8 @@ pub(crate) fn parse_odt_text_styles(content_xml: &str) -> HashMap<String, SpanSt
                         let parent = attr_val(&e, b"style:parent-style-name");
                         cur = Some((name, parent, (false, false, false)));
                     }
-                } else if ln.as_ref() == b"text-properties" {
-                    if let Some((_, _, flags)) = cur.as_mut() {
+                } else if ln.as_ref() == b"text-properties"
+                    && let Some((_, _, flags)) = cur.as_mut() {
                         if let Some(w) = attr_val(&e, b"fo:font-weight") {
                             flags.0 = w.eq_ignore_ascii_case("bold");
                         }
@@ -286,14 +284,12 @@ pub(crate) fn parse_odt_text_styles(content_xml: &str) -> HashMap<String, SpanSt
                             flags.2 = !lt.eq_ignore_ascii_case("none");
                         }
                     }
-                }
             }
             Ok(Event::End(e)) => {
-                if e.local_name().as_ref() == b"style" {
-                    if let Some(c) = cur.take() {
+                if e.local_name().as_ref() == b"style"
+                    && let Some(c) = cur.take() {
                         raw.push(c);
                     }
-                }
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -412,11 +408,10 @@ fn extract_text_and_links(xml: &[u8], styles: &HashMap<String, SpanStyle>) -> Re
                 if e.name().as_ref() == b"text:a" {
                     in_a = false;
                     let end_char = out.chars().count();
-                    if let Some(href) = cur_href.as_ref() {
-                        if end_char > a_start {
+                    if let Some(href) = cur_href.as_ref()
+                        && end_char > a_start {
                             link_ranges.push((a_start, end_char, href.clone()));
                         }
-                    }
                     if let Some(href) = cur_href.take() {
                         let display = cur_text.trim().to_string();
                         links.push((
@@ -480,11 +475,10 @@ fn parse_heading(
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
-                if depth == 0 && e.name().as_ref() == b"text:h" {
-                    if let Some(v) = attr_val(&e, b"text:outline-level") {
+                if depth == 0 && e.name().as_ref() == b"text:h"
+                    && let Some(v) = attr_val(&e, b"text:outline-level") {
                         level = v.parse::<u8>().unwrap_or(1).max(1);
                     }
-                }
                 depth += 1;
                 write_start_tag(&mut inner, &e);
             }
@@ -706,9 +700,9 @@ fn extract_draw_object_hrefs(xml: &[u8]) -> Vec<String> {
     let mut out = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                if e.name().as_ref() == b"draw:object" || e.name().as_ref() == b"draw:object-ole" {
-                    if let Some(href) = attr_val(&e, b"xlink:href") {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
+                if (e.name().as_ref() == b"draw:object" || e.name().as_ref() == b"draw:object-ole")
+                    && let Some(href) = attr_val(&e, b"xlink:href") {
                         let mut p = href.trim().to_string();
                         while p.starts_with("./") {
                             p = p.trim_start_matches("./").to_string();
@@ -717,7 +711,6 @@ fn extract_draw_object_hrefs(xml: &[u8]) -> Vec<String> {
                             out.push(p);
                         }
                     }
-                }
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -788,14 +781,13 @@ fn extract_chart_type_and_title(xml: &str) -> (Option<String>, Option<String>) {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
-                if e.name().as_ref() == b"chart:chart" {
-                    if chart_type.is_none() {
+                if e.name().as_ref() == b"chart:chart"
+                    && chart_type.is_none() {
                         chart_type =
                             attr_val(&e, b"chart:class").or_else(|| attr_val(&e, b"class"));
                         chart_type = chart_type
                             .map(|v| v.rsplit(':').next().unwrap_or(v.as_str()).to_string());
                     }
-                }
                 if e.name().as_ref() == b"chart:title" {
                     in_chart_title = true;
                     title.clear();
@@ -948,11 +940,10 @@ fn diagram_from_xml(xml: &[u8]) -> Result<Option<(String, serde_json::Value)>> {
                     conns.push((start_id, end_id, dir, coords, None));
                 }
                 b"draw:enhanced-geometry" => {
-                    if let Some((_, shape_type, _, _)) = pending_frame.last_mut() {
-                        if shape_type.is_none() {
+                    if let Some((_, shape_type, _, _)) = pending_frame.last_mut()
+                        && shape_type.is_none() {
                             *shape_type = attr_val(&e, b"draw:type");
                         }
-                    }
                 }
                 _ => {}
             },
@@ -993,11 +984,11 @@ fn diagram_from_xml(xml: &[u8]) -> Result<Option<(String, serde_json::Value)>> {
                 }
             }
             Ok(Event::End(e)) => {
-                if e.name().as_ref() == b"draw:frame" || e.name().as_ref() == b"draw:custom-shape" {
-                    if let Some((id, shape_type, bbox, text)) = pending_frame.pop() {
+                if (e.name().as_ref() == b"draw:frame" || e.name().as_ref() == b"draw:custom-shape")
+                    && let Some((id, shape_type, bbox, text)) = pending_frame.pop() {
                         let t = text.trim();
-                        if let (Some(id_s), Some((x, y, w, h))) = (id.as_deref(), bbox) {
-                            if !t.is_empty() {
+                        if let (Some(id_s), Some((x, y, w, h))) = (id.as_deref(), bbox)
+                            && !t.is_empty() {
                                 let node_id =
                                     *node_by_id.entry(id_s.to_string()).or_insert_with(|| {
                                         let id = next_id;
@@ -1016,9 +1007,7 @@ fn diagram_from_xml(xml: &[u8]) -> Result<Option<(String, serde_json::Value)>> {
                                     h,
                                 });
                             }
-                        }
                     }
-                }
                 if e.name().as_ref() == b"draw:connector" || e.name().as_ref() == b"draw:line" {
                     in_connector = false;
                     if let Some(last) = conns.last_mut() {
@@ -1062,8 +1051,8 @@ fn diagram_from_xml(xml: &[u8]) -> Result<Option<(String, serde_json::Value)>> {
     for (s, t, dir, coords, label) in conns {
         let mut from = s.as_deref().and_then(|id| node_by_id.get(id).copied());
         let mut to = t.as_deref().and_then(|id| node_by_id.get(id).copied());
-        if from.is_none() || to.is_none() {
-            if let Some((x1, y1, x2, y2)) = coords {
+        if (from.is_none() || to.is_none())
+            && let Some((x1, y1, x2, y2)) = coords {
                 if from.is_none() {
                     from = nearest(x1, y1);
                 }
@@ -1071,7 +1060,6 @@ fn diagram_from_xml(xml: &[u8]) -> Result<Option<(String, serde_json::Value)>> {
                     to = nearest(x2, y2);
                 }
             }
-        }
         let (Some(from), Some(to)) = (from, to) else {
             continue;
         };
@@ -1106,8 +1094,8 @@ fn diagram_from_xml(xml: &[u8]) -> Result<Option<(String, serde_json::Value)>> {
         ids.insert(e.to);
     }
     let node_map: HashMap<u32, &Node> = nodes.iter().map(|n| (n.id, n)).collect();
-    for id in ids.iter().copied() {
-        if let Some(n) = node_map.get(&id).copied() {
+    for id in &ids {
+        if let Some(n) = node_map.get(id).copied() {
             mermaid.push_str(&format!(
                 "  n{id}@{{ shape: {}, label: \"{}\" }}\n",
                 n.mermaid_shape,
@@ -1162,25 +1150,24 @@ fn extract_odt_images(
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
                 if e.name().as_ref() == b"draw:frame" {
                     pending_alt = attr_val(&e, b"draw:name");
                 }
-                if e.name().as_ref() == b"draw:image" {
-                    if let Some(href) = attr_val(&e, b"xlink:href") {
+                if e.name().as_ref() == b"draw:image"
+                    && let Some(href) = attr_val(&e, b"xlink:href") {
                         let mut p = href.clone();
                         while p.starts_with("./") {
                             p = p.trim_start_matches("./").to_string();
                         }
                         let entry = p;
                         if let Ok(img_bytes) = read_zip_file(bytes, &entry) {
-                            let filename = entry.split('/').last().unwrap_or("").to_string();
+                            let filename = entry.split('/').next_back().unwrap_or("").to_string();
                             let _mime = mime_from_filename(&filename);
                             out.push((href, pending_alt.take(), img_bytes, filename));
                             pending_alt = None;
                         }
                     }
-                }
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -1197,13 +1184,13 @@ pub fn parse_odt(bytes: &[u8]) -> Result<Vec<Block>> {
 }
 
 pub fn parse_odt_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
-    let mimetype = read_zip_file_utf8(bytes, "mimetype").unwrap_or_else(|_| "".to_string());
+    let mimetype = read_zip_file_utf8(bytes, "mimetype").unwrap_or_else(|_| String::new());
     if !mimetype.contains("opendocument.text") {
         return Err(anyhow!("not an ODT (mimetype={})", mimetype.trim()));
     }
 
     let content_xml = read_zip_file_utf8(bytes, "content.xml").context("read ODT content.xml")?;
-    let styles_xml = read_zip_file_utf8(bytes, "styles.xml").unwrap_or_else(|_| "".to_string());
+    let styles_xml = read_zip_file_utf8(bytes, "styles.xml").unwrap_or_else(|_| String::new());
     let list_styles = parse_list_style_ordered(&styles_xml);
 
     let text_styles = parse_odt_text_styles(&content_xml);
@@ -1350,11 +1337,10 @@ pub fn parse_odt_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                     reader.config_mut().trim_text(true);
                     let mut b = Vec::new();
                     let mut name: Option<String> = None;
-                    if let Ok(Event::Start(e)) = reader.read_event_into(&mut b) {
-                        if e.name().as_ref() == b"text:list" {
+                    if let Ok(Event::Start(e)) = reader.read_event_into(&mut b)
+                        && e.name().as_ref() == b"text:list" {
                             name = attr_val(&e, b"text:style-name");
                         }
-                    }
                     name
                 };
                 let ordered = style_name

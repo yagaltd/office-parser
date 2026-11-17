@@ -62,11 +62,10 @@ fn decode_data_image_uri(uri: &str) -> Result<Option<(Vec<u8>, String)>> {
 }
 
 fn extract_quoted_or_last_token(inst: &str) -> Option<String> {
-    if let Some(first) = inst.find('"') {
-        if let Some(second) = inst[first + 1..].find('"') {
+    if let Some(first) = inst.find('"')
+        && let Some(second) = inst[first + 1..].find('"') {
             return Some(inst[first + 1..first + 1 + second].to_string());
         }
-    }
     inst.split_whitespace()
         .rev()
         .find(|t| {
@@ -78,8 +77,8 @@ fn extract_quoted_or_last_token(inst: &str) -> Option<String> {
 }
 
 fn push_para_link(out: &mut Vec<(String, Option<String>)>, url: String, txt: Option<String>) {
-    if let Some((prev_url, prev_txt)) = out.last_mut() {
-        if prev_url == &url {
+    if let Some((prev_url, prev_txt)) = out.last_mut()
+        && prev_url == &url {
             match (prev_txt.as_mut(), txt) {
                 (Some(a), Some(b)) => a.push_str(&b),
                 (None, Some(b)) => *prev_txt = Some(b),
@@ -87,7 +86,6 @@ fn push_para_link(out: &mut Vec<(String, Option<String>)>, url: String, txt: Opt
             }
             return;
         }
-    }
     out.push((url, txt));
 }
 
@@ -156,17 +154,14 @@ fn decompress_rtf(data: &[u8]) -> Result<Vec<u8>> {
 
     if &compression_type != b"LZFu" {
         return Err(anyhow!(
-            "unknown compressed RTF signature: {:?}",
-            compression_type
+            "unknown compressed RTF signature: {compression_type:?}"
         ));
     }
 
     let calculated = crc32fast::hash(payload);
     if calculated != crc32 {
         return Err(anyhow!(
-            "compressed RTF CRC32 mismatch: expected {:#x}, got {:#x}",
-            crc32,
-            calculated
+            "compressed RTF CRC32 mismatch: expected {crc32:#x}, got {calculated:#x}"
         ));
     }
 
@@ -293,7 +288,7 @@ impl Default for GroupCtx {
 }
 
 fn is_hex_digit(b: u8) -> bool {
-    (b'0'..=b'9').contains(&b) || (b'a'..=b'f').contains(&b) || (b'A'..=b'F').contains(&b)
+    b.is_ascii_digit() || (b'a'..=b'f').contains(&b) || (b'A'..=b'F').contains(&b)
 }
 
 fn hex_val(b: u8) -> Option<u8> {
@@ -367,8 +362,8 @@ fn flush_pending_list(
     next_block_index: &mut usize,
     pending_list: &mut Option<(bool, Vec<ListItem>)>,
 ) {
-    if let Some((ordered, items)) = pending_list.take() {
-        if !items.is_empty() {
+    if let Some((ordered, items)) = pending_list.take()
+        && !items.is_empty() {
             blocks.push(Block::List {
                 block_index: *next_block_index,
                 ordered,
@@ -377,7 +372,6 @@ fn flush_pending_list(
             });
             *next_block_index += 1;
         }
-    }
 }
 
 fn flush_table_if_any(
@@ -447,7 +441,10 @@ fn flush_paragraph(
         return;
     }
 
-    if !text.is_empty() {
+    if text.is_empty() {
+        flush_pending_list(blocks, next_block_index, pending_list);
+        cur_para_links.clear();
+    } else {
         flush_pending_list(blocks, next_block_index, pending_list);
         blocks.push(Block::Paragraph {
             block_index: *next_block_index,
@@ -467,9 +464,6 @@ fn flush_paragraph(
             });
             *next_block_index += 1;
         }
-    } else {
-        flush_pending_list(blocks, next_block_index, pending_list);
-        cur_para_links.clear();
     }
 }
 
@@ -516,18 +510,16 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
             b'}' => {
                 let ended = group_stack.pop().unwrap_or_default();
 
-                if ended.pict_started_here {
-                    if let Some(pict) = pict_stack.pop() {
-                        let data = if !pict.raw.is_empty() {
-                            pict.raw
-                        } else {
+                if ended.pict_started_here
+                    && let Some(pict) = pict_stack.pop() {
+                        let data = if pict.raw.is_empty() {
                             decode_hex_string(&pict.hex)
+                        } else {
+                            pict.raw
                         };
                         if !data.is_empty() {
                             let mime = if pict.mime_type == "application/octet-stream" {
-                                sniff_image_mime(&data)
-                                    .map(|s| s.to_string())
-                                    .unwrap_or_else(|| pict.mime_type.clone())
+                                sniff_image_mime(&data).map_or_else(|| pict.mime_type.clone(), std::string::ToString::to_string)
                             } else {
                                 pict.mime_type.clone()
                             };
@@ -548,11 +540,10 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                                         | "image/webp"
                                         | "image/bmp"
                                 );
-                                if is_raster {
-                                    if let Some(f) = field_stack.last_mut() {
+                                if is_raster
+                                    && let Some(f) = field_stack.last_mut() {
                                         f.saw_raster_image = true;
                                     }
-                                }
                                 let hash = sha256_hex(&data);
                                 images.push(ParsedImage {
                                     id: format!("sha256:{hash}"),
@@ -572,14 +563,13 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                             }
                         }
                     }
-                }
 
                 if group_stack.is_empty() {
                     group_stack.push(GroupCtx::default());
                 }
 
-                if ended.field_started_here {
-                    if let Some(field) = field_stack.pop() {
+                if ended.field_started_here
+                    && let Some(field) = field_stack.pop() {
                         let inst = field.inst;
                         let rslt = normalize_ws(&field.rslt);
                         let inst_upper = inst.to_ascii_uppercase();
@@ -597,8 +587,7 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                             if let Some((bytes, mime)) = decode_data_image_uri(&url)? {
                                 if !bytes.is_empty() {
                                     let mime = sniff_image_mime(&bytes)
-                                        .map(|s| s.to_string())
-                                        .unwrap_or(mime);
+                                        .map_or(mime, std::string::ToString::to_string);
                                     let hash = sha256_hex(&bytes);
                                     images.push(ParsedImage {
                                         id: format!("sha256:{hash}"),
@@ -630,7 +619,6 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                             push_para_link(&mut cur_para_links, url, txt);
                         }
                     }
-                }
             }
             b'\n' | b'\r' => {}
             b'\\' => {
@@ -648,8 +636,7 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                     b'{' => {
                         let dest = group_stack
                             .last()
-                            .map(|g| g.destination)
-                            .unwrap_or(Destination::Skip);
+                            .map_or(Destination::Skip, |g| g.destination);
                         if dest == Destination::Document || dest == Destination::FieldRslt {
                             cur_text.push('{');
                         }
@@ -657,8 +644,7 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                     b'}' => {
                         let dest = group_stack
                             .last()
-                            .map(|g| g.destination)
-                            .unwrap_or(Destination::Skip);
+                            .map_or(Destination::Skip, |g| g.destination);
                         if dest == Destination::Document || dest == Destination::FieldRslt {
                             cur_text.push('}');
                         }
@@ -666,8 +652,7 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                     b'\\' => {
                         let dest = group_stack
                             .last()
-                            .map(|g| g.destination)
-                            .unwrap_or(Destination::Skip);
+                            .map_or(Destination::Skip, |g| g.destination);
                         if dest == Destination::Document || dest == Destination::FieldRslt {
                             cur_text.push('\\');
                         }
@@ -675,8 +660,7 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                     b'~' => {
                         let dest = group_stack
                             .last()
-                            .map(|g| g.destination)
-                            .unwrap_or(Destination::Skip);
+                            .map_or(Destination::Skip, |g| g.destination);
                         if dest == Destination::Document || dest == Destination::FieldRslt {
                             cur_text.push(' ');
                         }
@@ -684,8 +668,7 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                     b'-' | b'_' => {
                         let dest = group_stack
                             .last()
-                            .map(|g| g.destination)
-                            .unwrap_or(Destination::Skip);
+                            .map_or(Destination::Skip, |g| g.destination);
                         if dest == Destination::Document || dest == Destination::FieldRslt {
                             cur_text.push('-');
                         }
@@ -713,11 +696,10 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                                         } else {
                                             push_byte_as_text(&mut cur_text, top.encoding, val);
                                         }
-                                        if top.destination == Destination::FieldRslt {
-                                            if let Some(f) = field_stack.last_mut() {
+                                        if top.destination == Destination::FieldRslt
+                                            && let Some(f) = field_stack.last_mut() {
                                                 push_byte_as_text(&mut f.rslt, top.encoding, val);
                                             }
-                                        }
                                     }
                                     Destination::FieldInst => {
                                         if let Some(f) = field_stack.last_mut() {
@@ -740,7 +722,7 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                         word.push(c);
                         while pos < bytes.len() {
                             let ch = bytes[pos];
-                            if (b'a'..=b'z').contains(&ch) || (b'A'..=b'Z').contains(&ch) {
+                            if ch.is_ascii_lowercase() || ch.is_ascii_uppercase() {
                                 word.push(ch);
                                 pos += 1;
                             } else {
@@ -759,9 +741,9 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                         let mut saw = false;
                         while pos < bytes.len() {
                             let ch = bytes[pos];
-                            if (b'0'..=b'9').contains(&ch) {
+                            if ch.is_ascii_digit() {
                                 saw = true;
-                                n = n.saturating_mul(10).saturating_add((ch - b'0') as i32);
+                                n = n.saturating_mul(10).saturating_add(i32::from(ch - b'0'));
                                 pos += 1;
                             } else {
                                 break;
@@ -815,11 +797,10 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                                                 } else {
                                                     cur_text.push(ch);
                                                 }
-                                                if top.destination == Destination::FieldRslt {
-                                                    if let Some(f) = field_stack.last_mut() {
+                                                if top.destination == Destination::FieldRslt
+                                                    && let Some(f) = field_stack.last_mut() {
                                                         f.rslt.push(ch);
                                                     }
-                                                }
                                             }
                                             Destination::FieldInst => {
                                                 if let Some(f) = field_stack.last_mut() {
@@ -965,8 +946,8 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                                     p.mime_type = "image/bmp".to_string();
                                 }
                             }
-                            "bin" => {
-                                if top.destination == Destination::Pict {
+                            "bin"
+                                if top.destination == Destination::Pict => {
                                     let n = num.unwrap_or(0).max(0) as usize;
                                     let end = (pos + n).min(bytes.len());
                                     if let Some(p) = pict_stack.last_mut() {
@@ -974,7 +955,6 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                                     }
                                     pos = end;
                                 }
-                            }
                             _ => {}
                         }
                     }
@@ -990,11 +970,10 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                 match top.destination {
                     Destination::Skip => {}
                     Destination::Pict => {
-                        if is_hex_digit(b) {
-                            if let Some(p) = pict_stack.last_mut() {
+                        if is_hex_digit(b)
+                            && let Some(p) = pict_stack.last_mut() {
                                 p.hex.push(b as char);
                             }
-                        }
                     }
                     Destination::FieldInst => {
                         if let Some(f) = field_stack.last_mut() {
@@ -1007,11 +986,10 @@ pub fn parse_rtf_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                         } else {
                             push_byte_as_text(&mut cur_text, top.encoding, b);
                         }
-                        if top.destination == Destination::FieldRslt {
-                            if let Some(f) = field_stack.last_mut() {
+                        if top.destination == Destination::FieldRslt
+                            && let Some(f) = field_stack.last_mut() {
                                 push_byte_as_text(&mut f.rslt, top.encoding, b);
                             }
-                        }
                     }
                 }
             }

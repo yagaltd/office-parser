@@ -2,7 +2,7 @@
 //! cache, so `render_pages_png` can use the pdfium backend (feature
 //! `render-pdfium`).
 //!
-//!   cargo run --features render-pdfium --example install_pdfium
+//!   cargo run --features render-pdfium --example `install_pdfium`
 
 fn main() {
     match office_parser::formats::pdf::install_pdfium() {

@@ -13,13 +13,13 @@ pub(crate) struct CellDisplay {
 }
 
 impl CellDisplay {
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.text.trim().is_empty() && !self.is_error && self.formula.is_none()
     }
 }
 
 pub(crate) fn normalize_cell_text(mut s: String, max_chars: usize) -> String {
-    s = s.replace('\r', " ").replace('\n', " ");
+    s = s.replace(['\r', '\n'], " ");
     let t = s.trim();
     if t.chars().count() <= max_chars {
         return t.to_string();
@@ -54,7 +54,7 @@ pub(crate) fn excel_col_index_from_name(col: &str) -> Option<usize> {
     let mut out: usize = 0;
     for ch in col.chars() {
         let up = ch.to_ascii_uppercase();
-        if !(('A'..='Z').contains(&up)) {
+        if !up.is_ascii_uppercase() {
             return None;
         }
         out = out * 26 + ((up as u8 - b'A') as usize + 1);
@@ -78,7 +78,7 @@ pub(crate) fn split_regions(
     let mut empty_run = 0usize;
 
     for (i, r) in rows.iter().enumerate() {
-        let is_empty = r.iter().all(|c| c.is_empty());
+        let is_empty = r.iter().all(CellDisplay::is_empty);
         if !in_region {
             if !is_empty {
                 in_region = true;
@@ -195,13 +195,12 @@ fn is_repeated_header_row(row: &[CellDisplay], header_row: &[CellDisplay]) -> bo
     for ci in 0..cols {
         let h = header_row
             .get(ci)
-            .map(|c| norm_cmp(&c.text))
-            .unwrap_or_default();
+            .map_or_default(|c| norm_cmp(&c.text));
         if h.is_empty() {
             continue;
         }
         header_non_empty += 1;
-        let v = row.get(ci).map(|c| norm_cmp(&c.text)).unwrap_or_default();
+        let v = row.get(ci).map_or_default(|c| norm_cmp(&c.text));
         if v == h {
             matches += 1;
         }
@@ -229,8 +228,8 @@ pub(crate) fn semantic_row_ranges(
         return Vec::new();
     }
 
-    let header_row = if has_header { rows.get(0) } else { None };
-    let start0 = if has_header { 1usize } else { 0usize };
+    let header_row = if has_header { rows.first() } else { None };
+    let start0 = usize::from(has_header);
     if rows.len() <= start0 {
         return Vec::new();
     }
@@ -239,15 +238,14 @@ pub(crate) fn semantic_row_ranges(
     let mut cur = start0;
 
     for i in start0..rows.len() {
-        if let Some(h) = header_row {
-            if i > cur + 3 && is_repeated_header_row(&rows[i], h) {
+        if let Some(h) = header_row
+            && i > cur + 3 && is_repeated_header_row(&rows[i], h) {
                 if i > cur {
                     out.push((cur, i));
                 }
                 cur = i + 1; // skip the repeated header row
                 continue;
             }
-        }
 
         if is_totalish_row(&rows[i]) {
             let end = i + 1;
@@ -302,26 +300,23 @@ pub(crate) fn resolve_group_by_col_and_label(
         return None;
     }
 
-    if spec_t.chars().all(|c| c.is_ascii_alphabetic()) {
-        if let Some(ci) = excel_col_index_from_name(spec_t) {
-            if ci >= col_start && ci < col_end {
+    if spec_t.chars().all(|c| c.is_ascii_alphabetic())
+        && let Some(ci) = excel_col_index_from_name(spec_t)
+            && ci >= col_start && ci < col_end {
                 return Some((ci, excel_col_name(ci)));
             }
-        }
-    }
 
-    if has_header {
-        if let Some(h) = rows.first() {
+    if has_header
+        && let Some(h) = rows.first() {
             let want = norm_cmp(spec_t);
             for ci in col_start..col_end {
-                let got = h.get(ci).map(|c| norm_cmp(&c.text)).unwrap_or_default();
+                let got = h.get(ci).map_or_default(|c| norm_cmp(&c.text));
                 if !got.is_empty() && got == want {
-                    let label = h.get(ci).map(|c| c.text.trim()).unwrap_or("key");
+                    let label = h.get(ci).map_or("key", |c| c.text.trim());
                     return Some((ci, label.to_string()));
                 }
             }
         }
-    }
 
     None
 }
@@ -350,8 +345,7 @@ pub(crate) fn semantic_segments(
                 let key_raw = rows
                     .get(i)
                     .and_then(|r| r.get(kc))
-                    .map(|c| c.text.trim())
-                    .unwrap_or("");
+                    .map_or("", |c| c.text.trim());
                 let key_norm = norm_cmp(key_raw);
                 if key_norm.is_empty() {
                     continue;
@@ -419,8 +413,8 @@ pub(crate) fn region_col_bounds(region_rows: &[Vec<CellDisplay>]) -> Option<(usi
             if c.is_empty() {
                 continue;
             }
-            min_c = Some(min_c.map(|v| v.min(ci)).unwrap_or(ci));
-            max_c = Some(max_c.map(|v| v.max(ci)).unwrap_or(ci));
+            min_c = Some(min_c.map_or(ci, |v| v.min(ci)));
+            max_c = Some(max_c.map_or(ci, |v| v.max(ci)));
         }
     }
     let (min_c, max_c) = (min_c?, max_c?);
@@ -495,7 +489,7 @@ pub(crate) fn build_table_block_from_parts(
     if let Some(h) = header_row {
         for &c in &selected_cols {
             header.push(Cell {
-                text: h.get(c).map(|cc| cc.text.clone()).unwrap_or_default(),
+                text: h.get(c).map_or_default(|cc| cc.text.clone()),
                 colspan: 1,
                 rowspan: 1,
             });
@@ -515,7 +509,7 @@ pub(crate) fn build_table_block_from_parts(
         let mut out_r: Vec<Cell> = Vec::with_capacity(cols);
         for &c in &selected_cols {
             out_r.push(Cell {
-                text: r.get(c).map(|cc| cc.text.clone()).unwrap_or_default(),
+                text: r.get(c).map_or_default(|cc| cc.text.clone()),
                 colspan: 1,
                 rowspan: 1,
             });

@@ -70,8 +70,7 @@ fn resolve_model_dir() -> Result<PathBuf, String> {
         let p = PathBuf::from(dir);
         if needed_files(&p).is_empty() {
             if std::fs::read_to_string(p.join("meta.json"))
-                .map(|m| m.contains("\"rec_window\""))
-                .unwrap_or(false)
+                .is_ok_and(|m| m.contains("\"rec_window\""))
             {
                 return Err(format!(
                     "{} is a new-format Indra revision (windowed recognition); \
@@ -95,8 +94,7 @@ fn resolve_model_dir() -> Result<PathBuf, String> {
                 let p = e.path();
                 if needed_files(&p).is_empty()
                     && !std::fs::read_to_string(p.join("meta.json"))
-                        .map(|m| m.contains("\"rec_window\""))
-                        .unwrap_or(false)
+                        .is_ok_and(|m| m.contains("\"rec_window\""))
                 {
                     candidates.push(p);
                 }
@@ -108,8 +106,7 @@ fn resolve_model_dir() -> Result<PathBuf, String> {
             .and_then(|m| m.modified())
             .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
-            .unwrap_or(0)
+            .map_or(0, |d| d.as_secs())
     });
     candidates.pop().ok_or_else(|| {
         "no Indra models found: set INDRA_OCR_MODEL_DIR to a folder with \
@@ -236,14 +233,14 @@ fn page_to_input(gray: &GrayPage, long_side: i64) -> (Vec<f32>, usize, usize, f3
     let scale = long_side as f32 / (gray.w.max(gray.h) as f32);
     let nw = ((gray.w as f32 * scale).round() as usize).max(1);
     let nh = ((gray.h as f32 * scale).round() as usize).max(1);
-    let small = if (nw, nh) != (gray.w, gray.h) {
-        gray.resize(nw, nh)
-    } else {
+    let small = if (nw, nh) == (gray.w, gray.h) {
         GrayPage {
             w: gray.w,
             h: gray.h,
             data: gray.data.clone(),
         }
+    } else {
+        gray.resize(nw, nh)
     };
     let (nw, nh) = (small.w, small.h);
     let ph = (nh as f32 / INPUT_MULTIPLE).ceil() as usize * INPUT_MULTIPLE as usize;
@@ -251,7 +248,7 @@ fn page_to_input(gray: &GrayPage, long_side: i64) -> (Vec<f32>, usize, usize, f3
     let mut out = vec![0.0f32; ph * pw]; // ink map: 0 = white
     for r in 0..nh {
         for c in 0..nw {
-            out[r * pw + c] = 1.0 - small.data[r * nw + c] as f32 / 255.0;
+            out[r * pw + c] = 1.0 - f32::from(small.data[r * nw + c]) / 255.0;
         }
     }
     (out, ph, pw, scale)
@@ -302,9 +299,9 @@ fn connected_components(
             comp.min_col = comp.min_col.min(c as i32);
             comp.max_col = comp.max_col.max(c as i32 + 1);
             let ys = (r as f32 + 0.5) * OUT_STRIDE;
-            comp.sum_top += (ys - top[p]) as f64;
-            comp.sum_bot += (ys + bot[p]) as f64;
-            comp.sum_prob += core[p] as f64;
+            comp.sum_top += f64::from(ys - top[p]);
+            comp.sum_bot += f64::from(ys + bot[p]);
+            comp.sum_prob += f64::from(core[p]);
             if c > 0 && mask[p - 1] && labels[p - 1] == 0 {
                 labels[p - 1] = id;
                 stack.push(p - 1);
@@ -327,7 +324,7 @@ fn connected_components(
     Components { comps }
 }
 
-/// det_post.decode — out is [3, h, w] (core logit, top dist, bottom dist).
+/// `det_post.decode` — out is [3, h, w] (core logit, top dist, bottom dist).
 /// Returns boxes in input pixels: (x0, y0, x1, y1, score).
 fn det_decode(out: &[f32], h: usize, w: usize, thresh: f32, min_area: i32) -> Vec<(f32, f32, f32, f32, f32)> {
     let n = h * w;
@@ -341,7 +338,7 @@ fn det_decode(out: &[f32], h: usize, w: usize, thresh: f32, min_area: i32) -> Ve
         if c.area < min_area {
             continue;
         }
-        let cnt = c.area as f64;
+        let cnt = f64::from(c.area);
         let y0 = (c.sum_top / cnt) as f32;
         let y1 = (c.sum_bot / cnt) as f32;
         let score = (c.sum_prob / cnt) as f32;
@@ -369,7 +366,7 @@ fn median(vals: &mut [f32]) -> f32 {
 
 // --- recognition ---------------------------------------------------------
 
-/// rec_preproc.crop_line — expand the box, crop (white outside the page),
+/// `rec_preproc.crop_line` — expand the box, crop (white outside the page),
 /// resize to `height` px keeping aspect. Returns (width, ink map).
 fn crop_line(gray: &GrayPage, bx: (f32, f32, f32, f32), height: usize) -> (usize, Vec<f32>) {
     let (x0, y0, x1, y1) = bx;
@@ -388,8 +385,8 @@ fn crop_line(gray: &GrayPage, bx: (f32, f32, f32, f32), height: usize) -> (usize
     let mut crop = vec![255u8; cw * ch];
     let sx0 = ix0.max(0);
     let sy0 = iy0.max(0);
-    let sx1 = (ix1 as i64).min(gray.w as i64);
-    let sy1 = (iy1 as i64).min(gray.h as i64);
+    let sx1 = ix1.min(gray.w as i64);
+    let sy1 = iy1.min(gray.h as i64);
     if sx1 > sx0 && sy1 > sy0 {
         for r in sy0..sy1 {
             let dst = ((r - iy0) as usize) * cw + ((sx0 - ix0) as usize);
@@ -410,12 +407,12 @@ fn crop_line(gray: &GrayPage, bx: (f32, f32, f32, f32), height: usize) -> (usize
     let ink = resized
         .into_raw()
         .into_iter()
-        .map(|v| 1.0 - v as f32 / 255.0)
+        .map(|v| 1.0 - f32::from(v) / 255.0)
         .collect();
     (out_w, ink)
 }
 
-/// rec_preproc.pad_batch — right-pad ink maps to one width (multiple of 8).
+/// `rec_preproc.pad_batch` — right-pad ink maps to one width (multiple of 8).
 /// Returns ([B,1,H,W] data, widths).
 fn pad_batch(crops: &[(usize, Vec<f32>)]) -> (Vec<f32>, Vec<i64>, usize) {
     let b = crops.len();
@@ -437,11 +434,11 @@ fn pad_batch(crops: &[(usize, Vec<f32>)]) -> (Vec<f32>, Vec<i64>, usize) {
     (data, widths, wm)
 }
 
-/// rec_preproc.width_batches — group line indices into batches that keep
-/// batch width bounded. Narrowest first; a batch closes at MAX_BATCH lines,
-/// when the next line is wider than MAX_RATIO x the batch's first line
-/// (widths below MIN_WIDTH count as MIN_WIDTH), or when lines x width would
-/// pass MAX_AREA pixel columns.
+/// `rec_preproc.width_batches` — group line indices into batches that keep
+/// batch width bounded. Narrowest first; a batch closes at `MAX_BATCH` lines,
+/// when the next line is wider than `MAX_RATIO` x the batch's first line
+/// (widths below `MIN_WIDTH` count as `MIN_WIDTH`), or when lines x width would
+/// pass `MAX_AREA` pixel columns.
 fn width_batches(crops: &[(usize, Vec<f32>)]) -> Vec<Vec<usize>> {
     const MAX_BATCH: usize = 48;
     const MIN_WIDTH: usize = 128;
@@ -458,7 +455,7 @@ fn width_batches(crops: &[(usize, Vec<f32>)]) -> Vec<Vec<usize>> {
                     && (w as f32) <= crops[b[0]].0.max(MIN_WIDTH) as f32 * MAX_RATIO
                     && b.len() * w <= MAX_AREA =>
             {
-                b.push(i)
+                b.push(i);
             }
             _ => batches.push(vec![i]),
         }
@@ -495,11 +492,11 @@ fn line_features(boxes: &[(f32, f32, f32, f32)], wh: (f32, f32), texts: &[String
             med_h / h * 20.0,
         ];
         feats[i * N_FEATS..i * N_FEATS + 10].copy_from_slice(&g);
-        let t = texts.get(i).map(|s| s.trim()).unwrap_or("");
+        let t = texts.get(i).map_or("", |s| s.trim());
         if t.is_empty() {
             continue;
         }
-        let digits = t.chars().filter(|c| c.is_ascii_digit()).count() as f32 / t.len() as f32;
+        let digits = t.chars().filter(char::is_ascii_digit).count() as f32 / t.len() as f32;
         // t[:3] in Python is CHAR-based; slicing bytes panics on multibyte text
         let first3: String = t.chars().take(3).collect();
         let first3_num = first3
@@ -518,7 +515,7 @@ fn line_features(boxes: &[(f32, f32, f32, f32)], wh: (f32, f32), texts: &[String
         } else {
             0.0
         };
-        feats[i * N_FEATS + 15] = if t.chars().next().is_some_and(|c| c.is_uppercase()) {
+        feats[i * N_FEATS + 15] = if t.chars().next().is_some_and(char::is_uppercase) {
             1.0
         } else {
             0.0
@@ -536,7 +533,7 @@ fn log_p_before(a: f64) -> f64 {
     }
 }
 
-/// decode_order — row-sum ranking + insertion-move local search.
+/// `decode_order` — row-sum ranking + insertion-move local search.
 fn decode_order(a: &[f64], n: usize, sweeps: usize) -> Vec<usize> {
     if n <= 1 {
         return (0..n).collect();
@@ -563,7 +560,7 @@ fn decode_order(a: &[f64], n: usize, sweeps: usize) -> Vec<usize> {
     });
     for _ in 0..sweeps {
         let mut improved = false;
-        for &x in idx.clone().iter() {
+        for &x in &idx.clone() {
             let rest: Vec<usize> = idx.iter().copied().filter(|&i| i != x).collect();
             let m = rest.len();
             // before[j] = lp[rest[j], x]; after[j] = lp[x, rest[j]]
@@ -600,15 +597,15 @@ fn decode_order(a: &[f64], n: usize, sweeps: usize) -> Vec<usize> {
     idx
 }
 
-/// order_top_down — rows top to bottom, left to right within a row.
+/// `order_top_down` — rows top to bottom, left to right within a row.
 fn order_top_down(boxes: &[(f32, f32, f32, f32)]) -> Vec<usize> {
     let mut heights: Vec<f32> = boxes.iter().map(|b| b.3 - b.1).collect();
     let h = median(&mut heights).max(1e-3);
     let mut idx: Vec<usize> = (0..boxes.len()).collect();
     idx.sort_by(|&a, &b| {
         let (ca, cb) = (
-            ((boxes[a].1 + boxes[a].3) / 2.0),
-            ((boxes[b].1 + boxes[b].3) / 2.0),
+            f32::midpoint(boxes[a].1, boxes[a].3),
+            f32::midpoint(boxes[b].1, boxes[b].3),
         );
         let ka = (ca / (h * 0.5)).round();
         let kb = (cb / (h * 0.5)).round();
@@ -619,7 +616,7 @@ fn order_top_down(boxes: &[(f32, f32, f32, f32)]) -> Vec<usize> {
     idx
 }
 
-/// order_xycut — recursive split at the widest whitespace gap on either axis.
+/// `order_xycut` — recursive split at the widest whitespace gap on either axis.
 fn order_xycut(boxes: &[(f32, f32, f32, f32)]) -> Vec<usize> {
     fn best_cut(boxes: &[(f32, f32, f32, f32)], axis: usize) -> (f32, usize, Vec<usize>) {
         // returns (best_gap, best_k, order_by_lo)
@@ -666,7 +663,7 @@ fn order_xycut(boxes: &[(f32, f32, f32, f32)]) -> Vec<usize> {
     out
 }
 
-/// order_post._cluster — average-linkage clustering of pairwise same-block
+/// `order_post`._cluster — average-linkage clustering of pairwise same-block
 /// logits; merge while the mean logit between groups is positive.
 fn cluster_same(same: &[f32], n: usize) -> Vec<Vec<usize>> {
     if n == 0 {
@@ -678,7 +675,7 @@ fn cluster_same(same: &[f32], n: usize) -> Vec<Vec<usize>> {
             m[i * n + j] = if i == j {
                 f64::NEG_INFINITY
             } else {
-                same[i * n + j] as f64
+                f64::from(same[i * n + j])
             };
         }
     }
@@ -776,7 +773,7 @@ fn cluster_same(same: &[f32], n: usize) -> Vec<Vec<usize>> {
         .collect()
 }
 
-/// decode_blocks_order — blocks first (clustering), then lines inside a block
+/// `decode_blocks_order` — blocks first (clustering), then lines inside a block
 /// by geometry, blocks by mean pairwise order logit. Returns reading order.
 fn decode_blocks_order(
     a: &[f32],
@@ -797,7 +794,7 @@ fn decode_blocks_order(
     for b in &blocks {
         let bx: Vec<(f32, f32, f32, f32)> = b.iter().map(|&i| boxes[i]).collect();
         let is_grid = cls
-            .map(|c| {
+            .is_some_and(|c| {
                 let mut sum = [0.0f32; 10];
                 for &i in b {
                     for k in 0..10 {
@@ -808,8 +805,7 @@ fn decode_blocks_order(
                     .max_by(|&x, &y| sum[x].partial_cmp(&sum[y]).unwrap_or(std::cmp::Ordering::Equal))
                     .unwrap_or(0);
                 grid.contains(&arg)
-            })
-            .unwrap_or(false);
+            });
         let local = if is_grid {
             order_top_down(&bx)
         } else {
@@ -828,7 +824,7 @@ fn decode_blocks_order(
             let mut s = 0.0f64;
             for &i in bp {
                 for &j in bq {
-                    s += a[i * n + j] as f64;
+                    s += f64::from(a[i * n + j]);
                 }
             }
             let denom = (bp.len() * bq.len()) as f64;
@@ -860,7 +856,7 @@ fn decode_toks<'a>(toks: impl IntoIterator<Item = &'a (String, f32)>) -> String 
     joined.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// pipeline.py split_line — cut a line where neighbouring tokens are more
+/// pipeline.py `split_line` — cut a line where neighbouring tokens are more
 /// than `gap` line-heights apart (the detector merged two cells or columns).
 /// Returns (sub-box, text) segments; one item when nothing is cut.
 fn split_line(
@@ -891,8 +887,8 @@ fn split_line(
         let text = decode_toks(sg.iter().copied());
         let xs: Vec<f32> = sg.iter().filter(|tk| !is_space(&tk.0)).map(|tk| tk.1).collect();
         if !text.is_empty() && !xs.is_empty() {
-            let min_x = xs.iter().cloned().fold(f32::MAX, f32::min);
-            let max_x = xs.iter().cloned().fold(f32::MIN, f32::max);
+            let min_x = xs.iter().copied().fold(f32::MAX, f32::min);
+            let max_x = xs.iter().copied().fold(f32::MIN, f32::max);
             let bx = (
                 x0.max(min_x - 0.35 * h),
                 y0,
@@ -905,7 +901,7 @@ fn split_line(
     out
 }
 
-/// layout_post _rows + column clustering: group cells into rows by vertical
+/// `layout_post` _rows + column clustering: group cells into rows by vertical
 /// centre, then assign columns by clustered x positions. Returns rows × cols
 /// of cell texts, or None when nothing parses.
 fn build_table_grid(cells: &[(f32, f32, f32, f32, String)]) -> Option<Vec<Vec<String>>> {
@@ -921,15 +917,15 @@ fn build_table_grid(cells: &[(f32, f32, f32, f32, String)]) -> Option<Vec<Vec<St
     .max(1.0);
     let mut order: Vec<usize> = (0..cells.len()).collect();
     order.sort_by(|&a, &b| {
-        let ca = (cells[a].1 + cells[a].3) / 2.0;
-        let cb = (cells[b].1 + cells[b].3) / 2.0;
+        let ca = f32::midpoint(cells[a].1, cells[a].3);
+        let cb = f32::midpoint(cells[b].1, cells[b].3);
         ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
     });
     let mut rows: Vec<Vec<usize>> = Vec::new();
     for &i in &order {
-        let cy = (cells[i].1 + cells[i].3) / 2.0;
+        let cy = f32::midpoint(cells[i].1, cells[i].3);
         if let Some(last) = rows.last_mut() {
-            let last_cy = last.iter().map(|&j| (cells[j].1 + cells[j].3) / 2.0).sum::<f32>()
+            let last_cy = last.iter().map(|&j| f32::midpoint(cells[j].1, cells[j].3)).sum::<f32>()
                 / last.len() as f32;
             if (cy - last_cy).abs() < 0.5 * h {
                 last.push(i);
@@ -965,8 +961,7 @@ fn build_table_grid(cells: &[(f32, f32, f32, f32, String)]) -> Option<Vec<Vec<St
                     .partial_cmp(&((**b - x).abs()))
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
-            .map(|(i, _)| i)
-            .unwrap_or(0)
+            .map_or(0, |(i, _)| i)
     };
     let ncols = col_centers.len();
     let mut grid: Vec<Vec<String>> = rows
@@ -1004,7 +999,7 @@ fn build_table_grid(cells: &[(f32, f32, f32, f32, String)]) -> Option<Vec<Vec<St
 
 // --- orientation + deskew (pipeline.py upright / estimate_skew) ----------
 
-/// orient_input: [side, side] ink map (1 = ink), long side scaled, padded.
+/// `orient_input`: [side, side] ink map (1 = ink), long side scaled, padded.
 fn orient_input(gray: &GrayPage, side: usize) -> Vec<f32> {
     let scale = side as f32 / gray.w.max(gray.h) as f32;
     let nw = ((gray.w as f32 * scale).round() as usize).max(1);
@@ -1013,7 +1008,7 @@ fn orient_input(gray: &GrayPage, side: usize) -> Vec<f32> {
     let mut out = vec![0.0f32; side * side];
     for r in 0..small.h {
         for c in 0..small.w {
-            out[r * side + c] = 1.0 - small.data[r * small.w + c] as f32 / 255.0;
+            out[r * side + c] = 1.0 - f32::from(small.data[r * small.w + c]) / 255.0;
         }
     }
     out
@@ -1044,7 +1039,7 @@ fn rotate_gray(gray: &GrayPage, degrees_ccw: f32) -> GrayPage {
     GrayPage { w: nw, h: nh, data }
 }
 
-/// estimate_skew: degrees CCW that straighten the text rows — the angle whose
+/// `estimate_skew`: degrees CCW that straighten the text rows — the angle whose
 /// horizontal ink profile changes most sharply row to row (0.5° then 0.1°).
 fn estimate_skew(gray: &GrayPage) -> f32 {
     let side = 800.0f32;
@@ -1056,7 +1051,7 @@ fn estimate_skew(gray: &GrayPage) -> f32 {
     let mut ink = vec![0.0f32; small.w * small.h];
     let mut mean = 0.0f32;
     for (i, v) in small.data.iter().enumerate() {
-        ink[i] = (255.0 - *v as f32) / 255.0;
+        ink[i] = (255.0 - f32::from(*v)) / 255.0;
         mean += ink[i];
     }
     if mean / (ink.len() as f32) < 0.003 {
@@ -1066,7 +1061,7 @@ fn estimate_skew(gray: &GrayPage) -> f32 {
         let r = rotate_gray(&small, a);
         let mut rows = vec![0.0f32; r.h];
         for y in 0..r.h {
-            rows[y] = r.data[y * r.w..(y + 1) * r.w].iter().map(|&v| v as f32).sum();
+            rows[y] = r.data[y * r.w..(y + 1) * r.w].iter().map(|&v| f32::from(v)).sum();
         }
         rows.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum()
     };
@@ -1300,7 +1295,7 @@ impl ModelRunner for RtenRunner {
                 Tensor::from_data(&sh, d32).into()
             } else if let Some(d) = as_bool {
                 // converted models declare bool masks as i32
-                let d32: Vec<i32> = d.iter().map(|&b| b as i32).collect();
+                let d32: Vec<i32> = d.iter().map(|&b| i32::from(b)).collect();
                 Tensor::from_data(&sh, d32).into()
             } else {
                 unreachable!()
@@ -1330,16 +1325,16 @@ impl ModelRunner for RtenRunner {
             let t_i32: Option<rten_tensor::Tensor<i32>> = v.clone().try_into().ok();
             if let Some(t) = t_i32 {
                 let shape: Vec<i64> = t.shape().iter().map(|&v| v as i64).collect();
-                let up: Vec<i64> = t.into_data().to_vec().iter().map(|&v| v as i64).collect();
+                let up: Vec<i64> = t.into_data().clone().iter().map(|&v| i64::from(v)).collect();
                 out.i64s.push((name, shape, up));
             } else if let Ok(t) = v.clone().try_into() {
                 let t: Tensor<f32> = t;
                 let shape: Vec<i64> = t.shape().iter().map(|&v| v as i64).collect();
-                out.f32s.push((name, shape, t.into_data().to_vec()));
+                out.f32s.push((name, shape, t.into_data().clone()));
             } else if let Ok(t) = v.clone().try_into() {
                 let t: rten_tensor::Tensor<u8> = t;
                 let shape: Vec<i64> = t.shape().iter().map(|&v| v as i64).collect();
-                let up: Vec<f32> = t.into_data().to_vec().iter().map(|&b| b as f32).collect();
+                let up: Vec<f32> = t.into_data().clone().iter().map(|&b| f32::from(b)).collect();
                 out.f32s.push((name, shape, up));
             }
         }
@@ -1433,8 +1428,7 @@ impl IndraNative {
                 .vocab_cjk
                 .as_deref()
                 .and_then(|v| serde_json::from_str::<VocabJson>(v).ok())
-                .map(|v| v.chars)
-                .unwrap_or_default(),
+                .map_or_default(|v| v.chars),
             det_long_side: meta.det_long_side,
             rec_height: meta.rec_height as usize,
             min_page_confidence: super::pdf_ocr::DEFAULT_MIN_PAGE_CONFIDENCE,
@@ -1570,7 +1564,7 @@ impl IndraNative {
         // width-aware batching (rec_preproc.width_batches port): never let
         // lines x width blow the arena — Python measured 64 x 4096px = 5 GB.
         for batch in width_batches(&crops) {
-            let use_cjk = hanzi.as_ref().map(|h| h[batch[0]]).unwrap_or(false);
+            let use_cjk = hanzi.as_ref().is_some_and(|h| h[batch[0]]);
             // a width batch can straddle scripts only when the flag flips
             // mid-batch; split conservatively by majority flag of the batch
             let batch: Vec<usize> = match hanzi.as_ref() {
@@ -1608,12 +1602,12 @@ impl IndraNative {
             let (ids_shape, ids) = outputs.i64("ids").ok_or("rec ids missing")?;
             let (_, confs) = outputs.f32("conf").ok_or("rec conf missing")?;
             let (_, lengths) = outputs.i64("lengths").ok_or("rec lengths missing")?;
-            let t = ids_shape.iter().nth(1).copied().unwrap_or(0) as usize;
+            let t = ids_shape.get(1).copied().unwrap_or(0) as usize;
             if std::env::var("INDRA_DEBUG").is_ok() {
-                eprintln!(
+                crate::progress::emit(&format!(
                     "[dbg] model={rec_model} b={b} wm={wm} t={t} lengths={lengths:?} ids_head={:?}",
                     &ids[..(chunk.len() * t).min(ids.len())]
-                );
+                ));
             }
             for k in 0..chunk.len() {
                 let orig = batch[k];
@@ -1638,7 +1632,7 @@ impl IndraNative {
                             &self.vocab
                         };
                         let tok = vocab.get(id as usize - 1).cloned().unwrap_or_default();
-                        let px = ix0 as f32 + (i as f32 + 0.5) * stride * f;
+                        let px = ix0 + (i as f32 + 0.5) * stride * f;
                         toks.push((tok, px));
                         conf_sum += confs[k * t + i];
                         conf_n += 1;
@@ -1788,8 +1782,8 @@ impl IndraNative {
                         && joined
                             .chars()
                             .nth(joined.len() - 2)
-                            .is_some_and(|c| c.is_alphabetic())
-                        && t.chars().next().is_some_and(|c| c.is_lowercase())
+                            .is_some_and(char::is_alphabetic)
+                        && t.chars().next().is_some_and(char::is_lowercase)
                     {
                         joined.pop();
                         joined.push_str(t);
@@ -1879,7 +1873,7 @@ impl IndraNative {
         super::pdf::parse_with_page_ocr(bytes, self, super::pdf_ocr::DEFAULT_DPI)
     }
 
-    /// Full-control variant (min_chars / force) for the CLI.
+    /// Full-control variant (`min_chars` / force) for the CLI.
     pub fn parse_document_opts(
         &mut self,
         bytes: &[u8],
@@ -1895,7 +1889,7 @@ impl super::pdf::PageOcrEngine for IndraNative {
         let gray = GrayPage::from_png(page_png)?;
         let page = self.ocr_page(gray)?;
         let conf = (!page.lines.is_empty()).then(|| {
-            page.lines.iter().map(|l| l.conf as f64).sum::<f64>() / page.lines.len() as f64
+            page.lines.iter().map(|l| f64::from(l.conf)).sum::<f64>() / page.lines.len() as f64
         });
         let mut blocks = Vec::new();
         for b in &page.blocks {

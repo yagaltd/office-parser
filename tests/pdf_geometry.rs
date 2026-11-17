@@ -36,10 +36,10 @@ fn page_geo(pages: &[PageGeometry], n: u32) -> &PageGeometry {
 }
 
 /// Build a minimal one-page PDF with lopdf (already the `pdf`-feature dependency —
-/// no new dependency): MediaBox [0 0 612 792], CropBox [100 100 500 700], one
+/// no new dependency): `MediaBox` [0 0 612 792], `CropBox` [100 100 500 700], one
 /// Helvetica text op at pen (150, 650), optional /Rotate.
 fn synth_pdf(rotate: Option<i64>) -> Vec<u8> {
-    use lopdf::{dictionary, Dictionary, Document, Object, Stream};
+    use lopdf::{Dictionary, Document, Object, Stream};
 
     let nm = |s: &str| Object::Name(s.as_bytes().to_vec());
     let int = |v: i64| Object::Integer(v);
@@ -182,7 +182,7 @@ fn test_initial_rotation_preserved() {
     let g = &parsed.pages_geometry[0];
     assert_eq!(g.initial_rotation, 0);
     assert_eq!(g.coordinate_system, CoordinateSystem::Source);
-    assert!(g.spans.is_empty());
+    assert_eq!(g.spans, [] as [office_parser::formats::pdf::SpanBox; 0]);
     let media = g.media_box.expect("MediaBox resolved");
     assert!(approx(media[2], 792.05) && approx(media[3], 612.04), "media: {media:?}");
 }
@@ -268,7 +268,7 @@ fn test_existing_block_output_unchanged() {
     }
 }
 
-/// Scenario: an empty page does not panic — one PageGeometry per page, empty
+/// Scenario: an empty page does not panic — one `PageGeometry` per page, empty
 /// spans, page boxes still resolved.
 #[test]
 fn test_page_without_spans_yields_empty_geometry() {

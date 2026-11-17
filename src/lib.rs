@@ -1,4 +1,5 @@
 mod document;
+pub mod progress;
 pub mod document_ast;
 pub mod formats;
 pub mod quality;
@@ -125,6 +126,7 @@ pub mod pptx {
     use super::{Document, Result};
 
     #[derive(Clone, Copy, Debug)]
+    #[derive(Default)]
     pub struct ParseOptions {
         /// Reserved for future snapshot support.
         ///
@@ -133,13 +135,7 @@ pub mod pptx {
         pub include_slide_snapshots: bool,
     }
 
-    impl Default for ParseOptions {
-        fn default() -> Self {
-            Self {
-                include_slide_snapshots: false,
-            }
-        }
-    }
+    
 
     pub fn parse(bytes: &[u8]) -> Result<Document> {
         crate::formats::pptx::parse(bytes)
@@ -154,6 +150,7 @@ pub mod odp {
     use super::{Document, Result};
 
     #[derive(Clone, Copy, Debug)]
+    #[derive(Default)]
     pub struct ParseOptions {
         /// Reserved for future snapshot support.
         ///
@@ -162,13 +159,7 @@ pub mod odp {
         pub include_slide_snapshots: bool,
     }
 
-    impl Default for ParseOptions {
-        fn default() -> Self {
-            Self {
-                include_slide_snapshots: false,
-            }
-        }
-    }
+    
 
     pub fn parse(bytes: &[u8]) -> Result<Document> {
         crate::formats::odp::parse(bytes)

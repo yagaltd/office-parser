@@ -144,17 +144,16 @@ fn pages_ocr_of(doc: &office_parser::Document) -> u64 {
         .extra
         .get("ocr")
         .and_then(|o| o.get("pages_ocr"))
-        .and_then(|p| p.as_u64())
+        .and_then(serde_json::Value::as_u64)
         .unwrap_or(0)
 }
 
 fn pdftoppm_available() -> bool {
     std::env::var_os("PATH")
-        .map(|p| {
+        .is_some_and(|p| {
             std::env::split_paths(&p)
                 .any(|dir| dir.join("pdftoppm").is_file() || dir.join("pdftoppm.exe").is_file())
         })
-        .unwrap_or(false)
 }
 
 /// Renderer detection for the merge-path tests (render_pages_png_opts order:
@@ -188,7 +187,7 @@ fn test_page_quality_len_matches_page_count() {
 /// Scenario: an Escalate page is never sent to OCR (spec) — the dedicated
 /// negative test. A rich (~325 chars >= gate) ROTATED text-layer page must
 /// keep its text layer: the verdict is Escalate, the engine is never called,
-/// and pages_ocr does not count it. Escalate is a vision-LLM signal only —
+/// and `pages_ocr` does not count it. Escalate is a vision-LLM signal only —
 /// OCR cannot repair reading order.
 #[test]
 fn test_escalate_page_is_not_routed_to_ocr() {
@@ -428,7 +427,7 @@ fn test_document_rollup_uses_worst_page_for_routing() {
     );
 
     // Escalate NEVER adds a page — vision-LLM signal only.
-    assert!(routing_rollup(&[
+    assert_eq!(routing_rollup(&[
         mk(1, PageVerdict::Trust),
         mk(
             2,
@@ -436,8 +435,7 @@ fn test_document_rollup_uses_worst_page_for_routing() {
                 complexity: Some("rotated page".to_string())
             }
         ),
-    ])
-    .is_empty());
+    ]), [] as [usize; 0]);
 
     // End-to-end: pdf_mixed's doc-level value stays whatever its text layer
     // says, yet the image-only page 2 still routes.

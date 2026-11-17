@@ -279,11 +279,8 @@ impl Renderer<'_> {
         // bug-hunter-002 P3-3: line_width is USER space — scale it into DEVICE
         // space (run_bbox is device-space) or edge-straddling runs get skipped
         // at high zoom (path.rs's stroke path already does this via x_y_advances).
-        let max_factor = {
-            let tr = props.transform;
-            let [a, b, c, d, _, _] = tr.as_coeffs();
-            (a * a + b * b).sqrt().max((c * c + d * d).sqrt()).max(1.0)
-        };
+        let (ax, ay) = hayro_interpret::util::x_y_advances(&props.transform);
+        let max_factor = ax.length().max(ay.length()).max(1.0);
         let extent = f64::from(stroke_props.line_width)
             * max_factor
             * f64::from(stroke_props.miter_limit.max(1.42))

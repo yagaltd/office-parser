@@ -116,6 +116,9 @@ impl SlideTransition {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    // The library is silent by default; the CLI is the caller that wants the
+    // rendering/OCR chatter on stderr.
+    office_parser::progress::set_sink(Some(|line: &str| eprintln!("office-parser: {line}")));
     run(args)
 }
 

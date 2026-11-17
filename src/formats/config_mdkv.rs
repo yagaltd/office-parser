@@ -68,7 +68,7 @@ fn scalar_to_kv_string(v: &serde_json::Value) -> String {
             if t.is_empty() {
                 "\"\"".to_string()
             } else if t.contains('\n') || t.contains('\r') {
-                serde_json::to_string(s).unwrap_or_else(|_| format!("\"{}\"", t))
+                serde_json::to_string(s).unwrap_or_else(|_| format!("\"{t}\""))
             } else {
                 t.to_string()
             }
@@ -123,14 +123,14 @@ fn array_to_table_rows(v: &serde_json::Value) -> Option<Vec<Vec<Cell>>> {
     if items.is_empty() {
         return None;
     }
-    if !items.iter().all(|it| it.is_object()) {
+    if !items.iter().all(serde_json::Value::is_object) {
         return None;
     }
 
     // Require that values are scalars/null to stay table-like.
     if !items
         .iter()
-        .all(|it| it.as_object().unwrap().values().all(|vv| is_scalar(vv)))
+        .all(|it| it.as_object().unwrap().values().all(is_scalar))
     {
         return None;
     }
@@ -177,7 +177,7 @@ fn array_to_table_rows(v: &serde_json::Value) -> Option<Vec<Vec<Cell>>> {
             rowspan: 1,
         });
         for c in &cols {
-            let txt = obj.get(c).map(scalar_to_kv_string).unwrap_or_default();
+            let txt = obj.get(c).map_or_default(scalar_to_kv_string);
             r.push(Cell {
                 text: txt,
                 colspan: 1,
@@ -216,7 +216,7 @@ fn render_value_at_level(
     // Scalars: accumulate as KV lines.
     if is_scalar(v) {
         if let Some(s) = string_is_multiline(v) {
-            let s = s.replace("\r", "").trim().to_string();
+            let s = s.replace('\r', "").trim().to_string();
             if s.is_empty() {
                 return;
             }
@@ -248,7 +248,7 @@ fn render_value_at_level(
             );
         } else if let Some(rows) = array_to_table_rows(v) {
             push_table(blocks, next_idx, rows);
-        } else if arr.iter().all(|it| it.is_object()) {
+        } else if arr.iter().all(serde_json::Value::is_object) {
             // Prefer readability over JSONL for nested arrays-of-objects.
             for (i, it) in arr.iter().enumerate() {
                 let next_level = (level + 1).min(4);
@@ -346,7 +346,6 @@ fn render_value_at_level(
         if !kv_lines.is_empty() {
             push_paragraph(blocks, next_idx, kv_lines.join("\n"));
         }
-        return;
     }
 }
 
@@ -354,17 +353,14 @@ pub(crate) fn build_blocks_max_depth_4(root: &serde_json::Value) -> Vec<Block> {
     let mut blocks: Vec<Block> = Vec::new();
     let mut next_idx: usize = 0;
 
-    match root {
-        serde_json::Value::Object(map) => {
-            for (k, v) in map {
-                push_heading(&mut blocks, &mut next_idx, 1, k.clone());
-                render_value_at_level(None, v, 1, &mut blocks, &mut next_idx);
-            }
+    if let serde_json::Value::Object(map) = root {
+        for (k, v) in map {
+            push_heading(&mut blocks, &mut next_idx, 1, k.clone());
+            render_value_at_level(None, v, 1, &mut blocks, &mut next_idx);
         }
-        _ => {
-            push_heading(&mut blocks, &mut next_idx, 1, "value".to_string());
-            render_value_at_level(None, root, 1, &mut blocks, &mut next_idx);
-        }
+    } else {
+        push_heading(&mut blocks, &mut next_idx, 1, "value".to_string());
+        render_value_at_level(None, root, 1, &mut blocks, &mut next_idx);
     }
 
     blocks

@@ -88,11 +88,11 @@ pub(crate) fn parse_delimited(
     }
 
     if !tail.is_empty() {
-        rows.extend(tail.into_iter());
-        row_map.extend(tail_map.into_iter());
+        rows.extend(tail);
+        row_map.extend(tail_map);
     }
 
-    let max_cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    let max_cols = rows.iter().map(std::vec::Vec::len).max().unwrap_or(0);
     for r in &mut rows {
         r.resize(max_cols, spreadsheet::CellDisplay::default());
     }
@@ -142,8 +142,7 @@ pub(crate) fn parse_delimited(
             .and_then(|spec| {
                 spreadsheet::resolve_group_by_col_and_label(&rows, has_header, spec, 0, max_cols)
             })
-            .map(|(c, l)| (Some(c), Some(l)))
-            .unwrap_or((None, None));
+            .map_or((None, None), |(c, l)| (Some(c), Some(l)));
         if group_by_col.is_some() {
             group_by_used = true;
         }
@@ -178,7 +177,7 @@ pub(crate) fn parse_delimited(
             }
 
             let hdr = if has_header {
-                rows.first().map(|r| r.as_slice())
+                rows.first().map(std::vec::Vec::as_slice)
             } else {
                 None
             };

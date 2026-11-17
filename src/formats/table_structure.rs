@@ -124,10 +124,10 @@ const STRUCTURE_VOCAB: [&str; 48] = [
     "<td></td>",
 ];
 
-/// AttnLabelDecode.add_special_char: `[beg] + vocab + [end]`.
+/// `AttnLabelDecode.add_special_char`: `[beg] + vocab + [end]`.
 const BEG_IDX: usize = 0;
 const END_IDX: usize = 49;
-/// TableLabelDecode.td_token.
+/// `TableLabelDecode.td_token`.
 const TD_TOKENS: [&str; 3] = ["<td>", "<td", "<td></td>"];
 
 fn vocab_at(idx: usize) -> Option<&'static str> {
@@ -142,6 +142,7 @@ fn vocab_at(idx: usize) -> Option<&'static str> {
 /// Model resolution rule (documented contract): [`TABLE_MODEL_ENV`] wins when
 /// it names an existing file, else [`DEFAULT_TABLE_MODEL`]. `None` means the
 /// enrichment is a no-op and `table_html` stays absent.
+#[must_use]
 pub fn table_model_path() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os(TABLE_MODEL_ENV) {
         let p = PathBuf::from(dir);
@@ -179,7 +180,7 @@ fn enrich_with_model(page: OcrPage, page_png: &[u8], model_path: Option<&Path>) 
         return page;
     };
     let Ok(img) = image::load_from_memory(page_png) else {
-        eprintln!("office-parser: table-structure: page png decode failed");
+        crate::progress::emit("table-structure: page png decode failed");
         return page;
     };
     let rgb = img.to_rgb8();
@@ -194,7 +195,7 @@ fn enrich_with_model(page: OcrPage, page_png: &[u8], model_path: Option<&Path>) 
         match table_region_html(&page_rgb, region, cells, model_path) {
             Ok(Some(html)) => htmls.push(html),
             Ok(None) => {}
-            Err(e) => eprintln!("office-parser: table-structure region failed: {e}"),
+            Err(e) => crate::progress::emit(&format!("table-structure region failed: {e}")),
         }
     }
     let table_html = (!htmls.is_empty()).then(|| htmls.join("\n"));
@@ -239,12 +240,12 @@ fn crop_region(page: &PageRgb, region: &OcrLayoutRegion) -> Option<Crop> {
 }
 
 const SLANET_MAX_LEN: usize = 488;
-/// NormalizeImage constants (SLANet_plus.yml) on PaddleOCR's BGR slots,
+/// `NormalizeImage` constants (`SLANet_plus.yml`) on `PaddleOCR`'s BGR slots,
 /// reversed for our RGB buffer.
 const MEANS_RGB: [f64; 3] = [0.406, 0.456, 0.485];
 const STDS_RGB: [f64; 3] = [0.225, 0.224, 0.229];
 
-/// OpenCV INTER_LINEAR bilinear mapping (align-corners=False):
+/// `OpenCV` `INTER_LINEAR` bilinear mapping (align-corners=False):
 /// src = (dst + 0.5) * scale - 0.5, clamped at the borders.
 fn resize_linear(rgb: &[u8], w: usize, h: usize, dw: usize, dh: usize) -> Vec<f64> {
     let mut out = vec![0f64; dw * dh * 3];
@@ -269,10 +270,10 @@ fn resize_linear(rgb: &[u8], w: usize, h: usize, dw: usize, dh: usize) -> Vec<f6
             let (x0, fx) = coords(dx, sx, w);
             let x1 = (x0 + 1).min(w - 1);
             for c in 0..3 {
-                let p00 = rgb[(y0 * w + x0) * 3 + c] as f64;
-                let p01 = rgb[(y0 * w + x1) * 3 + c] as f64;
-                let p10 = rgb[(y1 * w + x0) * 3 + c] as f64;
-                let p11 = rgb[(y1 * w + x1) * 3 + c] as f64;
+                let p00 = f64::from(rgb[(y0 * w + x0) * 3 + c]);
+                let p01 = f64::from(rgb[(y0 * w + x1) * 3 + c]);
+                let p10 = f64::from(rgb[(y1 * w + x0) * 3 + c]);
+                let p11 = f64::from(rgb[(y1 * w + x1) * 3 + c]);
                 let top = p00 * (1.0 - fx) + p01 * fx;
                 let bot = p10 * (1.0 - fx) + p11 * fx;
                 out[(dy * dw + dx) * 3 + c] = top * (1.0 - fy) + bot * fy;
@@ -282,9 +283,9 @@ fn resize_linear(rgb: &[u8], w: usize, h: usize, dw: usize, dh: usize) -> Vec<f6
     out
 }
 
-/// 488×488 preprocess (predict_structure.py order: resize keep-ratio →
+/// 488×488 preprocess (`predict_structure.py` order: resize keep-ratio →
 /// normalize → zero-pad → CHW). Returns the [1,3,488,488] input and the
-/// shape_list [h, w, ratio_h, ratio_w, pad_h, pad_w] that `_bbox_decode`
+/// `shape_list` [h, w, `ratio_h`, `ratio_w`, `pad_h`, `pad_w`] that `_bbox_decode`
 /// consumes.
 fn preprocess_488(crop: &Crop) -> (Vec<f32>, [f64; 6]) {
     let (h, w) = (crop.h, crop.w);
@@ -293,7 +294,7 @@ fn preprocess_488(crop: &Crop) -> (Vec<f32>, [f64; 6]) {
     let rh = ((h as f64 * ratio) as usize).clamp(1, SLANET_MAX_LEN);
     let rw = ((w as f64 * ratio) as usize).clamp(1, SLANET_MAX_LEN);
     let mut resized = resize_linear(&crop.rgb, w, h, rw, rh);
-    for px in resized.chunks_exact_mut(3) {
+    for px in resized.as_chunks_mut::<3>().0 {
         for c in 0..3 {
             px[c] = (px[c] / 255.0 - MEANS_RGB[c]) / STDS_RGB[c];
         }
@@ -354,7 +355,7 @@ fn run_slanet(
             .try_into()
             .map_err(|_| "slanet output: not f32".to_string())?;
         let dims: Vec<i64> = t.shape().iter().map(|&d| d as i64).collect();
-        let data = t.into_data().to_vec();
+        let data = t.into_data().clone();
         match dims.last() {
             Some(&8) => loc = Some((data, dims)),
             Some(&50) => probs = Some((data, dims)),
@@ -372,7 +373,7 @@ struct StructureResult {
     boxes: Vec<[f64; 4]>,
 }
 
-/// TableLabelDecode.decode + _bbox_decode + the matcher's 8→4 corner fold.
+/// TableLabelDecode.decode + _`bbox_decode` + the matcher's 8→4 corner fold.
 fn decode_structure(
     loc: &[f32],
     loc_shape: &[i64],
@@ -397,7 +398,7 @@ fn decode_structure(
         let mut best = 0usize;
         let mut best_p = f64::NEG_INFINITY;
         for (i, &p) in row.iter().enumerate() {
-            let p = p as f64;
+            let p = f64::from(p);
             if p > best_p {
                 best_p = p;
                 best = i;
@@ -418,15 +419,15 @@ fn decode_structure(
             for (k, v) in pts.iter_mut().enumerate() {
                 // _bbox_decode: even (x) *= pad_w / ratio_w; odd (y) *= pad_h / ratio_h
                 let (num, den) = if k % 2 == 0 { (pad_w, ratio_w) } else { (pad_h, ratio_h) };
-                *v = if den != 0.0 { b[k] as f64 * num / den } else { b[k] as f64 };
+                *v = if den == 0.0 { f64::from(b[k]) } else { f64::from(b[k]) * num / den };
             }
             let xs = [pts[0], pts[2], pts[4], pts[6]];
             let ys = [pts[1], pts[3], pts[5], pts[7]];
             boxes.push([
-                xs.iter().cloned().fold(f64::MAX, f64::min),
-                ys.iter().cloned().fold(f64::MAX, f64::min),
-                xs.iter().cloned().fold(f64::MIN, f64::max),
-                ys.iter().cloned().fold(f64::MIN, f64::max),
+                xs.iter().copied().fold(f64::MAX, f64::min),
+                ys.iter().copied().fold(f64::MAX, f64::min),
+                xs.iter().copied().fold(f64::MIN, f64::max),
+                ys.iter().copied().fold(f64::MIN, f64::max),
             ]);
         }
         tokens.push(text.to_string());
@@ -434,7 +435,7 @@ fn decode_structure(
     Ok(StructureResult { tokens, boxes })
 }
 
-/// matcher.py::distance.
+/// `matcher.py::distance`.
 fn l1_distance(a: &[f64; 4], b: &[f64; 4]) -> f64 {
     let (x1, y1, x2, y2) = (a[0], a[1], a[2], a[3]);
     let (x3, y3, x4, y4) = (b[0], b[1], b[2], b[3]);
@@ -444,7 +445,7 @@ fn l1_distance(a: &[f64; 4], b: &[f64; 4]) -> f64 {
     dis + dis2.min(dis3)
 }
 
-/// matcher.py::compute_iou (axis-convention-agnostic: both boxes share one).
+/// `matcher.py::compute_iou` (axis-convention-agnostic: both boxes share one).
 fn compute_iou(a: &[f64; 4], b: &[f64; 4]) -> f64 {
     let s1 = (a[2] - a[0]) * (a[3] - a[1]);
     let s2 = (b[2] - b[0]) * (b[3] - b[1]);
@@ -465,8 +466,8 @@ fn compute_iou(a: &[f64; 4], b: &[f64; 4]) -> f64 {
     intersect / denom
 }
 
-/// matcher.py::match_result — every det claims its best pred
-/// (sorted by (1 - IoU, L1); first-index tie-break like `distances.index`),
+/// `matcher.py::match_result` — every det claims its best pred
+/// (sorted by (1 - `IoU`, L1); first-index tie-break like `distances.index`),
 /// and multiple dets may share one pred (the multi-line-cell case).
 fn match_cells(dt_boxes: &[[f64; 4]], pred_boxes: &[[f64; 4]]) -> BTreeMap<usize, Vec<usize>> {
     let better = |a: (f64, f64), b: (f64, f64)| {
@@ -479,7 +480,7 @@ fn match_cells(dt_boxes: &[[f64; 4]], pred_boxes: &[[f64; 4]]) -> BTreeMap<usize
         let mut best: Option<(usize, (f64, f64))> = None;
         for (j, pred) in pred_boxes.iter().enumerate() {
             let key = (1.0 - compute_iou(gt, pred), l1_distance(gt, pred));
-            if best.map_or(true, |(_, bk)| better(key, bk)) {
+            if best.is_none_or(|(_, bk)| better(key, bk)) {
                 best = Some((j, key));
             }
         }
@@ -499,9 +500,9 @@ fn escape_html(s: &str) -> String {
         .replace('\'', "&#x27;")
 }
 
-/// matcher.py::get_pred_html port (the `<td></td>` dict token — reachable
+/// `matcher.py::get_pred_html` port (the `<td></td>` dict token — reachable
 /// in the CH vocabulary — emits the empty cell itself, upstream-faithful).
-/// Wrapping: predict_structure.py adds `<html><body><table>` around the model
+/// Wrapping: `predict_structure.py` adds `<html><body><table>` around the model
 /// stream; we keep only the `<table>` element — the documented
 /// `table_html` shape (`docs/quality.md`) and what consumers embed.
 fn render_table_html(
@@ -514,57 +515,18 @@ fn render_table_html(
     for tag in tokens {
         if tag == "<td></td>" {
             // The CH structure dict carries this token (index 48). Upstream
-            // checks it FIRST and wraps the matched content inside the cell
-            // ('<td>' + content + '</td>'); the general </td> branch below
-            // would double-push it (caught e2e on pdf_table_scan).
+            // checks it FIRST and wraps the matched content inside the cell;
+            // the general </td> branch below would double-push it (caught e2e
+            // on pdf_table_scan). One emitter for both shapes, so empty-cell
+            // tokens join and bold-merge exactly like text-token cells.
             html.push_str("<td>");
-            if let Some(det_idxs) = matched.get(&td_index) {
-                for &di in det_idxs.iter() {
-                    html.push_str(&escape_html(&contents[di]));
-                }
-            }
+            push_cell_text(&mut html, matched, contents, td_index);
             html.push_str("</td>");
             td_index += 1;
             continue;
         }
         if tag.contains("</td>") {
-            if let Some(det_idxs) = matched.get(&td_index) {
-                let b_with =
-                    det_idxs.len() > 1 && contents[det_idxs[0]].contains("<b>");
-                if b_with {
-                    html.push_str("<b>");
-                }
-                for (k, &di) in det_idxs.iter().enumerate() {
-                    let mut content = contents[di].clone();
-                    if det_idxs.len() > 1 {
-                        if content.is_empty() {
-                            continue;
-                        }
-                        if content.starts_with(' ') {
-                            content = content[1..].to_string();
-                        }
-                        // Task-13 review F-2: boundary-safe strips (upstream
-                        // slices code points; byte offsets would panic on
-                        // multi-byte neighbours).
-                        if let Some(stripped) = content.strip_prefix("<b>") {
-                            content = stripped.to_string();
-                        }
-                        if let Some(stripped) = content.strip_suffix("</b>") {
-                            content = stripped.to_string();
-                        }
-                        if content.is_empty() {
-                            continue;
-                        }
-                        if k != det_idxs.len() - 1 && !content.ends_with(' ') {
-                            content.push(' ');
-                        }
-                    }
-                    html.push_str(&escape_html(&content));
-                }
-                if b_with {
-                    html.push_str("</b>");
-                }
-            }
+            push_cell_text(&mut html, matched, contents, td_index);
             html.push_str(tag);
             td_index += 1;
         } else {
@@ -573,6 +535,54 @@ fn render_table_html(
     }
     html.push_str("</table>");
     html
+}
+
+/// Append the matched contents of cell `td_index`: joined with single spaces,
+/// `<b>` runs merged into one wrapper, and each fragment escaped. Out-of-range
+/// indices are skipped rather than panicking — `matched` comes from a model
+/// output and a damaged structure dict must not abort a parse.
+fn push_cell_text(
+    html: &mut String,
+    matched: &BTreeMap<usize, Vec<usize>>,
+    contents: &[String],
+    td_index: usize,
+) {
+    let Some(det_idxs) = matched.get(&td_index) else {
+        return;
+    };
+    let fragments: Vec<&String> = det_idxs.iter().filter_map(|di| contents.get(*di)).collect();
+    if fragments.is_empty() {
+        return;
+    }
+    let b_with = fragments.len() > 1 && fragments[0].contains("<b>");
+    if b_with {
+        html.push_str("<b>");
+    }
+    if fragments.len() == 1 {
+        html.push_str(&escape_html(fragments[0]));
+    } else {
+        // Multi-fragment cells: strip the boundary space and the <b> markers
+        // the fragments carried, then re-join with one space.
+        for (k, content) in fragments.iter().enumerate() {
+            let mut content = content.strip_prefix(' ').unwrap_or(content).to_string();
+            if let Some(stripped) = content.strip_prefix("<b>") {
+                content = stripped.to_string();
+            }
+            if let Some(stripped) = content.strip_suffix("</b>") {
+                content = stripped.to_string();
+            }
+            if content.is_empty() {
+                continue;
+            }
+            if k != fragments.len() - 1 && !content.ends_with(' ') {
+                content.push(' ');
+            }
+            html.push_str(&escape_html(&content));
+        }
+    }
+    if b_with {
+        html.push_str("</b>");
+    }
 }
 
 /// One region → one `<table>` element, or `Ok(None)` when the region is
@@ -602,7 +612,7 @@ fn table_region_html(
             continue;
         }
         let (cx, cy) = (crop.x0 as f32, crop.y0 as f32);
-        dts.push([(w.x0 - cx) as f64, (w.y0 - cy) as f64, (w.x1 - cx) as f64, (w.y1 - cy) as f64]);
+        dts.push([f64::from(w.x0 - cx), f64::from(w.y0 - cy), f64::from(w.x1 - cx), f64::from(w.y1 - cy)]);
         texts.push(w.text.clone());
     }
     let matched = match_cells(&dts, &res.boxes);
@@ -614,16 +624,40 @@ fn table_region_html(
 fn warn_table_model_missing() {
     static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        eprintln!(
-            "office-parser: ocr-table-structure enabled but no SLANet-plus model found \
+        crate::progress::emit(&format!(
+            "ocr-table-structure enabled but no SLANet-plus model found \
              (set {TABLE_MODEL_ENV} to a model file, default {DEFAULT_TABLE_MODEL}); \
              table_html stays absent (engine geometry still surfaces)"
-        );
+        ));
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::render_table_html;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn empty_cell_token_wraps_its_content_like_a_text_cell() {
+        let tokens = vec!["<td></td>".to_string(), "<td></td>".to_string()];
+        let mut matched = BTreeMap::new();
+        matched.insert(0, vec![0, 1]);
+        matched.insert(1, vec![2]);
+        let contents = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let html = render_table_html(&tokens, &matched, &contents);
+        // Both shapes share one emitter: multi-fragment cells are space-joined.
+        assert_eq!(html, "<table><td>a b</td><td>c</td></table>");
+    }
+
+    #[test]
+    fn out_of_range_content_index_is_skipped_not_panicked() {
+        let tokens = vec!["<td></td>".to_string()];
+        let mut matched = BTreeMap::new();
+        matched.insert(0, vec![7]);
+        let contents = vec!["only".to_string()];
+        assert_eq!(render_table_html(&tokens, &matched, &contents), "<table><td></td></table>");
+    }
+
     use super::*;
     use crate::document_ast::{Block, SourceSpan};
 
@@ -668,7 +702,7 @@ mod tests {
         let res = decode_structure(&loc, &loc_shape, &probs, &probs_shape,
             &[100.0, 100.0, 1.0, 1.0, 488.0, 488.0]).expect("decode");
         assert_eq!(res.tokens, ["<thead>"]);
-        assert!(res.boxes.is_empty());
+        assert_eq!(res.boxes, [] as [[f64; 4]; 0]);
         // degenerate: eos at step 0 does not break (upstream idx>0 guard) but
         // is ignored; a beg-only stream decodes empty.
         let (probs, probs_shape) = one_hot(&[49, 5, 49]);

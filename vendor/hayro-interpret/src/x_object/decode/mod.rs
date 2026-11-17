@@ -45,11 +45,18 @@ fn decode_context<'a>(
         height: obj.height(),
     };
 
-    // PdfCraft patch (bug-hunter-002 P3-4): gate on the DECLARED dimensions
-    // before decoding — a hostile image previously paid the full decode (up
-    // to ~1 GiB) only to be rejected afterwards. The post-decode check below
-    // stays for actual (post-decode) dimensions.
-    if !image_size_ok(obj.width(), obj.height()) {
+    // PdfCraft patch (bug-hunter-002 P3-4): gate on the dimensions that will
+    // actually be decoded, BEFORE decoding — a hostile image previously paid
+    // the full decode (up to ~1 GiB) only to be rejected afterwards. The
+    // target raster is the request's `target_dimension` capped by the declared
+    // box (a codec never upscales); only JPX honours a reduced target, so the
+    // cap also keeps legitimately huge JPEG-2000 images drawable. The
+    // post-decode check below stays for the real output size.
+    let (gate_w, gate_h) = {
+        let (tw, th) = target_dimension.unwrap_or((obj.width(), obj.height()));
+        (tw.min(obj.width()), th.min(obj.height()))
+    };
+    if !image_size_ok(gate_w, gate_h) {
         (obj.warning_sink)(InterpreterWarning::ImageDecodeFailure);
         return None;
     }
@@ -408,3 +415,4 @@ fn for_each_sample(
 pub(crate) fn image_size_ok(width: u32, height: u32) -> bool {
     width > 0 && height > 0 && u64::from(width) * u64::from(height) <= 1 << 28
 }
+

@@ -258,9 +258,7 @@ impl Renderer<'_> {
         // PdfCraft patch (bug-hunter-002 P2-1): images cannot be tinted
         // per-ink — mark a live CMYK pass unsupported (documented fallback)
         // instead of compositing literal RGB into ink canvases.
-        if self.ink.is_passing() {
-            self.ink.unsupported = true;
-        }
+        self.ink.mark_unsupported();
         let image_data = image_data.into();
         // PdfCraft patch: in a knockout erase pass an image clears its placement rectangle
         // instead of painting.

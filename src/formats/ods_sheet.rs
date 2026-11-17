@@ -33,7 +33,7 @@ fn parse_ods(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeDo
     let mut formulas_meta: Vec<serde_json::Value> = Vec::new();
     let mut block_index: usize = 0;
 
-    let sheet_names: Vec<String> = wb.sheet_names().to_vec();
+    let sheet_names: Vec<String> = wb.sheet_names().clone();
     if sheet_names.len() > limits.max_sheets {
         warnings.push(format!(
             "sheet count truncated: {} -> {}",
@@ -73,21 +73,18 @@ fn parse_ods(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeDo
                 let tail = limits.tail_rows.min(rows_cap / 2);
                 let head = rows_cap.saturating_sub(tail);
                 sheet_warnings.push(format!(
-                    "sheet '{name}' rows truncated: {} -> {} (head {} + tail {})",
-                    nrows, rows_cap, head, tail
+                    "sheet '{name}' rows truncated: {nrows} -> {rows_cap} (head {head} + tail {tail})"
                 ));
             } else {
                 sheet_warnings.push(format!(
-                    "sheet '{name}' rows truncated: {} -> {}",
-                    nrows, rows_cap
+                    "sheet '{name}' rows truncated: {nrows} -> {rows_cap}"
                 ));
             }
         }
         if ncols > cols_cap {
             sheet_truncated = true;
             sheet_warnings.push(format!(
-                "sheet '{name}' cols truncated: {} -> {}",
-                ncols, cols_cap
+                "sheet '{name}' cols truncated: {ncols} -> {cols_cap}"
             ));
         }
 
@@ -133,8 +130,8 @@ fn parse_ods(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeDo
                 let formula = formula_by_a1.get(&a1).cloned();
                 let cd = cell_display(dt, formula, &name, &a1, &mut formulas_meta, &limits);
                 if !cd.is_empty() {
-                    max_r_used = Some(max_r_used.map(|v| v.max(r)).unwrap_or(r));
-                    max_c_used = Some(max_c_used.map(|v| v.max(c)).unwrap_or(c));
+                    max_r_used = Some(max_r_used.map_or(r, |v| v.max(r)));
+                    max_c_used = Some(max_c_used.map_or(c, |v| v.max(c)));
                 }
                 grid[r][c] = cd;
             }
@@ -199,8 +196,7 @@ fn parse_ods(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeDo
                             ce2,
                         )
                     })
-                    .map(|(c, l)| (Some(c), Some(l)))
-                    .unwrap_or((None, None));
+                    .map_or((None, None), |(c, l)| (Some(c), Some(l)));
                 if group_by_col.is_some() {
                     group_by_used = true;
                 }
@@ -242,7 +238,7 @@ fn parse_ods(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeDo
                     }
 
                     let hdr = if has_header {
-                        region_rows.first().map(|r| r.as_slice())
+                        region_rows.first().map(std::vec::Vec::as_slice)
                     } else {
                         None
                     };
@@ -275,14 +271,13 @@ fn parse_ods(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeDo
             warnings.push(msg);
         }
 
-        if let Some(m) = sheets_meta.last_mut() {
-            if let Some(o) = m.as_object_mut() {
+        if let Some(m) = sheets_meta.last_mut()
+            && let Some(o) = m.as_object_mut() {
                 o.insert(
                     "emitted_tables".to_string(),
                     serde_json::json!(emitted_tables),
                 );
             }
-        }
     }
 
     let mut extra = serde_json::json!({
@@ -317,7 +312,7 @@ fn cell_display(
         match dt {
             Data::Empty => {}
             Data::String(s) => {
-                out.text = spreadsheet::normalize_cell_text(s.clone(), limits.max_cell_chars)
+                out.text = spreadsheet::normalize_cell_text(s.clone(), limits.max_cell_chars);
             }
             Data::Float(f) => {
                 out.text = if (f.fract()).abs() < 1e-9 {
@@ -369,7 +364,7 @@ fn ods_formulas(
     use quick_xml::events::Event;
 
     fn local_name(n: &[u8]) -> &[u8] {
-        n.split(|b| *b == b':').last().unwrap_or(n)
+        n.split(|b| *b == b':').next_back().unwrap_or(n)
     }
 
     let xml = super::read_zip_file_utf8(bytes, "content.xml").context("read content.xml")?;

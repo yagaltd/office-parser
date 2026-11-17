@@ -38,7 +38,7 @@ impl Default for PdfOcrOptions {
 }
 
 /// Parse a scanned PDF with the native engine. Errors when the models are
-/// unavailable (set `INDRA_OCR_MODEL_DIR` or download via huggingface_hub).
+/// unavailable (set `INDRA_OCR_MODEL_DIR` or download via `huggingface_hub`).
 pub fn parse_auto(bytes: &[u8], opts: &PdfOcrOptions) -> crate::Result<crate::Document> {
     parse_auto_split(bytes, opts, true, false).map(|(doc, _)| doc)
 }

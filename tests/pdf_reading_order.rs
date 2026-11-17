@@ -48,7 +48,7 @@ fn x_projection_clusters(spans: &[SpanBox]) -> usize {
     iv.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let mut clusters = 1usize;
     let mut hi = iv[0].1;
-    for &(lo, r) in iv[1..].iter() {
+    for &(lo, r) in &iv[1..] {
         if lo > hi {
             clusters += 1;
         }
@@ -221,16 +221,16 @@ fn test_heading_levels_preserved_after_reorder() {
 /// Scenario: empty page does not panic (spec scenario 4).
 #[test]
 fn test_empty_page_ordering_returns_no_blocks() {
-    assert!(xy_cut_reading_regions(&[]).is_empty());
+    assert_eq!(xy_cut_reading_regions(&[]), [] as [std::vec::Vec<u32>; 0]);
 
     let bytes = std::fs::read(SCANNED).expect("fixture");
     let parsed = parse_pdf_full(&bytes).expect("parses");
     assert_eq!(parsed.pages_geometry.len(), 2);
     for g in &parsed.pages_geometry {
         assert!(g.spans.is_empty(), "page {}: unexpected spans", g.page_number);
-        assert!(xy_cut_reading_regions(&g.spans).is_empty());
+        assert_eq!(xy_cut_reading_regions(&g.spans), [] as [std::vec::Vec<u32>; 0]);
     }
-    assert!(parsed.blocks.is_empty());
+    assert_eq!(parsed.blocks, [] as [office_parser::document_ast::Block; 0]);
 
     let bytes = std::fs::read(MIXED).expect("fixture");
     let parsed = parse_pdf_full(&bytes).expect("parses");
@@ -249,13 +249,13 @@ fn test_empty_page_ordering_returns_no_blocks() {
         .iter()
         .find(|g| g.page_number == 2)
         .expect("PageGeometry for page 2");
-    assert!(g2.spans.is_empty());
-    assert!(xy_cut_reading_regions(&g2.spans).is_empty());
+    assert_eq!(g2.spans, [] as [office_parser::formats::pdf::SpanBox; 0]);
+    assert_eq!(xy_cut_reading_regions(&g2.spans), [] as [std::vec::Vec<u32>; 0]);
 }
 
-/// Minimal one-page PDF builder: MediaBox [0 0 612 792], one Helvetica font,
+/// Minimal one-page PDF builder: `MediaBox` [0 0 612 792], one Helvetica font,
 /// `content` as the raw page content stream (lopdf is already the `pdf`-feature
-/// dependency — no new dependency; same approach as tests/pdf_geometry.rs).
+/// dependency — no new dependency; same approach as `tests/pdf_geometry.rs`).
 fn synth_one_page_pdf(content: &[u8]) -> Vec<u8> {
     use lopdf::{Dictionary, Document, Object, Stream};
 

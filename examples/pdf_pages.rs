@@ -1,8 +1,8 @@
 //! The PDF → pages pipeline: page text + embedded images from the parser,
 //! page PNGs from the renderer, ready for OCR/vision downstream.
 //!
-//!   cargo run --features pdf,render-pdfium --example pdf_pages -- <doc.pdf> <out-dir>
-//!   OFFICE_PARSER_BACKEND=pdfium   # force the pdfium leg (default: poppler)
+//!   cargo run --features pdf,render-pdfium --example `pdf_pages` -- <doc.pdf> <out-dir>
+//!   `OFFICE_PARSER_BACKEND=pdfium`   # force the pdfium leg (default: poppler)
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -51,7 +51,7 @@ fn main() {
         text.chars().count(),
         document.images.len()
     );
-    for (_i, image) in document.images.iter().enumerate() {
+    for image in document.images.iter() {
         let name = format!(
             "{out_dir}/embedded-{}.{}",
             image.id,

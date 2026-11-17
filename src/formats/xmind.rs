@@ -87,25 +87,23 @@ fn node_from_json_topic(v: &serde_json::Value) -> MindNode {
     let title = v
         .get("title")
         .and_then(|x| x.as_str())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "Untitled".to_string());
 
     let collapsed = v
         .get("branch")
         .and_then(|x| x.as_str())
-        .map(|s| s.eq_ignore_ascii_case("folded"))
-        .unwrap_or(false);
+        .is_some_and(|s| s.eq_ignore_ascii_case("folded"));
 
     let mut node = MindNode::new(title, collapsed);
 
-    if let Some(children_obj) = v.get("children").and_then(|x| x.as_object()) {
-        if let Some(attached) = children_obj.get("attached").and_then(|x| x.as_array()) {
+    if let Some(children_obj) = v.get("children").and_then(|x| x.as_object())
+        && let Some(attached) = children_obj.get("attached").and_then(|x| x.as_array()) {
             for child in attached {
                 node.children.push(node_from_json_topic(child));
             }
         }
-    }
 
     node
 }
@@ -147,7 +145,7 @@ fn parse_content_xml_root(xml: &str) -> Result<MindNode> {
             "quot" => "\"",
             "lt" => "<",
             "gt" => ">",
-            _ => return Some(format!("&{};", name)),
+            _ => return Some(format!("&{name};")),
         };
         Some(s.to_string())
     };
@@ -174,8 +172,7 @@ fn parse_content_xml_root(xml: &str) -> Result<MindNode> {
                     let collapsed = e.attributes().flatten().any(|a| {
                         local_name(a.key.as_ref()) == "branch"
                             && a.unescape_value()
-                                .map(|v| v.eq_ignore_ascii_case("folded"))
-                                .unwrap_or(false)
+                                .is_ok_and(|v| v.eq_ignore_ascii_case("folded"))
                     });
                     topic_stack.push(TopicBuilder {
                         title: String::new(),
@@ -194,7 +191,7 @@ fn parse_content_xml_root(xml: &str) -> Result<MindNode> {
                         .and_then(|decoded| {
                             quick_xml::escape::unescape(&decoded)
                                 .ok()
-                                .map(|v| v.into_owned())
+                                .map(std::borrow::Cow::into_owned)
                         })
                         .unwrap_or_default();
                     if let Some(cur) = topic_stack.last_mut() {
@@ -204,20 +201,18 @@ fn parse_content_xml_root(xml: &str) -> Result<MindNode> {
             }
             Ok(quick_xml::events::Event::CData(t)) => {
                 if in_first_sheet && in_title {
-                    let s = t.decode().map(|v| v.to_string()).unwrap_or_default();
+                    let s = t.decode().map_or_default(|v| v.to_string());
                     if let Some(cur) = topic_stack.last_mut() {
                         cur.title.push_str(&s);
                     }
                 }
             }
             Ok(quick_xml::events::Event::GeneralRef(r)) => {
-                if in_first_sheet && in_title {
-                    if let Some(s) = decode_general_ref(r) {
-                        if let Some(cur) = topic_stack.last_mut() {
+                if in_first_sheet && in_title
+                    && let Some(s) = decode_general_ref(r)
+                        && let Some(cur) = topic_stack.last_mut() {
                             cur.title.push_str(&s);
                         }
-                    }
-                }
             }
             Ok(quick_xml::events::Event::End(e)) => {
                 let n = local_name(e.name().as_ref());
@@ -236,8 +231,8 @@ fn parse_content_xml_root(xml: &str) -> Result<MindNode> {
 
                 if n == "title" {
                     in_title = false;
-                } else if n == "topic" && in_first_sheet {
-                    if let Some(top) = topic_stack.pop() {
+                } else if n == "topic" && in_first_sheet
+                    && let Some(top) = topic_stack.pop() {
                         let title = if top.title.trim().is_empty() {
                             "Untitled".to_string()
                         } else {
@@ -254,7 +249,6 @@ fn parse_content_xml_root(xml: &str) -> Result<MindNode> {
                             root = Some(node);
                         }
                     }
-                }
             }
             Ok(quick_xml::events::Event::Eof) => break,
             Ok(_) => {}
@@ -384,7 +378,7 @@ mod tests {
         assert!(md.contains("- B"), "{md}");
 
         let mindmap = doc.metadata.extra.get("mindmap").expect("mindmap metadata");
-        assert_eq!(mindmap.get("node_count").and_then(|v| v.as_u64()), Some(4));
+        assert_eq!(mindmap.get("node_count").and_then(serde_json::Value::as_u64), Some(4));
     }
 
     #[test]

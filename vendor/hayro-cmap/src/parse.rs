@@ -198,6 +198,17 @@ fn parse_integer(scanner: &mut Scanner<'_>) -> Option<i64> {
     }
 }
 
+/// The same rule as [`parse_integer`], for a token the caller already fetched
+/// (PdfCraft patch, bug-hunter-002 P2-3: the lenient parsers must be able to
+/// end-marker-check a token before consuming it).
+#[inline]
+fn parse_integer_from_token(obj: &Token<'_>) -> Option<i64> {
+    match obj {
+        Token::Number(Number::Integer(i)) => Some(*i),
+        _ => None,
+    }
+}
+
 fn parse_string_or_name(scanner: &mut Scanner<'_>) -> Option<Vec<u8>> {
     match scanner.parse_token().ok()? {
         Token::String(s) => s.decode().ok(),
@@ -468,16 +479,6 @@ fn decode_be(bytes: &[u8]) -> Option<Vec<u16>> {
 }
 
 #[inline]
-/// PdfCraft patch (bug-hunter-002 P2-3): integer from an already-fetched
-/// token, so callers can end-marker-check before consuming.
-#[inline]
-fn parse_integer_from_token(obj: &Token<'_>) -> Option<i64> {
-    match obj {
-        Token::Number(Number::Integer(i)) => Some(*i),
-        _ => None,
-    }
-}
-
 fn read_u32_code(scanner: &mut Scanner<'_>, buf: &mut Vec<u8>) -> Option<u32> {
     let s = scanner.parse_string().ok()?;
     s.decode_into(buf).ok()?;

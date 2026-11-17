@@ -47,14 +47,13 @@ fn cleanup_pdf_text(s: &str) -> String {
 
             if saw_break {
                 // If next is a lowercase letter, treat as hyphenation.
-                if let Some(nxt) = look.peek().copied() {
-                    if nxt.is_alphabetic() && nxt.is_lowercase() {
+                if let Some(nxt) = look.peek().copied()
+                    && nxt.is_alphabetic() && nxt.is_lowercase() {
                         for _ in 0..consumed {
                             it.next();
                         }
                         continue; // drop hyphen + newline
                     }
-                }
             }
         }
         tmp.push(ch);
@@ -236,7 +235,7 @@ impl ParsedPdfDocument {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CoordinateSystem {
     /// Unrotated page space, visible-page origin subtracted: x right, y DOWN, origin
-    /// top-left of the CropBox (else MediaBox). The only system produced today.
+    /// top-left of the `CropBox` (else `MediaBox`). The only system produced today.
     Source,
     /// Native /Rotate applied. Reserved — viewer-oriented normalisation is not in
     /// this task's scope (task-4 spec).
@@ -244,6 +243,7 @@ pub enum CoordinateSystem {
 }
 
 impl CoordinateSystem {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             CoordinateSystem::Source => "source",
@@ -285,12 +285,12 @@ pub struct SpanBox {
 pub struct PageGeometry {
     pub page_number: u32,
     pub spans: Vec<SpanBox>,
-    /// Native /MediaBox [x0 y0 x1 y1], first found walking /Parent. `None` = the page
-    /// chain declares no MediaBox (degenerate file); spans then stay in raw PDF space.
+    /// Native /`MediaBox` [x0 y0 x1 y1], first found walking /Parent. `None` = the page
+    /// chain declares no `MediaBox` (degenerate file); spans then stay in raw PDF space.
     pub media_box: Option<[f32; 4]>,
-    /// Native /CropBox as DECLARED (raw coordinates, NOT normalized) so the
-    /// crop-origin subtraction of `spans` is reversible. `None` = no /CropBox (the
-    /// visible page is the MediaBox).
+    /// Native /`CropBox` as DECLARED (raw coordinates, NOT normalized) so the
+    /// crop-origin subtraction of `spans` is reversible. `None` = no /`CropBox` (the
+    /// visible page is the `MediaBox`).
     pub crop_box: Option<[f32; 4]>,
     /// Page's native /Rotate (normalized 0/90/180/270 for multiples of 90), preserved
     /// even though `Source` boxes are not rotated.
@@ -408,7 +408,7 @@ fn decode_pdf_string(bytes: &[u8]) -> String {
     // PDF string objects can be UTF-16 with BOM, but in the wild you'll also find UTF-16BE/LE
     // without a BOM (especially for metadata-like strings).
     if bytes.starts_with(b"\xFE\xFF") {
-        let mut u16s = Vec::with_capacity((bytes.len().saturating_sub(2) + 1) / 2);
+        let mut u16s = Vec::with_capacity(bytes.len().saturating_sub(2).div_ceil(2));
         let mut i = 2usize;
         while i + 1 < bytes.len() {
             u16s.push(u16::from_be_bytes([bytes[i], bytes[i + 1]]));
@@ -417,7 +417,7 @@ fn decode_pdf_string(bytes: &[u8]) -> String {
         return String::from_utf16_lossy(&u16s);
     }
     if bytes.starts_with(b"\xFF\xFE") {
-        let mut u16s = Vec::with_capacity((bytes.len().saturating_sub(2) + 1) / 2);
+        let mut u16s = Vec::with_capacity(bytes.len().saturating_sub(2).div_ceil(2));
         let mut i = 2usize;
         while i + 1 < bytes.len() {
             u16s.push(u16::from_le_bytes([bytes[i], bytes[i + 1]]));
@@ -427,7 +427,7 @@ fn decode_pdf_string(bytes: &[u8]) -> String {
     }
 
     // Heuristic: UTF-16 without BOM (common pattern: 0x00 xx 0x00 yy ...).
-    if bytes.len() >= 4 && bytes.len() % 2 == 0 {
+    if bytes.len() >= 4 && bytes.len().is_multiple_of(2) {
         let pairs = bytes.len() / 2;
         let mut even_nul = 0usize;
         let mut odd_nul = 0usize;
@@ -483,7 +483,7 @@ fn collect_fonts_from_resources(
         _ => return out,
     };
 
-    for (k, v) in dict.iter() {
+    for (k, v) in &dict {
         let fd = match v {
             Object::Dictionary(d) => Some(d.clone()),
             Object::Reference(oid) => match doc.get_object(*oid).ok() {
@@ -501,7 +501,7 @@ fn collect_fonts_from_resources(
 }
 
 fn decode_font_string(
-    encodings: &HashMap<Vec<u8>, lopdf::Encoding>,
+    encodings: &HashMap<Vec<u8>, lopdf::Encoding<'_>>,
     font_alias: Option<&[u8]>,
     bytes: &[u8],
 ) -> String {
@@ -512,9 +512,9 @@ fn decode_font_string(
         s.chars().filter(|c| *c != '\u{0000}').collect()
     }
 
-    if let Some(alias) = font_alias {
-        if let Some(enc) = encodings.get(alias) {
-            if let Ok(s) = lopdf::Document::decode_text(enc, bytes) {
+    if let Some(alias) = font_alias
+        && let Some(enc) = encodings.get(alias)
+            && let Ok(s) = lopdf::Document::decode_text(enc, bytes) {
                 // Some PDFs (esp. multi-byte / CID-ish) can yield strings with interleaved NULs.
                 // Prefer a NUL-stripped version, and if the decoded output is mostly NUL,
                 // fall back to direct string decoding.
@@ -532,15 +532,13 @@ fn decode_font_string(
                 }
                 return s_stripped;
             }
-        }
-    }
 
     // Best-effort fallback when the PDF doesn't provide a usable font encoding.
     strip_nul(&decode_pdf_string(bytes))
 }
 
 fn decode_text_object(
-    encodings: &HashMap<Vec<u8>, lopdf::Encoding>,
+    encodings: &HashMap<Vec<u8>, lopdf::Encoding<'_>>,
     font_alias: Option<&[u8]>,
     o: &Object,
 ) -> Option<String> {
@@ -881,11 +879,10 @@ fn parse_pdf_outline(
         let Ok(s) = a.get(b"S") else {
             return None;
         };
-        if let Object::Name(n) = s {
-            if n.as_slice() != b"GoTo" {
+        if let Object::Name(n) = s
+            && n.as_slice() != b"GoTo" {
                 return None;
             }
-        }
         let Ok(d) = a.get(b"D") else {
             return None;
         };
@@ -949,15 +946,14 @@ fn parse_pdf_outline(
                 _ => None,
             });
 
-        if !title.is_empty() {
-            if let Some(page_number) = page_number {
+        if !title.is_empty()
+            && let Some(page_number) = page_number {
                 out.push(PdfOutlineEntry {
                     title,
                     level: level.max(1),
                     page_number,
                 });
             }
-        }
 
         if let Ok(child) = item.get(b"First") {
             walk(
@@ -986,7 +982,7 @@ fn parse_pdf_outline(
     out
 }
 
-/// Emit one text atom at a show op (`Tj`/`TJ`/`'`/`"`/BDC ActualText) and, additively
+/// Emit one text atom at a show op (`Tj`/`TJ`/`'`/`"`/BDC `ActualText`) and, additively
 /// (task-4), its geometric box into the page's geometry sink. `t` is the normalized,
 /// non-empty span text. The atom values (seq, position, effective size) are computed
 /// exactly as before the extraction; the box arithmetic is the TASK 2 spike's proven
@@ -1029,9 +1025,7 @@ fn push_text_atom(
     let y1 = corners.iter().map(|c| c.1).fold(f32::NEG_INFINITY, f32::max);
     let font_name = state
         .font_alias
-        .as_deref()
-        .map(|a| String::from_utf8_lossy(a).to_string())
-        .unwrap_or_else(|| "(none)".to_string());
+        .as_deref().map_or_else(|| "(none)".to_string(), |a| String::from_utf8_lossy(a).to_string());
     geometry.push(SpanBox {
         seq,
         x0,
@@ -1050,7 +1044,7 @@ fn handle_content_ops(
     ops: &[lopdf::content::Operation],
     resources: &lopdf::Dictionary,
     fonts: &HashMap<Vec<u8>, lopdf::Dictionary>,
-    encodings: &HashMap<Vec<u8>, lopdf::Encoding>,
+    encodings: &HashMap<Vec<u8>, lopdf::Encoding<'_>>,
     page_number: u32,
     state: &mut PdfTextState,
     state_stack: &mut Vec<PdfTextState>,
@@ -1094,8 +1088,8 @@ fn handle_content_ops(
             }
             "Tm" => {
                 // a b c d e f
-                if operands.len() >= 6 {
-                    if let (Some(a), Some(b), Some(c), Some(d), Some(e), Some(f)) = (
+                if operands.len() >= 6
+                    && let (Some(a), Some(b), Some(c), Some(d), Some(e), Some(f)) = (
                         obj_to_f32(&operands[0]),
                         obj_to_f32(&operands[1]),
                         obj_to_f32(&operands[2]),
@@ -1105,12 +1099,11 @@ fn handle_content_ops(
                     ) {
                         state.tm = Matrix2D::from_components(a, b, c, d, e, f);
                     }
-                }
             }
             "cm" => {
                 // a b c d e f
-                if operands.len() >= 6 {
-                    if let (Some(a), Some(b), Some(c), Some(d), Some(e), Some(f)) = (
+                if operands.len() >= 6
+                    && let (Some(a), Some(b), Some(c), Some(d), Some(e), Some(f)) = (
                         obj_to_f32(&operands[0]),
                         obj_to_f32(&operands[1]),
                         obj_to_f32(&operands[2]),
@@ -1121,31 +1114,28 @@ fn handle_content_ops(
                         let m = Matrix2D::from_components(a, b, c, d, e, f);
                         state.ctm = state.ctm.multiply(&m);
                     }
-                }
             }
             "Td" => {
-                if operands.len() >= 2 {
-                    if let (Some(tx), Some(ty)) =
+                if operands.len() >= 2
+                    && let (Some(tx), Some(ty)) =
                         (obj_to_f32(&operands[0]), obj_to_f32(&operands[1]))
                     {
                         let t = Matrix2D::from_components(1.0, 0.0, 0.0, 1.0, tx, ty);
                         state.tm = state.tm.multiply(&t);
                     }
-                }
             }
             "TD" => {
-                if operands.len() >= 2 {
-                    if let (Some(tx), Some(ty)) =
+                if operands.len() >= 2
+                    && let (Some(tx), Some(ty)) =
                         (obj_to_f32(&operands[0]), obj_to_f32(&operands[1]))
                     {
                         state.leading = (-ty).abs().max(1.0);
                         let t = Matrix2D::from_components(1.0, 0.0, 0.0, 1.0, tx, ty);
                         state.tm = state.tm.multiply(&t);
                     }
-                }
             }
             "TL" => {
-                if let Some(tl) = operands.get(0).and_then(obj_to_f32) {
+                if let Some(tl) = operands.first().and_then(obj_to_f32) {
                     state.leading = tl.abs().max(1.0);
                 }
             }
@@ -1158,8 +1148,7 @@ fn handle_content_ops(
                     continue;
                 }
                 let alias = state.font_alias.as_deref();
-                if let Some(s) = operands
-                    .get(0)
+                if let Some(s) = operands.first()
                     .and_then(|o| decode_text_object(encodings, alias, o))
                 {
                     let t = normalize_atom_text(&s);
@@ -1172,7 +1161,7 @@ fn handle_content_ops(
                 if !state.in_text {
                     continue;
                 }
-                if let Some(Object::Array(arr)) = operands.get(0) {
+                if let Some(Object::Array(arr)) = operands.first() {
                     let mut s = String::new();
                     let alias = state.font_alias.as_deref();
                     for o in arr {
@@ -1194,8 +1183,7 @@ fn handle_content_ops(
                     continue;
                 }
                 let alias = state.font_alias.as_deref();
-                if let Some(s) = operands
-                    .get(0)
+                if let Some(s) = operands.first()
                     .and_then(|o| decode_text_object(encodings, alias, o))
                 {
                     let t = normalize_atom_text(&s);
@@ -1240,18 +1228,17 @@ fn handle_content_ops(
                         }
                         _ => None,
                     };
-                    if let Some(d) = dict {
-                        if let Ok(Object::String(b, _)) = d.get(b"ActualText") {
+                    if let Some(d) = dict
+                        && let Ok(Object::String(b, _)) = d.get(b"ActualText") {
                             let t = normalize_atom_text(&decode_pdf_string(b));
                             if !t.is_empty() {
                                 push_text_atom(state, atoms, geometry, t);
                             }
                         }
-                    }
                 }
             }
-            "Do" => {
-                if operands.len() >= 1 {
+            "Do"
+                if !operands.is_empty() => {
                     let Object::Name(name) = &operands[0] else {
                         continue;
                     };
@@ -1262,16 +1249,15 @@ fn handle_content_ops(
 
                     if subtype == b"Form".to_vec() {
                         let mut form_resources = resources.clone();
-                        if let Ok(obj) = stream.dict.get(b"Resources") {
-                            if let Some(r) = resolve_dict(doc, obj) {
+                        if let Ok(obj) = stream.dict.get(b"Resources")
+                            && let Some(r) = resolve_dict(doc, obj) {
                                 merge_resources_into(doc, &mut form_resources, &r);
                             }
-                        }
 
                         let mut form_fonts = fonts.clone();
                         form_fonts.extend(collect_fonts_from_resources(doc, &form_resources));
 
-                        let form_encodings: HashMap<Vec<u8>, lopdf::Encoding> = form_fonts
+                        let form_encodings: HashMap<Vec<u8>, lopdf::Encoding<'_>> = form_fonts
                             .iter()
                             .filter_map(|(name, font)| {
                                 font.get_font_encoding(doc)
@@ -1307,15 +1293,13 @@ fn handle_content_ops(
                         )?;
                         *state = saved;
                         *state_stack = saved_stack;
-                    } else if subtype == b"Image".to_vec() {
-                        if let Some((id, mime)) =
+                    } else if subtype == b"Image".to_vec()
+                        && let Some((id, mime)) =
                             extract_xobject_image(doc, &stream, images, image_by_hash)
                         {
                             image_blocks.push((page_number, id, mime));
                         }
-                    }
                 }
-            }
             _ => {}
         }
     }
@@ -1351,7 +1335,7 @@ fn merge_resources_into(
         let merged = if let Ok(dst_val) = dst.get(key) {
             if let Some(dst_dict) = dict_from_obj(doc, dst_val) {
                 let mut out = dst_dict;
-                for (k, v) in src_dict.iter() {
+                for (k, v) in &src_dict {
                     out.set(k.clone(), v.clone());
                 }
                 out
@@ -1365,7 +1349,7 @@ fn merge_resources_into(
         dst.set(key.to_vec(), Object::Dictionary(merged));
     }
 
-    for (k, v) in src.iter() {
+    for (k, v) in src {
         match k.as_slice() {
             b"Font" => merge_named_dict(doc, dst, b"Font", v),
             b"XObject" => merge_named_dict(doc, dst, b"XObject", v),
@@ -1400,10 +1384,10 @@ fn build_page_resources(
     Ok(out)
 }
 
-/// Page-inheritable attributes (PDF 32000-1 §7.7.3.3): /MediaBox, /CropBox and
+/// Page-inheritable attributes (PDF 32000-1 §7.7.3.3): /`MediaBox`, /`CropBox` and
 /// /Rotate are read from the page node, else the nearest ancestor declaring them
 /// (bounded /Parent walk, same discipline as [`build_page_resources`]). /Rotate is
-/// normalized into 0..=359 via rem_euclid (-90 -> 270).
+/// normalized into 0..=359 via `rem_euclid` (-90 -> 270).
 fn page_inherited_boxes(
     doc: &lopdf::Document,
     page_id: lopdf::ObjectId,
@@ -1439,21 +1423,18 @@ fn page_inherited_boxes(
         let Ok(Object::Dictionary(dict)) = doc.get_object(id) else {
             break;
         };
-        if media.is_none() {
-            if let Ok(o) = dict.get(b"MediaBox") {
+        if media.is_none()
+            && let Ok(o) = dict.get(b"MediaBox") {
                 media = box_array(doc, o);
             }
-        }
-        if crop.is_none() {
-            if let Ok(o) = dict.get(b"CropBox") {
+        if crop.is_none()
+            && let Ok(o) = dict.get(b"CropBox") {
                 crop = box_array(doc, o);
             }
-        }
-        if rotate.is_none() {
-            if let Some(r) = dict.get(b"Rotate").ok().and_then(obj_to_f32) {
+        if rotate.is_none()
+            && let Some(r) = dict.get(b"Rotate").ok().and_then(obj_to_f32) {
                 rotate = Some((r as i64).rem_euclid(360) as u16);
             }
-        }
         match dict.get(b"Parent") {
             Ok(Object::Reference(pid)) => id = *pid,
             _ => break,
@@ -1463,8 +1444,8 @@ fn page_inherited_boxes(
 }
 
 /// Assemble one page's [`PageGeometry`]: normalize the raw span boxes into
-/// visible-page coordinates (origin top-left of the CropBox when present, else the
-/// MediaBox; `norm_x = x - origin_x`, `norm_y = max_y - y` — task-4 decision). Pages
+/// visible-page coordinates (origin top-left of the `CropBox` when present, else the
+/// `MediaBox`; `norm_x = x - origin_x`, `norm_y = max_y - y` — task-4 decision). Pages
 /// whose chain declares no box at all keep their spans in raw PDF space and report
 /// `media_box: None`.
 fn build_page_geometry(
@@ -1475,7 +1456,7 @@ fn build_page_geometry(
 ) -> PageGeometry {
     let (media_box, crop_box, initial_rotation) = page_inherited_boxes(doc, page_id);
     if let Some([origin_x, _, _, max_y]) = crop_box.or(media_box) {
-        for s in spans.iter_mut() {
+        for s in &mut spans {
             let nx0 = s.x0 - origin_x;
             let nx1 = s.x1 - origin_x;
             let ny0 = max_y - s.y1; // raw top edge -> smaller normalized y (y flips down)
@@ -1532,6 +1513,7 @@ enum XyAxis {
 /// the original stream order — the byte-identity contract for single-column
 /// pages. Empty input gives empty output (an empty page produces no regions,
 /// no panic).
+#[must_use]
 pub fn xy_cut_reading_regions(spans: &[SpanBox]) -> Vec<Vec<u32>> {
     if spans.is_empty() {
         return Vec::new();
@@ -1672,7 +1654,7 @@ fn median_f32(mut v: Vec<f32>, default: f32) -> f32 {
     } else {
         let a = v[(n / 2).saturating_sub(1)];
         let b = v[n / 2];
-        (a + b) / 2.0
+        f32::midpoint(a, b)
     }
 }
 
@@ -1704,12 +1686,11 @@ fn cluster_atoms_to_lines(atoms: &[TextAtom]) -> Vec<Line> {
 
     let mut lines: Vec<(f32, Vec<TextAtom>)> = Vec::new();
     for a in sorted {
-        if let Some((ly, group)) = lines.last_mut() {
-            if (a.y - *ly).abs() <= eps_y {
+        if let Some((ly, group)) = lines.last_mut()
+            && (a.y - *ly).abs() <= eps_y {
                 group.push(a);
                 continue;
             }
-        }
         lines.push((a.y, vec![a]));
     }
 
@@ -1784,11 +1765,10 @@ fn cluster_lines_to_paragraphs(lines: &[Line]) -> Vec<Paragraph> {
     for l in sorted {
         if let Some(py) = prev_y {
             let gap = (py - l.y).abs();
-            if gap > gap_thr {
-                if let Some(p) = cur.take() {
+            if gap > gap_thr
+                && let Some(p) = cur.take() {
                     out.push(p);
                 }
-            }
         }
         prev_y = Some(l.y);
 
@@ -1906,7 +1886,7 @@ fn paragraph_as_table(lines: &[String]) -> Option<Vec<Vec<Cell>>> {
     }
 
     let cols_n = rows_raw.first()?.len();
-    if cols_n < 2 || cols_n > 10 {
+    if !(2..=10).contains(&cols_n) {
         return None;
     }
     if rows_raw.iter().any(|r| r.len() != cols_n) {
@@ -1992,14 +1972,14 @@ fn looks_like_heading_text(s: &str) -> bool {
         sig += 1;
 
         // TitleCase or ALLCAPS word.
-        let mut chars = w.chars().filter(|c| c.is_ascii_alphabetic());
+        let mut chars = w.chars().filter(char::is_ascii_alphabetic);
         let first = chars.next();
         let rest: String = chars.collect();
         let is_all_caps = w
             .chars()
-            .filter(|c| c.is_ascii_alphabetic())
+            .filter(char::is_ascii_alphabetic)
             .all(|c| c.is_ascii_uppercase());
-        let is_title = first.map(|c| c.is_ascii_uppercase()).unwrap_or(false)
+        let is_title = first.is_some_and(|c| c.is_ascii_uppercase())
             && rest.chars().all(|c| c.is_ascii_lowercase());
         if is_all_caps || is_title {
             caps += 1;
@@ -2056,7 +2036,7 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
         let mut state = PdfTextState::default();
         let mut state_stack: Vec<PdfTextState> = Vec::new();
 
-        let encodings: HashMap<Vec<u8>, lopdf::Encoding> = fonts
+        let encodings: HashMap<Vec<u8>, lopdf::Encoding<'_>> = fonts
             .iter()
             .filter_map(|(name, font)| {
                 font.get_font_encoding(&doc)
@@ -2120,11 +2100,11 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
         let y_min = lines
             .iter()
             .map(|l| l.y)
-            .fold(f32::INFINITY, |a, b| a.min(b));
+            .fold(f32::INFINITY, f32::min);
         let y_max = lines
             .iter()
             .map(|l| l.y)
-            .fold(f32::NEG_INFINITY, |a, b| a.max(b));
+            .fold(f32::NEG_INFINITY, f32::max);
         let y_span = (y_max - y_min).abs().max(1.0);
 
         // Estimate body font-size by ignoring the top area (where titles/headers live).
@@ -2149,7 +2129,7 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
             let max_fs = paragraphs
                 .iter()
                 .map(|p| p.font_size)
-                .fold(0.0f32, |a, b| a.max(b));
+                .fold(0.0f32, f32::max);
             let title_min_fs = (max_fs * 0.65).max(med_para * 1.35);
             let mut title_parts: Vec<String> = Vec::new();
             while para_idx < paragraphs.len() {
@@ -2266,8 +2246,8 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
 
                 // Some PDFs use body-sized text for headings, and the heading can appear mid-page.
                 // Detect the common "2-line heading then body" pattern using local neighborhood.
-                if !is_heading && shortish && !sentence_like && semantic && ratio >= 0.90 {
-                    if let Some(p2) = paragraphs.get(para_idx + 1) {
+                if !is_heading && shortish && !sentence_like && semantic && ratio >= 0.90
+                    && let Some(p2) = paragraphs.get(para_idx + 1) {
                         let t2 = p2.lines.join("\n").trim().to_string();
                         let t2_chars = t2.chars().count();
                         let shortish2 = t2_chars <= 120 && p2.lines.len() <= 4;
@@ -2276,18 +2256,16 @@ pub fn parse_pdf_full(bytes: &[u8]) -> Result<ParsedPdfDocument> {
                         if !t2.is_empty() && shortish2 && semantic2 && rel_fs <= 0.20 {
                             let bodyish_after = paragraphs
                                 .get(para_idx + 2)
-                                .map(|p3| {
+                                .is_none_or(|p3| {
                                     let t3 = p3.lines.join("\n").trim().to_string();
                                     let n = t3.chars().count();
                                     n > 140 || t3.ends_with('.')
-                                })
-                                .unwrap_or(true);
+                                });
                             if bodyish_after {
                                 is_heading = true;
                             }
                         }
                     }
-                }
             }
             if is_heading {
                 let mut level = heading_level_from_ratio(ratio).max(1).min(6);
@@ -2522,12 +2500,12 @@ fn pdftoppm_available() -> bool {
     std::process::Command::new("pdftoppm")
         .arg("-v")
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|o| o.status.success())
 }
 
-/// Where a bundled Pdfium dynamic library would live (env PDFIUM_PATH, else
+/// Where a bundled Pdfium dynamic library would live (env `PDFIUM_PATH`, else
 /// ~/.cache/office-parser/pdfium/ — see [`install_pdfium`]).
+#[must_use]
 pub fn pdfium_lib_path() -> Option<std::path::PathBuf> {
     if let Ok(p) = std::env::var("PDFIUM_PATH") {
         let p = std::path::PathBuf::from(p);
@@ -2583,7 +2561,7 @@ pub fn install_pdfium() -> Result<std::path::PathBuf> {
         let lib_src = dir.join(lib);
         anyhow::ensure!(lib_src.exists(), "pdfium archive missing {lib}");
         let dest = dest_dir.join(lib.rsplit('/').next().unwrap());
-        std::fs::copy(&lib, &dest)?;
+        std::fs::copy(lib, &dest)?;
         Ok(dest)
     })();
     let _ = std::fs::remove_dir_all(&dir);
@@ -2612,7 +2590,7 @@ fn pdfium_handle() -> Option<&'static std::sync::Mutex<pdfium_render::prelude::P
 }
 
 #[cfg(feature = "render-pdfium")]
-fn render_pages_png_pdfium(bytes: &[u8], dpi: u32, clamp_budget: bool) -> Result<Vec<Vec<u8>>> {
+fn render_pages_png_pdfium(bytes: &[u8], dpi: u32, budget: RenderBudget) -> Result<Vec<Vec<u8>>> {
     use pdfium_render::prelude::*;
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
@@ -2627,23 +2605,26 @@ fn render_pages_png_pdfium(bytes: &[u8], dpi: u32, clamp_budget: bool) -> Result
         let Some(pdfium) = pdfium_handle() else {
             anyhow::bail!("pdfium bindings unavailable");
         };
-        let pdfium = pdfium.lock().map_err(|_| anyhow::anyhow!("pdfium mutex poisoned"))?;
+        let pdfium = pdfium
+            .lock()
+            .map_err(|_| anyhow::anyhow!("pdfium mutex poisoned"))?;
         let document = pdfium
             .load_pdf_from_file(&src, None)
             .map_err(|e| anyhow::anyhow!("pdfium load: {e:?}"))?;
-        // clamped: the legacy ~0.4 MP OCR window (longest side ≤ ~750).
-        // unclamped: true dpi rendering (Indra resizes to 1024 itself).
-        let config = if clamp_budget {
-            PdfRenderConfig::new().set_target_width(530).set_maximum_height(750)
-        } else {
-            PdfRenderConfig::new().scale_page_by_factor(dpi as f32 / 72.0)
-        };
         let mut pages = Vec::new();
         for (index, page) in document.pages().iter().enumerate() {
-            let image = page
-                .render_with_config(&config)?
-                .as_image()?
-                .into_rgb8();
+            // Same clamp rule as hayro and poppler, from the in-process page
+            // box. The legacy `set_target_width(530).set_maximum_height(750)`
+            // window was a hand-tuned fit-inside box that only approximated
+            // the 0.4 MP budget for A4 at 200 dpi; the shared rule holds it for
+            // every page size and dpi.
+            let (w_pt, h_pt) = (
+                f64::from(page.width().value),
+                f64::from(page.height().value),
+            );
+            let scale = clamp_scale(w_pt, h_pt, dpi as f32 / 72.0, budget);
+            let config = PdfRenderConfig::new().scale_page_by_factor(scale);
+            let image = page.render_with_config(&config)?.as_image()?.into_rgb8();
             let mut png = std::io::Cursor::new(Vec::new());
             image
                 .write_to(&mut png, ::image::ImageFormat::Png)
@@ -2660,84 +2641,142 @@ fn render_pages_png_pdfium(bytes: &[u8], dpi: u32, clamp_budget: bool) -> Result
 /// content; denser pages yield empty grids — typellama docs/BACKENDS.md).
 const OCR_MEGAPIXEL_BUDGET: f64 = 0.4;
 
-/// sqrt back-off: pixels scale with dpi², so dpi scales with √(budget/mp).
-fn clamp_dpi_to_budget(page_pts_w: f64, page_pts_h: f64, dpi: u32) -> u32 {
-    let scale = dpi as f64 / 72.0;
-    let mp = (page_pts_w * scale) * (page_pts_h * scale) / 1_000_000.0;
+/// How much resolution a render request may spend per page.
+///
+/// One rule, applied identically by every backend: the requested `dpi` is
+/// backed off by `sqrt(budget/mp)` — pixels scale with dpi² — so dense pages
+/// land inside the OCR window instead of yielding empty grids.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderBudget {
+    /// Keep each page at or below [`OCR_MEGAPIXEL_BUDGET`] (~0.4 MP).
+    Clamped,
+    /// Render at the requested dpi. Indra resizes to its own 1024-long-side
+    /// input and wants source pixels (its pipeline renders via pdfium at
+    /// dpi/72); clamping starves it (~64 dpi on A4).
+    Full,
+}
+
+/// The per-page scale a backend must render at for `budget`.
+///
+/// `width_pts`/`height_pts` are the page box in points (1/72 inch), so
+/// `scale = dpi / 72` is the pixel multiplier. Pure arithmetic, no PDF
+/// parsing: every backend knows its own page box.
+fn clamp_scale(width_pts: f64, height_pts: f64, scale: f32, budget: RenderBudget) -> f32 {
+    if budget == RenderBudget::Full || !scale.is_finite() || scale <= 0.0 {
+        return scale;
+    }
+    let mp = (width_pts.max(0.0) * f64::from(scale))
+        * (height_pts.max(0.0) * f64::from(scale))
+        / 1_000_000.0;
     if mp <= OCR_MEGAPIXEL_BUDGET {
+        return scale;
+    }
+    let factor = (OCR_MEGAPIXEL_BUDGET / mp).sqrt() as f32;
+    scale * factor
+}
+
+/// `dpi` backed off to fit [`OCR_MEGAPIXEL_BUDGET`], the same rule as
+/// [`clamp_scale`] expressed in dpi — for backends that only speak dpi
+/// (poppler's `-r`).
+fn clamp_dpi_to_budget(page_pts_w: f64, page_pts_h: f64, dpi: u32) -> u32 {
+    let scale = f64::from(dpi) / 72.0;
+    let clamped = clamp_scale(page_pts_w, page_pts_h, scale as f32, RenderBudget::Clamped);
+    if clamped >= scale as f32 {
         return dpi;
     }
-    let factor = (OCR_MEGAPIXEL_BUDGET / mp).sqrt();
-    ((dpi as f64 * factor).floor() as u32).max(72)
+    ((f64::from(clamped) * 72.0).floor() as u32).max(72)
 }
 
 /// Page size in PDF points via `pdfinfo` (same poppler-utils install as
-/// pdftoppm). None if the probe is unavailable or unparseable.
+/// pdftoppm). None if the probe is unavailable or unparseable — poppler is the
+/// only backend that needs it; pdfium and hayro read the page box in-process.
 fn page_size_pts(bytes: &[u8]) -> Option<(f64, f64)> {
     use std::process::Command;
     let dir = std::env::temp_dir().join(format!("office-parser-probe-{}", std::process::id()));
     std::fs::create_dir_all(&dir).ok()?;
     let src = dir.join("doc.pdf");
     std::fs::write(&src, bytes).ok()?;
-    let out = Command::new("pdfinfo")
-        .arg("-f").arg("1").arg("-l").arg("1")
-        .arg(&src)
-        .output()
-        .ok()?;
+    let output = Command::new("pdfinfo").arg(&src).output().ok();
     let _ = std::fs::remove_dir_all(&dir);
-    let text = String::from_utf8_lossy(&out.stdout);
+    let text = String::from_utf8(output?.stdout).ok()?;
+    let mut size = None;
     for line in text.lines() {
-        if let Some(size) = line.strip_prefix("Page") {
-            if let Some(rest) = size.trim().strip_prefix("size:") {
-                let mut nums = rest.split_whitespace().filter_map(|t| t.parse::<f64>().ok());
-                if let (Some(w), Some(h)) = (nums.next(), nums.next()) {
-                    return Some((w, h));
-                }
-            }
+        let Some(rest) = line.strip_prefix("Page size:") else {
+            continue;
+        };
+        let rest = rest.trim();
+        let mut parts = rest.split_whitespace();
+        let w: f64 = parts.next()?.parse().ok()?;
+        let h: f64 = parts.next()?.parse().ok()?;
+        size = Some((w, h));
+    }
+    size
+}
+
+/// Rasterizer selected by `OFFICE_PARSER_RENDERER`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Renderer {
+    Pdfium,
+    Hayro,
+    Pdftoppm,
+    /// An unrecognised value: kept so the caller can name it in the error.
+    Unknown,
+}
+
+impl Renderer {
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" => None,
+            "pdfium" => Some(Self::Pdfium),
+            "hayro" => Some(Self::Hayro),
+            "pdftoppm" | "poppler" => Some(Self::Pdftoppm),
+            _ => Some(Self::Unknown),
         }
     }
-    None
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Pdfium => "pdfium",
+            Self::Hayro => "hayro",
+            Self::Pdftoppm => "pdftoppm",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 /// Errors if `pdftoppm` (poppler-utils) is not on PATH.
 pub fn render_pages_png(bytes: &[u8], dpi: u32) -> Result<Vec<Vec<u8>>> {
-    render_pages_png_opts(bytes, dpi, true)
+    render_pages_png_opts(bytes, dpi, RenderBudget::Clamped)
 }
 
-/// `clamp_budget=false` skips the 0.4 MP clamp — that budget was tuned for
-/// PaddleOCR-VL's reading window; Indra resizes to a 1024-long-side input
-/// itself and expects ~200 dpi source pixels (its own pipeline renders via
-/// pdfium at dpi/72). Clamping starves it (~64 dpi on A4).
 /// hayro backend (vendored PdfCraft-patched stack): pure Rust, no system
-/// dependency. Renders RGBA at scale = dpi/72, then converts to PNG.
+/// dependency. Renders RGBA at `clamp_scale(dpi/72)`, then converts to PNG.
 #[cfg(feature = "render-hayro")]
-fn render_pages_png_hayro(bytes: &[u8], dpi: u32) -> Result<Vec<Vec<u8>>> {
+fn render_pages_png_hayro(bytes: &[u8], dpi: u32, budget: RenderBudget) -> Result<Vec<Vec<u8>>> {
     use hayro::hayro_syntax::Pdf;
     use hayro::vello_cpu::color::palette::css::WHITE;
     use hayro::{PixmapSettings, RenderCache, RenderSettings, render};
 
-    let pdf = Pdf::new(bytes.to_vec())
-        .map_err(|e| anyhow::anyhow!("hayro load: {e:?}"))?;
-    let scale = dpi as f32 / 72.0;
+    let pdf =
+        Pdf::new(bytes.to_vec()).map_err(|e| anyhow::anyhow!("hayro load: {e:?}"))?;
     // PdfCraft-patched stack (hayro 0.9.0): the render cache is shared across pages; scale
-    // lives in PixmapSettings now. render() itself pre-clamps hostile page boxes to u16 sides
-    // and a 2^28-pixel budget before allocating (PdfCraft patch).
+    // lives in PixmapSettings. render() itself pre-clamps hostile page boxes to u16 sides and a
+    // 2^28-pixel budget before allocating (PdfCraft patch).
     let cache = RenderCache::new();
     let render_settings = RenderSettings::default();
-    let pixmap_settings = PixmapSettings {
-        x_scale: scale,
-        y_scale: scale,
-        bg_color: WHITE,
-    };
+    let interpreter = hayro::hayro_interpret::InterpreterSettings::default();
     let mut out = Vec::new();
     for (index, page) in pdf.pages().iter().enumerate() {
-        let rendered = render(
-            page,
-            &cache,
-            &hayro::hayro_interpret::InterpreterSettings::default(),
-            &render_settings,
-            &pixmap_settings,
-        );
+        // Per-page box, read in-process: the clamp needs no pdfinfo here.
+        let (w_pt, h_pt) = page.render_dimensions();
+        let scale = clamp_scale(f64::from(w_pt), f64::from(h_pt), dpi as f32 / 72.0, budget);
+        let pixmap_settings = PixmapSettings {
+            x_scale: scale,
+            y_scale: scale,
+            bg_color: WHITE,
+            ..Default::default()
+        };
+        let rendered = render(page, &cache, &interpreter, &render_settings, &pixmap_settings);
         let png = rendered
             .into_png()
             .map_err(|e| anyhow::anyhow!("hayro png page {index}: {e:?}"))?;
@@ -2746,52 +2785,100 @@ fn render_pages_png_hayro(bytes: &[u8], dpi: u32) -> Result<Vec<Vec<u8>>> {
     Ok(out)
 }
 
-
-pub fn render_pages_png_opts(bytes: &[u8], dpi: u32, clamp_budget: bool) -> Result<Vec<Vec<u8>>> {
-    use std::process::Command;
+/// Render every page to PNG.
+///
+/// Backend order: pdfium (engine-faithful pixels — Indra's own training
+/// distribution), then the pure-Rust hayro stack, then poppler (`pdftoppm`).
+/// `OFFICE_PARSER_RENDERER=pdfium|hayro|pdftoppm` **pins** one: a pinned
+/// backend that cannot run returns its error instead of quietly substituting
+/// another renderer, so pinned runs (bake-offs, regression baselines) stay
+/// honest. An unpinned run reports each failed backend on stderr and falls
+/// through to the next.
+///
+/// `budget` is applied per page by every backend (see [`RenderBudget`]).
+///
+/// # Errors
+///
+/// Returns an error when `dpi` is outside `1..=600`, when the pinned backend
+/// is not compiled in (`--features render-pdfium` / `render-hayro`) or fails,
+/// and — for an unpinned run — when no backend succeeded (the message names
+/// every one that was tried and why it failed).
+pub fn render_pages_png_opts(bytes: &[u8], dpi: u32, budget: RenderBudget) -> Result<Vec<Vec<u8>>> {
     if dpi == 0 || dpi > 600 {
         anyhow::bail!("dpi must be 1..=600, got {dpi}");
     }
-    // backend selection: the pdfium library first when installed (engine-
-    // faithful pixels — Indra's own pipeline renders via pdfium), then
-    // poppler (pdftoppm), then an actionable error naming every fix.
     let pref = std::env::var("OFFICE_PARSER_RENDERER").unwrap_or_default();
-    // Default order: pdfium first (Indra's training distribution — measured
-    // 5-10% more content on dense scans), hayro as pure-Rust fallback,
-    // poppler last.
-    #[cfg(feature = "render-pdfium")]
-    if pdfium_lib_path().is_some() && pref != "hayro" && pref != "pdftoppm" {
-        if let Ok(pages) = render_pages_png_pdfium(bytes, dpi, clamp_budget) {
-            return Ok(pages);
-        }
-        // pdfium unavailable/failed: fall through
-    }
-    #[cfg(feature = "render-hayro")]
-    if pref != "pdfium" && pref != "pdftoppm" {
-        if let Ok(pages) = render_pages_png_hayro(bytes, dpi) {
-            return Ok(pages);
-        }
-        // hayro failed: fall through to poppler
-    }
-    if !pdftoppm_available() {
+    let pinned = Renderer::parse(&pref);
+    if let Some(Renderer::Unknown) = pinned {
         anyhow::bail!(
-            "no PDF renderer available. Install one of:\n  \
-             • poppler-utils   (apt install poppler-utils / brew install poppler)\n  \
-             • pdfium library  (office_parser::formats::pdf::install_pdfium()? — auto-download, \
-               then build with --features render-pdfium)"
+            "OFFICE_PARSER_RENDERER={pref:?} is not a renderer; use pdfium, hayro, or pdftoppm"
         );
     }
-    // megapixel clamp (dev.to/serhii_kalyna_730b636889c pattern, budget ours):
-    // probe the page size in points, back the dpi off by sqrt(budget/mp) —
-    // pixels scale with dpi² — so dense pages land inside the OCR window
-    // instead of yielding empty grids (PaddleOCR-VL, 2026-10-06).
-    let dpi = if clamp_budget {
-        match page_size_pts(bytes) {
-            Some((w, h)) => clamp_dpi_to_budget(w, h, dpi),
-            None => dpi, // probe failed: caller's dpi stands, downstream errors if fatal
+    if let Some(renderer) = pinned {
+        return render_with(renderer, bytes, dpi, budget);
+    }
+    // Unpinned: quality order, and every failure is named — no silent
+    // substitution (a bake-off must not compare one engine against itself).
+    let mut failures: Vec<String> = Vec::new();
+    for renderer in [Renderer::Pdfium, Renderer::Hayro, Renderer::Pdftoppm] {
+        match render_with(renderer, bytes, dpi, budget) {
+            Ok(pages) => return Ok(pages),
+            Err(e) => failures.push(format!("{}: {e}", renderer.name())),
         }
-    } else {
-        dpi
+    }
+    anyhow::bail!("no PDF renderer succeeded\n  {}", failures.join("\n  "))
+}
+
+/// One backend, no fallback: what a pinned run gets.
+fn render_with(
+    renderer: Renderer,
+    bytes: &[u8],
+    dpi: u32,
+    budget: RenderBudget,
+) -> Result<Vec<Vec<u8>>> {
+    match renderer {
+        Renderer::Pdfium => {
+            #[cfg(feature = "render-pdfium")]
+            {
+                if pdfium_lib_path().is_none() {
+                    anyhow::bail!(
+                        "pdfium library not found (office_parser::formats::pdf::install_pdfium()?)"
+                    );
+                }
+                render_pages_png_pdfium(bytes, dpi, budget)
+            }
+            #[cfg(not(feature = "render-pdfium"))]
+            anyhow::bail!("built without `--features render-pdfium`")
+        }
+        Renderer::Hayro => {
+            #[cfg(feature = "render-hayro")]
+            {
+                render_pages_png_hayro(bytes, dpi, budget)
+            }
+            #[cfg(not(feature = "render-hayro"))]
+            anyhow::bail!("built without `--features render-hayro`")
+        }
+        Renderer::Pdftoppm => render_pages_png_poppler(bytes, dpi, budget),
+        Renderer::Unknown => anyhow::bail!("unknown renderer"),
+    }
+}
+
+/// poppler (`pdftoppm`) backend: needs the page box from `pdfinfo`, so the
+/// clamp is computed in dpi and passed with `-r`.
+fn render_pages_png_poppler(bytes: &[u8], dpi: u32, budget: RenderBudget) -> Result<Vec<Vec<u8>>> {
+    use std::process::Command;
+    if !pdftoppm_available() {
+        anyhow::bail!(
+            "pdftoppm not on PATH (apt install poppler-utils / brew install poppler)"
+        );
+    }
+    let dpi = match budget {
+        RenderBudget::Full => dpi,
+        RenderBudget::Clamped => match page_size_pts(bytes) {
+            Some((w, h)) => clamp_dpi_to_budget(w, h, dpi),
+            // probe failed: the caller's dpi stands, downstream errors if fatal
+            None => dpi,
+        },
     };
     static RENDER_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
@@ -2814,7 +2901,7 @@ pub fn render_pages_png_opts(bytes: &[u8], dpi: u32, clamp_budget: bool) -> Resu
             anyhow::bail!("pdftoppm failed: {status}");
         }
         let mut pages: Vec<(String, Vec<u8>)> = std::fs::read_dir(&dir)?
-            .filter_map(|entry| entry.ok())
+            .filter_map(std::result::Result::ok)
             .filter_map(|entry| {
                 let name = entry.file_name().into_string().ok()?;
                 (entry.path().extension()?.to_str()? == "png" && name.starts_with("page-"))
@@ -2853,7 +2940,7 @@ pub const PAGE_TEXT_THRESHOLD: usize = 50;
 /// A word-level detection from an OCR engine. Coordinates are pixels in the
 /// rendered page PNG the engine received (top-left origin, y down — raster
 /// space, not PDF point space); provenance is the router's render call at
-/// the requested dpi with `clamp_budget = false`.
+/// the requested dpi with [`RenderBudget::Full`].
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct OcrWordBox {
     pub text: String,
@@ -2947,8 +3034,8 @@ fn build_page_quality(
             // precondition; pdfium's invisible/bad-char checks are folded in
             // afterwards (parse_with_page_ocr_inner) as the additional signal
             // where render-pdfium is on.
-            if trust_checks {
-                if let Some(reason) = crate::quality::no_ink_reason(
+            if trust_checks
+                && let Some(reason) = crate::quality::no_ink_reason(
                     richness,
                     min_chars,
                     &geo.spans,
@@ -2956,7 +3043,6 @@ fn build_page_quality(
                 ) {
                     verdict = crate::quality::PageVerdict::Ocr { reason };
                 }
-            }
             crate::quality::PageTextQuality {
                 page: geo.page_number,
                 text_richness: richness,
@@ -2969,7 +3055,7 @@ fn build_page_quality(
 }
 
 /// Visible-page area in pt² for [`crate::quality::no_ink_reason`]: the
-/// /CropBox when declared, else the /MediaBox. Raw (un-normalized) box
+/// /`CropBox` when declared, else the /`MediaBox`. Raw (un-normalized) box
 /// coordinates are fine — area is origin-independent; corner order is
 /// normalized with `abs`. `0.0` when the /Parent chain declares neither box
 /// (degenerate file): the check derives no verdict from an undefined page.
@@ -2987,6 +3073,7 @@ fn visible_page_area_pt2(geo: &PageGeometry) -> f32 {
 /// layer mangled, so escalation is a vision-LLM signal only. The
 /// document-level `PdfTextQuality` enum is unchanged: it stays the plain
 /// char-count summary of the text layer; this rollup drives per-page routing.
+#[must_use]
 pub fn routing_rollup(pages: &[crate::quality::PageTextQuality]) -> Vec<usize> {
     pages
         .iter()
@@ -3171,26 +3258,26 @@ fn parse_with_page_ocr_inner<'e>(
     
         #[allow(unused_assignments)]
     let mut ocr_meta = serde_json::json!({
-        "engine": engine.as_ref().map(|e| e.name()).unwrap_or("none"),
+        "engine": engine.as_ref().map_or("none", |e| e.name()),
         "pages_ocr": 0,
     });
 
     let mut pages_from_merge: Vec<Vec<Block>> = Vec::new();
     if !ocr_pages.is_empty() && engine.is_some() {
         // Indra wants full-resolution source pixels (see render_pages_png_opts)
-        eprintln!(
-            "office-parser: rendering {} page(s) at {} dpi...",
+        crate::progress::emit(&format!(
+            "rendering {} page(s) at {} dpi...",
             page_quality.len(),
             dpi
-        );
-        let rendered = render_pages_png_opts(bytes, dpi, false)?;
-        let engine_name = engine.as_deref_mut().map(|e| e.name()).unwrap_or("none").to_string();
-        eprintln!(
-            "office-parser: OCR routing {} page(s) of {} through {}",
+        ));
+        let rendered = render_pages_png_opts(bytes, dpi, RenderBudget::Full)?;
+        let engine_name = engine.as_deref_mut().map_or("none", |e| e.name()).to_string();
+        crate::progress::emit(&format!(
+            "OCR routing {} page(s) of {} through {}",
             ocr_pages.len(),
             page_quality.len(),
             engine_name
-        );
+        ));
         let mut merged: Vec<Block> = Vec::new();
         let mut low_conf = Vec::new();
         // TASK 10: rich per-page payloads — one record per OCR'd page that
@@ -3208,11 +3295,11 @@ fn parse_with_page_ocr_inner<'e>(
                         anyhow::anyhow!("page {} was not rendered", page_pos + 1),
                     )
                 })?;
-                eprintln!(
-                    "office-parser: ocr page {}/{}",
+                crate::progress::emit(&format!(
+                    "ocr page {}/{}",
                     page_pos + 1,
                     page_quality.len()
-                );
+                ));
                 let Some(engine_ref) = engine.as_deref_mut() else {
                     unreachable!("engine present when ocr_pages non-empty")
                 };
@@ -3234,11 +3321,10 @@ fn parse_with_page_ocr_inner<'e>(
                     word_boxes,
                     table_html,
                 } = page;
-                if let Some(conf) = confidence {
-                    if conf < 0.60 {
+                if let Some(conf) = confidence
+                    && conf < 0.60 {
                         low_conf.push(serde_json::json!(page_pos));
                     }
-                }
                 page_vec.append(&mut blocks);
                 if let Some(regions) = layout_regions {
                     layout_regions_meta.push(serde_json::json!({
@@ -3368,11 +3454,67 @@ mod tests {
     }
 
     #[test]
+    fn clamp_scale_is_shared_by_every_backend() {
+        // A4 (612x792 pts) @200 dpi is 3.74 MP; the clamp lands it on the 0.4 MP
+        // budget by area (the legacy pdfium 530x750 box was a hand-tuned
+        // approximation of the same budget, so every backend now agrees).
+        let scale = super::clamp_scale(612.0, 792.0, 200.0 / 72.0, super::RenderBudget::Clamped);
+        let mp = 612.0 * f64::from(scale) * 792.0 * f64::from(scale) / 1_000_000.0;
+        assert!((mp - 0.4).abs() < 0.01, "{mp} MP");
+        assert!(f64::from(scale) < 200.0 / 72.0, "clamped must shrink");
+        // Full budget is the requested scale, untouched.
+        let full = super::clamp_scale(612.0, 792.0, 200.0 / 72.0, super::RenderBudget::Full);
+        assert!((full - 200.0 / 72.0).abs() < 1e-6);
+        // Already inside the budget: unchanged.
+        let small = super::clamp_scale(100.0, 100.0, 300.0 / 72.0, super::RenderBudget::Clamped);
+        assert!((small - 300.0 / 72.0).abs() < 1e-6);
+        // A degenerate page box must not produce NaN/inf scales.
+        assert!(super::clamp_scale(0.0, 0.0, 2.0, super::RenderBudget::Clamped).is_finite());
+    }
+
+    #[test]
+    fn renderer_names_round_trip_and_unknown_is_named() {
+        use super::Renderer;
+        for (value, want) in [
+            ("pdfium", Renderer::Pdfium),
+            ("HAYRO", Renderer::Hayro),
+            (" pdftoppm ", Renderer::Pdftoppm),
+            ("poppler", Renderer::Pdftoppm),
+        ] {
+            assert_eq!(Renderer::parse(value), Some(want), "{value}");
+        }
+        assert_eq!(Renderer::parse(""), None);
+        assert_eq!(Renderer::parse("mupdf"), Some(Renderer::Unknown));
+    }
+
+    #[test]
+    fn pinned_renderer_never_falls_through_to_another_backend() {
+        // Unpinned, poppler is on PATH for this fixture and any pinned build
+        // would succeed anyway; the property under test is that a pin to a
+        // backend this build cannot run is an ERROR, not a silent pdftoppm
+        // render (the fake-bake-off class).
+        let pdf = b"%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj\ntrailer << /Root 1 0 R /Size 4 >>\n%%EOF".to_vec();
+        let unpinned = super::render_pages_png_opts(&pdf, 100, super::RenderBudget::Full)
+            .expect("unpinned render resolves a backend");
+        assert_ne!(unpinned, [] as [std::vec::Vec<u8>; 0]);
+        #[cfg(not(feature = "render-hayro"))]
+        {
+            // SAFETY: this test owns the variable for its whole body and runs
+            // once; nothing else in the suite reads OFFICE_PARSER_RENDERER.
+            unsafe { std::env::set_var("OFFICE_PARSER_RENDERER", "hayro") };
+            let pinned = super::render_pages_png_opts(&pdf, 100, super::RenderBudget::Full);
+            unsafe { std::env::remove_var("OFFICE_PARSER_RENDERER") };
+            let err = pinned.expect_err("pinning an uncompiled backend must fail");
+            assert!(format!("{err}").contains("render-hayro"), "{err}");
+        }
+    }
+
+    #[test]
     fn render_pages_png_rasterizes_via_pdftoppm() {
         // minimal one-page PDF; poppler repairs the placeholder xref
         let pdf = b"%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj\ntrailer << /Root 1 0 R /Size 4 >>\n%%EOF".to_vec();
         let pages = super::render_pages_png(&pdf, 100).expect("renders");
-        assert!(!pages.is_empty());
+        assert_ne!(pages, [] as [std::vec::Vec<u8>; 0]);
         for page in &pages {
             assert!(page.starts_with(b"\x89PNG"), "expected PNG magic");
         }

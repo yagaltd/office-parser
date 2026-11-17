@@ -39,7 +39,7 @@ fn span(x0: f32, y0: f32, x1: f32, y1: f32, font_size: f32, chars: usize) -> Spa
 }
 
 /// Regime 1 — a normal rich page measures plausible ink and is not flagged.
-/// Shape mirrored from the TASK 2 spike's pdf_mixed p1 box dump (8 spans,
+/// Shape mirrored from the TASK 2 spike's `pdf_mixed` p1 box dump (8 spans,
 /// body text at 11 pt, measured ≈ 27.9k pt² ≈ 131% of the alphanumeric
 /// expectation — comfortably above the 25% floor).
 #[test]
@@ -60,7 +60,7 @@ fn normal_rich_page_measures_plausible_ink() {
 /// Regime 2 — the contradiction the check exists for: the text layer claims a
 /// rich page but the geometry pass walked zero span boxes (collapsed /
 /// degenerate text matrices, or an ink-less OCR layer). With no spans the
-/// expectation rests on NO_INK_NOMINAL_FONT_PT — and is still positive, so
+/// expectation rests on `NO_INK_NOMINAL_FONT_PT` — and is still positive, so
 /// the measured 0 pt² falls short of it.
 #[test]
 fn rich_char_count_with_no_span_boxes_is_no_ink() {
@@ -133,7 +133,7 @@ fn sparse_pages_are_the_char_gates_business() {
     assert_eq!(no_ink_reason(0, 50, &[], A4_AREA_PT2), None);
 }
 
-/// End-to-end (spec, re-scoped): pdf_scanned carries zero spans AND zero
+/// End-to-end (spec, re-scoped): `pdf_scanned` carries zero spans AND zero
 /// chars, so the IMAGE-ONLY gate owns the verdict — no-ink must not fire
 /// (its richness gate requires a page that looks text-rich). Asserts the
 /// reason literal stays "image-only page" on the no-pdfium build.
@@ -147,7 +147,7 @@ fn scanned_pages_route_image_only_not_no_ink_without_pdfium() {
         assert_eq!(q.text_richness, 0);
         match &q.verdict {
             PageVerdict::Ocr { reason } => {
-                assert_eq!(reason, "image-only page", "gate order: image-only, not {reason:?}")
+                assert_eq!(reason, "image-only page", "gate order: image-only, not {reason:?}");
             }
             other => panic!("expected Ocr, got {other:?}"),
         }

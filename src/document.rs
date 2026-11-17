@@ -77,6 +77,7 @@ pub enum PdfTextQuality {
 }
 
 impl Format {
+    #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Docx => "docx",
@@ -99,6 +100,7 @@ impl Format {
         }
     }
 
+    #[must_use]
     pub fn from_hint(hint: &str) -> Option<Self> {
         let h = hint.trim().to_ascii_lowercase();
 

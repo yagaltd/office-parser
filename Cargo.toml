@@ -14,6 +14,70 @@ keywords = ["parser", "office", "docx", "pdf", "ingestion"]
 categories = ["parser-implementations", "text-processing", "command-line-utilities"]
 include = ["src/**", "tests/**", "README.md", "CHANGELOG.md", "LICENSE", "Cargo.toml"]
 
+# Lints: BeautifulRust drop-in config (https://github.com/morganlinton/BeautifulRust),
+# copied verbatim from lints/lints.toml. Everything is `warn`: the ratchet is
+# visible without breaking builds; make CI strict with `-D warnings` once the
+# current backlog (mostly `missing_errors_doc` and cast lints) is burnt down.
+# Suppress locally with a reason, never silently:
+#
+#     #[expect(clippy::unwrap_used, reason = "the regex is a literal and always compiles")]
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+missing_debug_implementations = "warn"
+# Adopted as `warn` upstream; this crate's public surface is documented
+# module-by-module in docs/ + README while the per-item sweep (≈290 pub items,
+# mostly `formats::*` internals) is pending. Flip to "warn" when that lands.
+missing_docs = "allow"
+unreachable_pub = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+unwrap_used = "warn"
+expect_used = "allow"
+panic_in_result_fn = "warn"
+missing_panics_doc = "warn"
+missing_errors_doc = "warn"
+missing_assert_message = "warn"
+
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+
+undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"
+
+fn_params_excessive_bools = "warn"
+struct_excessive_bools = "warn"
+clone_on_ref_ptr = "warn"
+redundant_clone = "warn"
+rc_buffer = "warn"
+
+exhaustive_enums = "warn"
+
+string_add = "warn"
+wildcard_imports = "warn"
+
+dbg_macro = "warn"
+todo = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+
+# ≈250 sites predate the ratchet; `cast_possible_truncation` and
+# `cast_sign_loss` below stay on, which is where the actual bugs live.
+as_conversions = "allow"
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+module_inception = "allow"
+enum_glob_use = "allow"
+
+[lints]
+workspace = true
+
 [features]
 default = [
     "docx",

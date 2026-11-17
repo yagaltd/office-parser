@@ -19,10 +19,7 @@ struct BuildElem {
 
 fn should_keep_attr(name: &str) -> bool {
     // Namespace declarations are almost always noise for ingestion.
-    if name == "xmlns" || name.starts_with("xmlns:") {
-        return false;
-    }
-    true
+    !(name == "xmlns" || name.starts_with("xmlns:"))
 }
 
 fn looks_like_html(s: &str) -> bool {
@@ -42,17 +39,16 @@ fn html_fragment_to_markdown_best_effort(s: &str) -> String {
     let mut i = 0;
     let bytes = s.as_bytes();
     while i < bytes.len() {
-        if i + 4 <= bytes.len() && &bytes[i..i + 4] == b"<!--" {
-            if let Some(end) = s[i + 4..].find("-->") {
+        if i + 4 <= bytes.len() && &bytes[i..i + 4] == b"<!--"
+            && let Some(end) = s[i + 4..].find("-->") {
                 i = i + 4 + end + 3;
                 continue;
             }
-        }
         cleaned.push(bytes[i] as char);
         i += 1;
     }
 
-    let wrapped = format!("<root>{}</root>", cleaned);
+    let wrapped = format!("<root>{cleaned}</root>");
     let mut reader = quick_xml::Reader::from_reader(wrapped.as_bytes());
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
@@ -79,7 +75,7 @@ fn html_fragment_to_markdown_best_effort(s: &str) -> String {
     };
 
     let push_text = |out: &mut String, t: &str, in_blockquote: usize| {
-        let mut s = t.replace("\r", "");
+        let mut s = t.replace('\r', "");
         // Collapse runs of whitespace but preserve newlines.
         s = s
             .split('\n')
@@ -152,11 +148,10 @@ fn html_fragment_to_markdown_best_effort(s: &str) -> String {
                     "a" => {
                         let mut href: Option<String> = None;
                         for a in e.attributes().flatten() {
-                            if a.key.as_ref() == b"href" {
-                                if let Ok(v) = a.unescape_value() {
+                            if a.key.as_ref() == b"href"
+                                && let Ok(v) = a.unescape_value() {
                                     href = Some(v.to_string());
                                 }
-                            }
                         }
                         if let Some(href) = href {
                             out.push('[');
@@ -221,8 +216,7 @@ fn html_fragment_to_markdown_best_effort(s: &str) -> String {
             Err(_) => {
                 // Fallback: strip tags crudely.
                 return cleaned
-                    .replace('<', " ")
-                    .replace('>', " ")
+                    .replace(['<', '>'], " ")
                     .split_whitespace()
                     .collect::<Vec<_>>()
                     .join(" ");
@@ -271,7 +265,7 @@ fn finalize_elem(e: BuildElem) -> serde_json::Value {
         let mut with_text = serde_json::Map::new();
 
         // attrs
-        for (k, v) in map.iter() {
+        for (k, v) in &map {
             if k.starts_with('@') {
                 with_text.insert(k.clone(), v.clone());
             }
@@ -280,7 +274,7 @@ fn finalize_elem(e: BuildElem) -> serde_json::Value {
         with_text.insert("#text".to_string(), serde_json::Value::String(text));
 
         // non-attrs (children)
-        for (k, v) in map.into_iter() {
+        for (k, v) in map {
             if !k.starts_with('@') {
                 with_text.insert(k, v);
             }
@@ -368,18 +362,16 @@ fn parse_xml_full(bytes: &[u8]) -> Result<ParsedOfficeDocument> {
                 }
             }
             Ok(quick_xml::events::Event::Text(t)) => {
-                if let Some(cur) = stack.last_mut() {
-                    if let Ok(s) = t.decode() {
+                if let Some(cur) = stack.last_mut()
+                    && let Ok(s) = t.decode() {
                         cur.text.push_str(&s);
                     }
-                }
             }
             Ok(quick_xml::events::Event::CData(t)) => {
-                if let Some(cur) = stack.last_mut() {
-                    if let Ok(s) = t.decode() {
+                if let Some(cur) = stack.last_mut()
+                    && let Ok(s) = t.decode() {
                         cur.text.push_str(&s);
                     }
-                }
             }
             Ok(quick_xml::events::Event::Comment(_)) => {}
             Ok(quick_xml::events::Event::Decl(_)) => {}

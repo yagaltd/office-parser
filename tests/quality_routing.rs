@@ -209,7 +209,7 @@ fn count_columns_over_synthetic_layouts() {
 }
 
 /// `recompute_page_block_ranges` follows the merged layout and keeps the
-/// metadata_json copy in agreement (the stale-ranges scout defect).
+/// `metadata_json` copy in agreement (the stale-ranges scout defect).
 #[test]
 fn recompute_page_block_ranges_follows_merged_layout() {
     let mut parsed = ParsedPdfDocument {
@@ -243,7 +243,7 @@ fn recompute_page_block_ranges_follows_merged_layout() {
 }
 
 /// Geometry pass sanity on the routing path: every parsed page appears in
-/// pages_geometry in page order.
+/// `pages_geometry` in page order.
 #[test]
 fn pages_geometry_covers_every_page_in_order() {
     for path in [MIXED, SCANNED, TABLE_SCAN, ROT90, CJK] {
@@ -321,9 +321,8 @@ fn merged_combined_doc_page_block_ranges_stay_fresh() {
 
 fn pdftoppm_available() -> bool {
     std::env::var_os("PATH")
-        .map(|p| {
+        .is_some_and(|p| {
             std::env::split_paths(&p)
                 .any(|dir| dir.join("pdftoppm").is_file() || dir.join("pdftoppm.exe").is_file())
         })
-        .unwrap_or(false)
 }

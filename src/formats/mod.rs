@@ -90,7 +90,7 @@ fn read_zip_file(_bytes: &[u8], _path: &str) -> Result<Vec<u8>> {
 ))]
 fn read_zip_file_utf8(bytes: &[u8], path: &str) -> Result<String> {
     let v = read_zip_file(bytes, path)?;
-    Ok(String::from_utf8(v).with_context(|| format!("decode {path} as utf-8"))?)
+    String::from_utf8(v).with_context(|| format!("decode {path} as utf-8"))
 }
 
 #[cfg(not(any(
@@ -149,15 +149,15 @@ fn slide_meta_for_image_ids(
 
     let mut ranges: Vec<SlideRange> = Vec::new();
     for s in slides {
-        let idx = s.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+        let idx = s.get("index").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
         let title = s
             .get("title")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        let first = s.get("block_first").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            .map(std::string::ToString::to_string);
+        let first = s.get("block_first").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
         let last = s
             .get("block_last")
-            .and_then(|v| v.as_u64())
+            .and_then(serde_json::Value::as_u64)
             .unwrap_or(first as u64) as usize;
         ranges.push(SlideRange {
             idx,
@@ -220,12 +220,12 @@ fn finalize(format: Format, parsed: ParsedOfficeDocument) -> Document {
         .metadata_json
         .get("slides")
         .and_then(|v| v.as_array())
-        .map(|a| a.len());
+        .map(std::vec::Vec::len);
 
     let page_count = parsed
         .metadata_json
         .get("page_count")
-        .and_then(|v| v.as_u64())
+        .and_then(serde_json::Value::as_u64)
         .map(|n| n as usize);
 
     let images = parsed
@@ -266,9 +266,9 @@ fn finalize(format: Format, parsed: ParsedOfficeDocument) -> Document {
         .metadata_json
         .get("title")
         .and_then(|v| v.as_str())
-        .map(|s| s.trim())
+        .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .or_else(|| {
             if matches!(format, Format::Pptx | Format::Odp) {
                 parsed
@@ -279,9 +279,9 @@ fn finalize(format: Format, parsed: ParsedOfficeDocument) -> Document {
                         slides.iter().find_map(|s| {
                             s.get("title")
                                 .and_then(|t| t.as_str())
-                                .map(|t| t.trim())
+                                .map(str::trim)
                                 .filter(|t| !t.is_empty())
-                                .map(|t| t.to_string())
+                                .map(std::string::ToString::to_string)
                         })
                     })
             } else {

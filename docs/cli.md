@@ -47,7 +47,13 @@ office-parser-cli scan.pdf --out results/ --ocr
   `OFFICE_PARSER_RENDERER=hayro` (5-10% less content than pdfium on
   dense scans — pdfium stays the quality default).
   Backend order: pdfium → hayro → pdftoppm; `OFFICE_PARSER_RENDERER=
-  pdfium|hayro|pdftoppm` pins it.
+  pdfium|hayro|pdftoppm` **pins** one — a pinned backend that is not
+  compiled in or fails returns its error instead of quietly rendering
+  with another engine (pinned runs stay honest for bake-offs and
+  baselines). Unpinned runs report each failed backend on stderr and
+  fall through; if all fail the error names every backend and why.
+  The per-page resolution budget (`RenderBudget`) is one rule shared by
+  all three backends.
 - A page renderer is required: `--features render-pdfium` (preferred —
   engine-faithful pixels) or `pdftoppm` on PATH.
 - Output flows through the normal markdown/JSON render path.

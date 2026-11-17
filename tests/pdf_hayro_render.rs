@@ -9,7 +9,7 @@ const FIXTURES: [&str; 5] = [
     "tests/fixtures/pdf_cjk_scan.pdf",
 ];
 
-/// test_hayro_renders_fixtures_non_blank: every fixture yields pages whose non-white pixel
+/// `test_hayro_renders_fixtures_non_blank`: every fixture yields pages whose non-white pixel
 /// ratio is > 0 through the hayro backend.
 #[test]
 fn test_hayro_renders_fixtures_non_blank() {

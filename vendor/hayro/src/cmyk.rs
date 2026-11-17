@@ -36,6 +36,15 @@ impl InkState {
         self.pass.is_some()
     }
 
+    /// Mark the group's CMYK rendering as impossible (a paint the ink model
+    /// cannot express). Only meaningful while a pass is live; the group then
+    /// falls back to straight composition.
+    pub(crate) fn mark_unsupported(&mut self) {
+        if self.pass.is_some() {
+            self.unsupported = true;
+        }
+    }
+
     /// The colour a pass paints for `color`; transparent, with the group marked unsupported,
     /// when the colour has no ink tints.
     pub(crate) fn paint(
@@ -201,9 +210,7 @@ impl Renderer<'_> {
     /// PdfCraft patch (27): a nested isolated group that names its own (non-CMYK) blending
     /// space can no longer be drawn inside this pass.
     pub(crate) fn group_blends_outside_device_cmyk(&mut self) {
-        if self.ink.pass.is_some() {
-            self.ink.unsupported = true;
-        }
+        self.ink.mark_unsupported();
     }
 }
 

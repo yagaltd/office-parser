@@ -40,7 +40,7 @@ fn parse_xlsx(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeD
     let mut formulas_meta: Vec<serde_json::Value> = Vec::new();
     let mut block_index: usize = 0;
 
-    let sheet_names: Vec<String> = wb.sheet_names().to_vec();
+    let sheet_names: Vec<String> = wb.sheet_names().clone();
     if sheet_names.len() > limits.max_sheets {
         warnings.push(format!(
             "sheet count truncated: {} -> {}",
@@ -94,21 +94,18 @@ fn parse_xlsx(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeD
                 let tail = limits.tail_rows.min(rows_cap / 2);
                 let head = rows_cap.saturating_sub(tail);
                 sheet_warnings.push(format!(
-                    "sheet '{name}' rows truncated: {} -> {} (head {} + tail {})",
-                    nrows, rows_cap, head, tail
+                    "sheet '{name}' rows truncated: {nrows} -> {rows_cap} (head {head} + tail {tail})"
                 ));
             } else {
                 sheet_warnings.push(format!(
-                    "sheet '{name}' rows truncated: {} -> {}",
-                    nrows, rows_cap
+                    "sheet '{name}' rows truncated: {nrows} -> {rows_cap}"
                 ));
             }
         }
         if ncols > cols_cap {
             sheet_truncated = true;
             sheet_warnings.push(format!(
-                "sheet '{name}' cols truncated: {} -> {}",
-                ncols, cols_cap
+                "sheet '{name}' cols truncated: {ncols} -> {cols_cap}"
             ));
         }
 
@@ -162,8 +159,8 @@ fn parse_xlsx(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeD
                     &limits,
                 );
                 if !cd.is_empty() {
-                    max_r_used = Some(max_r_used.map(|v| v.max(r)).unwrap_or(r));
-                    max_c_used = Some(max_c_used.map(|v| v.max(c)).unwrap_or(c));
+                    max_r_used = Some(max_r_used.map_or(r, |v| v.max(r)));
+                    max_c_used = Some(max_c_used.map_or(c, |v| v.max(c)));
                 }
                 grid[r][c] = cd;
             }
@@ -180,11 +177,10 @@ fn parse_xlsx(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeD
                         continue;
                     };
                     let cell = &mut grid[r][c];
-                    if let Ok(v) = cell.text.trim().parse::<f64>() {
-                        if excel_serial_looks_like_datetime(v) {
+                    if let Ok(v) = cell.text.trim().parse::<f64>()
+                        && excel_serial_looks_like_datetime(v) {
                             cell.text = excel_serial_to_iso(v, kind);
                         }
-                    }
                 }
             }
         }
@@ -193,11 +189,9 @@ fn parse_xlsx(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeD
         if rows_cap >= 2 {
             let mut inferred: Vec<Option<DateTimeKind>> = vec![None; cols_cap];
             for c in 0..cols_cap {
-                let header = grid
-                    .get(0)
+                let header = grid.first()
                     .and_then(|r| r.get(c))
-                    .map(|c| c.text.trim().to_ascii_lowercase())
-                    .unwrap_or_default();
+                    .map_or_default(|c| c.text.trim().to_ascii_lowercase());
                 inferred[c] = if header.contains("timestamp")
                     || header.contains("datetime")
                     || header.contains("time")
@@ -220,11 +214,10 @@ fn parse_xlsx(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeD
                     if cell.text.trim().is_empty() {
                         continue;
                     }
-                    if let Ok(v) = cell.text.trim().parse::<f64>() {
-                        if excel_serial_looks_like_datetime(v) {
+                    if let Ok(v) = cell.text.trim().parse::<f64>()
+                        && excel_serial_looks_like_datetime(v) {
                             cell.text = excel_serial_to_iso(v, kind);
                         }
-                    }
                 }
             }
         }
@@ -304,7 +297,7 @@ fn parse_xlsx(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeD
             blocks.push(spreadsheet::named_table_heading(block_index, &t.name));
             block_index += 1;
 
-            for (rs, re) in runs.into_iter() {
+            for (rs, re) in runs {
                 let rows_slice = &grid[rs..re];
                 let has_header = t.header_rows > 0 && row_map.get(rs).copied() == Some(t.row_start);
                 let (group_by_col, group_label) = limits
@@ -315,8 +308,7 @@ fn parse_xlsx(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeD
                             rows_slice, has_header, spec, c_start, c_end,
                         )
                     })
-                    .map(|(c, l)| (Some(c), Some(l)))
-                    .unwrap_or((None, None));
+                    .map_or((None, None), |(c, l)| (Some(c), Some(l)));
                 if group_by_col.is_some() {
                     group_by_used = true;
                 }
@@ -340,7 +332,7 @@ fn parse_xlsx(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeD
                     let ds = seg.start;
                     let de = seg.end;
                     let hdr = if has_header {
-                        rows_slice.first().map(|r| r.as_slice())
+                        rows_slice.first().map(std::vec::Vec::as_slice)
                     } else {
                         None
                     };
@@ -412,8 +404,7 @@ fn parse_xlsx(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeD
                             ce2,
                         )
                     })
-                    .map(|(c, l)| (Some(c), Some(l)))
-                    .unwrap_or((None, None));
+                    .map_or((None, None), |(c, l)| (Some(c), Some(l)));
                 if group_by_col.is_some() {
                     group_by_used = true;
                 }
@@ -456,7 +447,7 @@ fn parse_xlsx(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeD
                     }
 
                     let hdr = if has_header {
-                        region_rows.first().map(|r| r.as_slice())
+                        region_rows.first().map(std::vec::Vec::as_slice)
                     } else {
                         None
                     };
@@ -489,14 +480,13 @@ fn parse_xlsx(bytes: &[u8], limits: spreadsheet::Limits) -> Result<ParsedOfficeD
             warnings.push(msg);
         }
 
-        if let Some(m) = sheets_meta.last_mut() {
-            if let Some(o) = m.as_object_mut() {
+        if let Some(m) = sheets_meta.last_mut()
+            && let Some(o) = m.as_object_mut() {
                 o.insert(
                     "emitted_tables".to_string(),
                     serde_json::json!(emitted_tables),
                 );
             }
-        }
     }
 
     let mut extra = serde_json::json!({
@@ -532,7 +522,7 @@ fn cell_display(
         match dt {
             Data::Empty => {}
             Data::String(s) => {
-                out.text = spreadsheet::normalize_cell_text(s.clone(), limits.max_cell_chars)
+                out.text = spreadsheet::normalize_cell_text(s.clone(), limits.max_cell_chars);
             }
             Data::Float(f) => {
                 if let Some(k) = date_kind {
@@ -589,7 +579,7 @@ fn xlsx_sheet_name_to_path(bytes: &[u8]) -> Result<std::collections::HashMap<Str
     use quick_xml::events::Event;
 
     fn local_name(n: &[u8]) -> &[u8] {
-        n.split(|b| *b == b':').last().unwrap_or(n)
+        n.split(|b| *b == b':').next_back().unwrap_or(n)
     }
 
     let workbook =
@@ -694,7 +684,7 @@ fn xlsx_sheet_name_to_path(bytes: &[u8]) -> Result<std::collections::HashMap<Str
     let mut out: std::collections::HashMap<String, String> = Default::default();
     for (name, rid) in rid_by_name {
         if let Some(target) = target_by_rid.get(&rid) {
-            let target = target.trim_start_matches("/");
+            let target = target.trim_start_matches('/');
             let full = if target.starts_with("xl/") {
                 target.to_string()
             } else {
@@ -757,11 +747,10 @@ fn xlsx_sheet_formulas(
                 }
             }
             Ok(Event::CData(t)) => {
-                if in_f {
-                    if let Ok(c) = t.decode() {
+                if in_f
+                    && let Ok(c) = t.decode() {
                         f_text.push_str(&c);
                     }
-                }
             }
             Ok(Event::Eof) => break,
             Err(e) => return Err(anyhow::anyhow!(e).context("parse worksheet for formulas")),
@@ -777,7 +766,7 @@ fn xlsx_date_time_kinds_by_xf(bytes: &[u8]) -> Result<Vec<Option<DateTimeKind>>>
     use quick_xml::events::Event;
 
     fn local_name(n: &[u8]) -> &[u8] {
-        n.split(|b| *b == b':').last().unwrap_or(n)
+        n.split(|b| *b == b':').next_back().unwrap_or(n)
     }
 
     let xml = match super::read_zip_file_utf8(bytes, "xl/styles.xml") {
@@ -816,7 +805,7 @@ fn xlsx_date_time_kinds_by_xf(bytes: &[u8]) -> Result<Vec<Option<DateTimeKind>>>
                     match local_name(a.key.as_ref()) {
                         b"numFmtId" => id = a.unescape_value().ok().and_then(|v| v.parse().ok()),
                         b"formatCode" => {
-                            code = Some(a.unescape_value().unwrap_or_default().to_string())
+                            code = Some(a.unescape_value().unwrap_or_default().to_string());
                         }
                         _ => {}
                     }
@@ -833,7 +822,7 @@ fn xlsx_date_time_kinds_by_xf(bytes: &[u8]) -> Result<Vec<Option<DateTimeKind>>>
                     }
                 }
                 let kind = num_fmt_id
-                    .and_then(|id| classify_numfmt(id, custom.get(&id).map(|s| s.as_str())));
+                    .and_then(|id| classify_numfmt(id, custom.get(&id).map(std::string::String::as_str)));
                 xfs.push(kind);
             }
             Ok(Event::Eof) => break,
@@ -925,7 +914,7 @@ fn xlsx_sheet_date_time_cells(
     use quick_xml::events::Event;
 
     fn local_name(n: &[u8]) -> &[u8] {
-        n.split(|b| *b == b':').last().unwrap_or(n)
+        n.split(|b| *b == b':').next_back().unwrap_or(n)
     }
 
     let xml = super::read_zip_file_utf8(bytes, sheet_path)
@@ -938,7 +927,7 @@ fn xlsx_sheet_date_time_cells(
 
     loop {
         match r.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) if local_name(e.name().as_ref()) == b"c" => {
+            Ok(Event::Start(e) | Event::Empty(e)) if local_name(e.name().as_ref()) == b"c" => {
                 let mut cell_ref: Option<String> = None;
                 let mut style_idx: Option<usize> = None;
                 for a in e.attributes().flatten() {
@@ -948,16 +937,15 @@ fn xlsx_sheet_date_time_cells(
                             style_idx = a
                                 .unescape_value()
                                 .ok()
-                                .and_then(|v| v.parse::<usize>().ok())
+                                .and_then(|v| v.parse::<usize>().ok());
                         }
                         _ => {}
                     }
                 }
-                if let (Some(rf), Some(si)) = (cell_ref, style_idx) {
-                    if let Some(Some(kind)) = kinds_by_xf.get(si) {
+                if let (Some(rf), Some(si)) = (cell_ref, style_idx)
+                    && let Some(Some(kind)) = kinds_by_xf.get(si) {
                         out.insert(rf, *kind);
                     }
-                }
             }
             Ok(Event::Eof) => break,
             Err(e) => return Err(anyhow::anyhow!(e).context("parse worksheet styles")),
@@ -1009,12 +997,12 @@ fn excel_serial_to_iso(serial: f64, kind: DateTimeKind) -> String {
 }
 
 fn excel_serial_looks_like_datetime(serial: f64) -> bool {
-    serial.is_finite() && serial >= 10_000.0 && serial <= 100_000.0
+    serial.is_finite() && (10_000.0..=100_000.0).contains(&serial)
 }
 
 // Howard Hinnant's civil-from-days algorithm (public domain).
 fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
-    let y = y - ((m <= 2) as i64);
+    let y = y - i64::from(m <= 2);
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = y - era * 400;
     let mp = m + if m > 2 { -3 } else { 9 };
@@ -1033,7 +1021,7 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
     let mp = (5 * doy + 2) / 153;
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = mp + if mp < 10 { 3 } else { -9 };
-    let y = y + ((m <= 2) as i64);
+    let y = y + i64::from(m <= 2);
     (y, m, d)
 }
 
@@ -1109,8 +1097,7 @@ mod tests {
 
             w.start_file("xl/worksheets/sheet1.xml", opt)?;
             let sheet = format!(
-                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n  <sheetData>\n    <row r=\"1\">\n      <c r=\"A1\" t=\"inlineStr\"><is><t>{}</t></is></c>\n    </row>\n    <row r=\"2\">\n      <c r=\"A2\" s=\"1\"><v>44128.76593707176</v></c>\n    </row>\n  </sheetData>\n</worksheet>\n",
-                header
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n  <sheetData>\n    <row r=\"1\">\n      <c r=\"A1\" t=\"inlineStr\"><is><t>{header}</t></is></c>\n    </row>\n    <row r=\"2\">\n      <c r=\"A2\" s=\"1\"><v>44128.76593707176</v></c>\n    </row>\n  </sheetData>\n</worksheet>\n"
             );
             w.write_all(sheet.as_bytes())?;
 
@@ -1124,7 +1111,7 @@ mod tests {
         let xlsx = minimal_xlsx_with_style_datetime("x")?;
         let map = xlsx_sheet_name_to_path(&xlsx)?;
         assert_eq!(
-            map.get("Sheet1").map(|s| s.as_str()),
+            map.get("Sheet1").map(std::string::String::as_str),
             Some("xl/worksheets/sheet1.xml")
         );
 
@@ -1162,7 +1149,7 @@ fn xlsx_named_tables_for_sheet(bytes: &[u8], sheet_path: &str) -> Result<Vec<Nam
     use quick_xml::events::Event;
 
     fn local_name(n: &[u8]) -> &[u8] {
-        n.split(|b| *b == b':').last().unwrap_or(n)
+        n.split(|b| *b == b':').next_back().unwrap_or(n)
     }
 
     let sheet_xml = super::read_zip_file_utf8(bytes, sheet_path)
@@ -1181,7 +1168,7 @@ fn xlsx_named_tables_for_sheet(bytes: &[u8], sheet_path: &str) -> Result<Vec<Nam
         let mut buf = Vec::new();
         loop {
             match r.read_event_into(&mut buf) {
-                Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                Ok(Event::Start(e) | Event::Empty(e))
                     if local_name(e.name().as_ref()) == b"Relationship" =>
                 {
                     let mut id: Option<String> = None;
@@ -1190,7 +1177,7 @@ fn xlsx_named_tables_for_sheet(bytes: &[u8], sheet_path: &str) -> Result<Vec<Nam
                         match local_name(a.key.as_ref()) {
                             b"Id" => id = Some(a.unescape_value().unwrap_or_default().to_string()),
                             b"Target" => {
-                                target = Some(a.unescape_value().unwrap_or_default().to_string())
+                                target = Some(a.unescape_value().unwrap_or_default().to_string());
                             }
                             _ => {}
                         }
@@ -1214,7 +1201,7 @@ fn xlsx_named_tables_for_sheet(bytes: &[u8], sheet_path: &str) -> Result<Vec<Nam
         let mut buf = Vec::new();
         loop {
             match r.read_event_into(&mut buf) {
-                Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                Ok(Event::Start(e) | Event::Empty(e))
                     if local_name(e.name().as_ref()) == b"tablePart" =>
                 {
                     for a in e.attributes().flatten() {
@@ -1276,7 +1263,7 @@ fn parse_table_xml(xml: &str) -> Result<Option<NamedTable>> {
     use quick_xml::events::Event;
 
     fn local_name(n: &[u8]) -> &[u8] {
-        n.split(|b| *b == b':').last().unwrap_or(n)
+        n.split(|b| *b == b':').next_back().unwrap_or(n)
     }
 
     let mut r = quick_xml::Reader::from_str(xml);
@@ -1285,7 +1272,7 @@ fn parse_table_xml(xml: &str) -> Result<Option<NamedTable>> {
 
     loop {
         match r.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e))
+            Ok(Event::Start(e) | Event::Empty(e))
                 if local_name(e.name().as_ref()) == b"table" =>
             {
                 let mut name: Option<String> = None;
@@ -1386,7 +1373,7 @@ fn excel_col_to_index(col: &str) -> Option<usize> {
     let mut out: usize = 0;
     for ch in col.chars() {
         let up = ch.to_ascii_uppercase();
-        if !(('A'..='Z').contains(&up)) {
+        if !up.is_ascii_uppercase() {
             return None;
         }
         out = out * 26 + ((up as u8 - b'A') as usize + 1);
